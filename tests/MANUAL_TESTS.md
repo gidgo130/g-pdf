@@ -92,3 +92,9 @@ by hand on Windows before a release. Use three or four small PDFs.
       as the other program saved it; no ● marker.
     - **Cancel** changes nothing; the tab keeps its ● marker.
     Saving twice in a row from g-pdf alone never shows this dialog.
+32. Open a PDF in Acrobat (or another program that locks the file), open the same
+    file here, edit it and press Ctrl+S. A dialog says "Couldn't save <name>: it's
+    open in another program or read-only. Your changes are still here." Cancel
+    keeps the ● marker; Save As… saves under a new name. Then edit again, close
+    the tab, answer Save, and Cancel the failure dialog: the tab stays open.
+    Repeat with a read-only file (Properties > Read-only).

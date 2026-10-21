@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Saving from the UI: damaged files (#2), files changed on disk (#15)."""
+"""Saving from the UI: damaged files (#2), files changed on disk (#15),
+saves that fail."""
 
 import pymupdf
 import pytest
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
+from gpdf.core import document as document_mod
 from gpdf.ui import doc_tab
 from gpdf.ui.main_window import MainWindow
 from tests.test_data_safety import change_on_disk, truncated_pdf
@@ -155,3 +157,92 @@ def click_on_exec(monkeypatch, label):
 def test_ask_file_changed_maps_buttons(qapp, monkeypatch, label, choice):
     click_on_exec(monkeypatch, label)
     assert doc_tab.ask_file_changed(None, "mine.pdf") == choice
+
+
+# -- saving fails ------------------------------------------------------------------
+
+
+@pytest.fixture
+def dirty(qapp, make_pdf):
+    win = MainWindow()
+    path = make_pdf("mine.pdf")
+    tab = win.open_path(path)
+    tab.document.rotate_pages([0], 90)
+    return win, tab, path
+
+
+def fail_writes(monkeypatch, to, exc):
+    """Make writing to the path ``to`` raise ``exc``; other paths still work."""
+    real = document_mod._atomic_write
+
+    def write(target, data):
+        if target == to:
+            raise exc
+        real(target, data)
+    monkeypatch.setattr(document_mod, "_atomic_write", write)
+
+
+def answer_failed(monkeypatch, choice):
+    asked = []
+    monkeypatch.setattr(doc_tab, "ask_save_failed",
+                        lambda parent, name, reason: asked.append((name, reason)) or choice)
+    return asked
+
+
+def test_locked_file_gets_a_friendly_reason(dirty, monkeypatch):
+    win, tab, path = dirty
+    original = path.read_bytes()
+    fail_writes(monkeypatch, path, PermissionError(13, "Access is denied"))
+    asked = answer_failed(monkeypatch, "cancel")
+    assert tab.save() is False
+    assert asked == [("mine.pdf", "it's open in another program or read-only")]
+    assert tab.document.is_dirty and path.read_bytes() == original
+
+
+def test_other_write_errors_show_their_message(dirty, monkeypatch):
+    win, tab, path = dirty
+    fail_writes(monkeypatch, path, OSError(28, "No space left on device"))
+    asked = answer_failed(monkeypatch, "cancel")
+    assert tab.save() is False
+    assert asked == [("mine.pdf", "[Errno 28] No space left on device")]
+
+
+def test_save_as_from_the_failure_dialog(dirty, tmp_path, monkeypatch):
+    win, tab, path = dirty
+    fail_writes(monkeypatch, path, PermissionError(13, "Access is denied"))
+    answer_failed(monkeypatch, "save_as")
+    copy = tmp_path / "copy.pdf"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(copy), ""))
+    assert tab.save() is True
+    with pymupdf.open(str(copy)) as check:
+        assert check[0].rotation == 90
+    assert tab.path == copy and not tab.document.is_dirty
+
+
+def test_failed_save_as_asks_again(dirty, tmp_path, monkeypatch):
+    win, tab, path = dirty
+    copy = tmp_path / "copy.pdf"
+    fail_writes(monkeypatch, copy, PermissionError(13, "Access is denied"))
+    asked = answer_failed(monkeypatch, "cancel")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(copy), ""))
+    assert tab.save_as() is False
+    assert asked == [("copy.pdf", "it's open in another program or read-only")]
+    assert tab.path == path and tab.document.is_dirty and not copy.exists()
+
+
+def test_closing_a_tab_whose_save_fails_keeps_it_open(dirty, monkeypatch):
+    win, tab, path = dirty
+    fail_writes(monkeypatch, path, PermissionError(13, "Access is denied"))
+    answer_failed(monkeypatch, "cancel")
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Save)
+    win.close_tab_at(0)
+    assert win.tabs.count() == 1 and win.tabs.widget(0) is tab
+    assert tab.document.is_dirty
+
+
+@pytest.mark.parametrize("label, choice", [
+    ("Save As…", "save_as"), ("Cancel", "cancel"), (None, "cancel"),
+])
+def test_ask_save_failed_maps_buttons(qapp, monkeypatch, label, choice):
+    click_on_exec(monkeypatch, label)
+    assert doc_tab.ask_save_failed(None, "mine.pdf", "reason") == choice

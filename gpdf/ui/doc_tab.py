@@ -47,6 +47,18 @@ def ask_file_changed(parent: QWidget, name: str) -> str:
         box.clickedButton(), "cancel")
 
 
+def ask_save_failed(parent: QWidget, name: str, reason: str) -> str:
+    """Writing the file failed. Returns "save_as" or "cancel"."""
+    box = QMessageBox(QMessageBox.Icon.Warning, APP_NAME,
+                      f"Couldn't save {name}: {reason}. Your changes are still here.",
+                      parent=parent)
+    save_as = box.addButton("Save As…", QMessageBox.ButtonRole.AcceptRole)
+    box.addButton(QMessageBox.StandardButton.Cancel)
+    box.setDefaultButton(save_as)
+    box.exec()
+    return "save_as" if box.clickedButton() is save_as else "cancel"
+
+
 class DocumentTab(QWidget):
     """A PDF plus its view, page panel and tools. Owns the document: call
     :meth:`dispose` to close it.
@@ -283,7 +295,13 @@ class DocumentTab(QWidget):
         except FileChangedError:
             return self._on_file_changed()
         except OSError as exc:
-            self.show_error(f"Could not save: {exc}")
+            if isinstance(exc, PermissionError):
+                reason = "it's open in another program or read-only"
+            else:
+                reason = str(exc)
+            name = Path(path).name if path else self.document.name
+            if ask_save_failed(self, name, reason) == "save_as":
+                return self.save_as()
             return False
 
     def _on_file_changed(self) -> bool:
