@@ -6,9 +6,10 @@
     gpdf-cli split book.pdf -o OUTDIR --decisions OUTDIR/book_split.decisions.json
     gpdf-cli split book.pdf -o OUTDIR --sheet-only [--decisions FILE]
                                                     # rewrite only the review sheet
+    gpdf-cli ocr book.pdf -o OUTDIR --lang spa      # invisible text over the scans
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
-reviewed (or spreads could not be split); 1 error.
+reviewed (or spreads could not be split), or OCR failed on some pages; 1 error.
 """
 
 from __future__ import annotations
@@ -64,6 +65,27 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--report", metavar="FILE", type=Path,
                    help="where to write the JSON report (dry run default: "
                         "OUTDIR/<name>_split.report.json)")
+    o = sub.add_parser("ocr", help="add an invisible OCR text layer to scanned pages",
+                       description="Write OUTDIR/<name>_ocr.pdf: every page with a scan image "
+                                   "and no text gets an invisible Tesseract text layer over "
+                                   "the untouched image. Pages that already have text are "
+                                   "left as they are.")
+    o.add_argument("input", metavar="IN", type=Path, help="the scanned PDF")
+    o.add_argument("-o", "--outdir", metavar="OUTDIR", type=Path, required=True,
+                   help="folder for the output files (created if missing)")
+    o.add_argument("--lang", metavar="LANGS", required=True,
+                   help="Tesseract languages, e.g. spa or eng+spa")
+    o.add_argument("--jobs", metavar="N", type=int,
+                   help="Tesseract processes in parallel (default: CPU count - 1)")
+    o.add_argument("--pages", metavar="RANGE",
+                   help="only these pages (1-based), e.g. 40-59 or 1,3,7-")
+    o.add_argument("--force", action="store_true", help="replace existing output files")
+    o.add_argument("--report", metavar="FILE", type=Path,
+                   help="where to write the JSON report (default: "
+                        "OUTDIR/<name>_ocr.report.json)")
+    o.add_argument("--tesseract", metavar="PATH",
+                   help="the tesseract executable (default: $GPDF_TESSERACT, PATH, then "
+                        r"C:\Program Files\Tesseract-OCR)")
     return p
 
 
@@ -75,6 +97,8 @@ def main(argv: list[str] | None = None) -> int:
             pass
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "ocr":
+        return _ocr_main(args, parser)
     if args.sheet_only:
         for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
                          ("--report", args.report), ("--accept-flagged", args.accept_flagged)):
@@ -95,6 +119,71 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as e:  # noqa: BLE001 - one line for the user, not a traceback
         print(f"gpdf-cli: unexpected error: {type(e).__name__}: {e}", file=sys.stderr)
     return EXIT_ERROR
+
+
+def _ocr_main(args, parser) -> int:
+    if args.jobs is not None and args.jobs < 1:
+        parser.error("--jobs must be at least 1")
+    try:
+        from gpdf.pipeline import ocr, tesseract
+    except ModuleNotFoundError as e:
+        if e.name in ("numpy", "PIL"):
+            print(f"gpdf-cli: {PREP_HINT}", file=sys.stderr)
+            return EXIT_ERROR
+        raise
+    try:
+        return _ocr(args, ocr, tesseract)
+    except (ocr.OcrError, tesseract.TesseractError, OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 - one line for the user, not a traceback
+        print(f"gpdf-cli: unexpected error: {type(e).__name__}: {e}", file=sys.stderr)
+    return EXIT_ERROR
+
+
+def _ocr(args, ocr, tesseract) -> int:
+    from gpdf.pipeline.split import same_file
+
+    src = args.input
+    if not src.is_file():
+        raise ocr.OcrError(f"no such file: {src}")
+    out = args.outdir / ocr.output_name(src)
+    report_path = args.report or args.outdir / f"{src.stem}_ocr.report.json"
+    for path in (out, report_path):
+        if same_file(src, path):
+            raise ocr.OcrError(f"{path} is the source file")
+    if out.exists() and not args.force:                   # before the slow part
+        raise ocr.OcrError(f"{out} already exists (pass --force to replace it)")
+    tess = tesseract.prepare(args.lang, args.tesseract)
+    args.outdir.mkdir(parents=True, exist_ok=True)
+    report = ocr.ocr_document(src, out, args.lang, jobs=args.jobs, pages=args.pages,
+                              force=args.force, tess=tess, progress=_progress("ocr"))
+    report.save(report_path)
+    _print_ocr(report, ocr, out, report_path)
+    return report.exit_code
+
+
+def _print_ocr(report, ocr, out, report_path):
+    print(f"wrote {out}: {len(report.pages)} of {report.pages_total} pages checked "
+          f"({report.size_ratio:.2f}x the source size, {report.seconds:.1f} s)")
+    print(f"  tesseract {report.tesseract}, tessdata {report.tessdata}, --lang {report.langs}, "
+          f"{report.jobs} jobs")
+    labels = {ocr.OCR: "OCR'd", ocr.HAS_TEXT: "has text layer", ocr.BLANK: "blank",
+              ocr.NO_IMAGE: "no image", ocr.FAILED: "failed"}
+    for status in ocr.STATUSES:
+        pages = report.by_status(status)
+        line = f"  {labels[status]:<15}{len(pages):>5}"
+        if status == ocr.OCR and report.mean_conf is not None:
+            line += f"   mean confidence {report.mean_conf:.1f}"
+        elif status != ocr.OCR and pages:
+            line += f"   p. {_pages([p.page for p in pages][:20])}" + (
+                " ..." if len(pages) > 20 else "")
+        print(line)
+    if report.lowest:
+        print("  lowest confidence: " + ", ".join(f"p. {p.page} ({p.mean_conf:.0f})"
+                                                  for p in report.lowest))
+    for p in report.by_status(ocr.FAILED):
+        print(f"  p. {p.page} failed: {p.error.splitlines()[-1] if p.error else ''}")
+    print(f"report:    {report_path}")
 
 
 def _progress(label):

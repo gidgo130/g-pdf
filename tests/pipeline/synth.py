@@ -478,3 +478,117 @@ def build_mini(path) -> list[Truth]:
     ]
     doc.save(str(path), garbage=3, deflate=True)
     return truth
+
+
+# ---------------------------------------------------------------- OCR fixtures
+OCR_DPI = 300
+OCR_W, OCR_H = 360, 504           # page, points (5 x 7 in)
+OCR_PT = 72 / OCR_DPI
+ENGLISH = [
+    "The avant-garde movements of Latin America were shaped by contentious encounters.",
+    "Critics debated whether the new poetry belonged to the city or to the countryside.",
+    "Several magazines published manifestos, translations and violent polemical replies.",
+    "Painters travelled between Buenos Aires, Mexico City and Paris during that decade.",
+    "Historians still disagree about which journal deserves to be called the first.",
+    "Readers encountered unfamiliar typography, collage and deliberately broken syntax.",
+]
+
+
+@dataclass
+class OcrTruth:
+    name: str
+    words: list                       # (x0, y0, x1, y1, word) on the displayed page, points
+    status: str = "ocr"               # expected report status
+    dpi: int = OCR_DPI
+
+
+def typeset(lines, size=11.0):
+    """(darkness at OCR_DPI, words) of ``lines`` typeset on an OCR_W x OCR_H page."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=OCR_W, height=OCR_H)
+    rc = page.insert_textbox(pymupdf.Rect(36, 40, OCR_W - 36, OCR_H - 40), "\n".join(lines),
+                             fontname="tiro", fontsize=size)
+    assert rc >= 0, "text overflows the page"
+    words = [w[:5] for w in page.get_text("words")]
+    pix = page.get_pixmap(dpi=OCR_DPI, colorspace=pymupdf.csGRAY)
+    g = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.stride)[:, : pix.width]
+    return 1 - g.astype(np.float32) / 255, words, page, doc
+
+
+def spanish_lines(seed):
+    order = np.random.default_rng(seed).permutation(len(SENTENCES))
+    return [SENTENCES[i] for i in order[:9]]
+
+
+def add_ocr_g4(doc, lines, name="spanish_g4"):
+    dark, words, *_ = typeset(lines)
+    page = doc.new_page(width=OCR_W, height=OCR_H)
+    put_image(page, g4(doc, to_black(dark)))
+    return OcrTruth(name, words)
+
+
+def add_ocr_jpeg96(doc, lines):
+    """The same kind of text scanned at 96 dpi, RGB JPEG on tinted paper."""
+    _, words, src, tmp = typeset(lines)
+    pix = src.get_pixmap(dpi=96, colorspace=pymupdf.csGRAY)
+    d = 1 - np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.stride)[:, : pix.width] / 255
+    paper = np.array([238, 230, 214], np.float32)
+    ink = np.array([35, 30, 28], np.float32)
+    rgb = paper * (1 - d[..., None]) + ink * d[..., None]
+    page = doc.new_page(width=OCR_W, height=OCR_H)
+    put_image(page, jpeg_rgb(doc, rgb.clip(0, 255).astype(np.uint8), quality=80))
+    return OcrTruth("spanish_jpeg96", words, dpi=96)
+
+
+def add_ocr_has_text(doc, lines):
+    """A scan that already has a visible text layer: OCR leaves it alone."""
+    dark, words, *_ = typeset(lines)
+    page = doc.new_page(width=OCR_W, height=OCR_H)
+    put_image(page, g4(doc, to_black(dark)))
+    page.insert_text((36, 30), "Texto visible ya presente", fontname="tiro", fontsize=9)
+    return OcrTruth("has_text", words, status="has_text")
+
+
+def add_ocr_blank(doc):
+    black = np.zeros((round(OCR_H / OCR_PT), round(OCR_W / OCR_PT)), bool)
+    black[np.random.default_rng(3).integers(0, black.shape[0], 40),
+          np.random.default_rng(4).integers(0, black.shape[1], 40)] = True     # specks
+    page = doc.new_page(width=OCR_W, height=OCR_H)
+    put_image(page, g4(doc, black))
+    return OcrTruth("blank", [], status="blank")
+
+
+def add_ocr_rotate90(doc, lines):
+    """/Rotate 90 with a crop box; the image is placed so the text displays upright."""
+    dark, words, *_ = typeset(lines)
+    page = rotated_page(doc, OCR_W, OCR_H, 90)
+    place(page, g4(doc, to_black(dark)), pymupdf.Matrix(OCR_W, 0, 0, OCR_H, 0, 0))
+    return OcrTruth("rotate90", words)
+
+
+def add_ocr_residual(doc, lines, skew=1.5):
+    """Like a split Unruh half: stored pixels tilted by ``skew`` degrees, the image matrix
+    turns them back so the text displays straight."""
+    dark, words, *_ = typeset(lines)
+    tilted, aff = rotate(dark, skew)
+    page = doc.new_page(width=OCR_W, height=OCR_H)
+    to_comp = pymupdf.Matrix(aff[0], aff[3], aff[1], aff[4], aff[2], aff[5])
+    h, w = dark.shape
+    place(page, g4(doc, to_black(tilted)), pymupdf.Matrix(w, 0, 0, h, 0, 0) * to_comp
+          * pymupdf.Matrix(OCR_PT, 0, 0, OCR_PT, 0, 0))
+    return OcrTruth("residual", words)
+
+
+def build_ocr_book(path) -> list[OcrTruth]:
+    doc = pymupdf.open()
+    truth = [
+        add_ocr_g4(doc, spanish_lines(1)),
+        add_ocr_jpeg96(doc, spanish_lines(2)),
+        add_ocr_g4(doc, ENGLISH, name="english_g4"),
+        add_ocr_has_text(doc, spanish_lines(3)),
+        add_ocr_blank(doc),
+        add_ocr_rotate90(doc, spanish_lines(4)),
+        add_ocr_residual(doc, spanish_lines(5)),
+    ]
+    doc.save(str(path), garbage=3, deflate=True)
+    return truth
