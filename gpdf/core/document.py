@@ -101,15 +101,15 @@ def _set_ref_array(raw: pymupdf.Document, xref: int, key: str, refs: list[int]) 
         raw.xref_set_key(xref, key, text)
 
 
-def _fields_holder(raw: pymupdf.Document) -> tuple[int, str] | None:
-    """(xref, key) of the /AcroForm /Fields array; /AcroForm may be inline in
-    the catalog or indirect."""
+def _fields_holder(raw: pymupdf.Document, name: str = "Fields") -> tuple[int, str] | None:
+    """(xref, key) of the /AcroForm array ``name`` (/Fields, /CO); /AcroForm
+    may be inline in the catalog or indirect."""
     cat = raw.pdf_catalog()
     kind, value = raw.xref_get_key(cat, "AcroForm")
     if kind == "xref":
-        return int(value.split()[0]), "Fields"
+        return int(value.split()[0]), name
     if kind == "dict":
-        return cat, "AcroForm/Fields"
+        return cat, f"AcroForm/{name}"
     return None
 
 
@@ -145,20 +145,24 @@ def _unplaced_widgets(raw: pymupdf.Document) -> set[int]:
     return widgets
 
 
-def _prune_fields(raw: pymupdf.Document, dead: set[int]) -> None:
+def _prune_fields(raw: pymupdf.Document, dead: set[int]) -> set[int]:
     """Remove the ``dead`` widgets from the field tree, then every field whose
-    /Kids that left empty. Fields that never had kids (data-only) stay."""
+    /Kids that left empty. Fields that never had kids (data-only) stay.
+    Returns the xrefs removed."""
     seen: set[int] = set()
+    removed: set[int] = set()
 
     def prune(xref: int, key: str) -> list[int]:
         refs = _ref_array(raw, xref, key)
         keep = []
         for x in refs:
             if x in dead:
+                removed.add(x)
                 continue
             if x not in seen:
                 seen.add(x)
                 if _ref_array(raw, x, "Kids") and not prune(x, "Kids"):
+                    removed.add(x)
                     continue
             keep.append(x)
         if keep != refs:
@@ -168,6 +172,7 @@ def _prune_fields(raw: pymupdf.Document, dead: set[int]) -> None:
     holder = _fields_holder(raw)
     if holder is not None:
         prune(*holder)
+    return removed
 
 
 def _scrubbed_bytes(
@@ -181,7 +186,14 @@ def _scrubbed_bytes(
         for x in dead_pages:
             scratch.update_object(x, "null")
         if dead_widgets:
-            _prune_fields(scratch, dead_widgets)
+            removed = _prune_fields(scratch, dead_widgets)
+            # /CO (calculation order) would otherwise keep pruned fields alive.
+            co = _fields_holder(scratch, "CO")
+            if co is not None:
+                refs = _ref_array(scratch, *co)
+                keep = [x for x in refs if x not in removed]
+                if keep != refs:
+                    _set_ref_array(scratch, *co, keep)
         return scratch.tobytes(garbage=1, deflate=True)
     finally:
         scratch.close()

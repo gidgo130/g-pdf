@@ -970,6 +970,34 @@ def test_data_only_field_survives_delete(qapp, tmp_path):
         reopened.close()
 
 
+def test_calculated_field_on_deleted_page_leaves_calc_order(qapp, tmp_path):
+    """Both fields calculated and listed in /AcroForm/CO; "ssn" is on page 2."""
+    raw = pymupdf.open(_form_pdf(tmp_path / "form.pdf"))
+    calc = [next(raw[i].widgets()).xref for i in range(2)]
+    for x in calc:
+        raw.xref_set_key(x, "AA", "<</C<</S/JavaScript/JS(event.value=event.value;)>>>>")
+    raw.xref_set_key(
+        raw.pdf_catalog(), "AcroForm/CO", "[" + " ".join(f"{x} 0 R" for x in calc) + "]"
+    )
+    src = _save_pdf(raw, tmp_path / "calc.pdf")
+
+    doc = PdfDocument(src)
+    try:
+        doc.delete_pages([1])
+        out = tmp_path / "out.pdf"
+        doc.save_as(out)
+    finally:
+        doc.close()
+    reopened = pymupdf.open(out)
+    try:
+        assert b"123-45-6789" not in reopened.tobytes(expand=255)
+        co = _ref_array(reopened, *document_mod._fields_holder(reopened, "CO"))
+        assert [reopened.xref_get_key(x, "T")[1] for x in co] == ["name"]
+        assert _widgets(reopened, 0) == [("name", "Gideon")]
+    finally:
+        reopened.close()
+
+
 def test_ocr_replaced_page_drops_field_until_undo(qapp, tmp_path):
     doc = PdfDocument(_form_pdf(tmp_path / "form.pdf"))
     blank = pymupdf.open()
