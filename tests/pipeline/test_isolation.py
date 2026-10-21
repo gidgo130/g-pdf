@@ -7,7 +7,7 @@ import sys
 
 import gpdf.pipeline
 
-MODULES = ["gpdf.pipeline"] + [
+MODULES = ["gpdf.cli", "gpdf.pipeline"] + [
     f"gpdf.pipeline.{m.name}" for m in pkgutil.iter_modules(gpdf.pipeline.__path__)
 ]
 
