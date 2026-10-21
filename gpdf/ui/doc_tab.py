@@ -219,13 +219,16 @@ class DocumentTab(QWidget):
     # -- saving --------------------------------------------------------------------
 
     def save(self) -> bool:
+        if self.document.is_damaged:  # keep the damaged original (#2)
+            path = self.document.path
+            return self.save_as(str(path.with_name(f"{path.stem} (recovered).pdf")))
         if not self._confirm_signed():
             return False
         return self._save_to(None)
 
-    def save_as(self) -> bool:
+    def save_as(self, default: str | None = None) -> bool:
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save as", str(self.document.path), "PDF files (*.pdf)")
+            self, "Save as", default or str(self.document.path), "PDF files (*.pdf)")
         if not path:
             return False
         if not path.lower().endswith(".pdf"):

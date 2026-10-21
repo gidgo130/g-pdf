@@ -176,7 +176,7 @@ def _prune_fields(raw: pymupdf.Document, dead: set[int]) -> set[int]:
 
 
 def _scrubbed_bytes(
-    raw: pymupdf.Document, dead_pages: set[int], dead_widgets: set[int]
+    raw: pymupdf.Document, dead_pages: set[int], dead_widgets: set[int], garbage: int = 1
 ) -> bytes:
     """``raw`` saved with ``dead_pages`` blanked and ``dead_widgets`` pruned,
     done on a scratch copy so ``raw`` (and with it undo) is untouched.
@@ -194,9 +194,26 @@ def _scrubbed_bytes(
                 keep = [x for x in refs if x not in removed]
                 if keep != refs:
                     _set_ref_array(scratch, *co, keep)
-        return scratch.tobytes(garbage=1, deflate=True)
+        return scratch.tobytes(garbage=garbage, deflate=True)
     finally:
         scratch.close()
+
+
+def _has_read_errors(raw: pymupdf.Document) -> bool:
+    """Load every page and read its content; True if MuPDF warned or failed.
+    ``is_repaired`` alone can't tell a lost page from a shifted xref offset."""
+    shown = pymupdf.TOOLS.mupdf_display_errors()
+    pymupdf.TOOLS.mupdf_display_errors(False)
+    try:
+        pymupdf.TOOLS.reset_mupdf_warnings()
+        for page in raw:
+            page.read_contents()
+        return bool(pymupdf.TOOLS.mupdf_warnings())
+    except Exception:
+        return True
+    finally:
+        pymupdf.TOOLS.reset_mupdf_warnings()
+        pymupdf.TOOLS.mupdf_display_errors(shown)
 
 
 def _ranges(indices: Sequence[int]) -> list[tuple[int, int]]:
@@ -243,6 +260,12 @@ class PdfDocument(QObject):
             doc.close()
             raise PdfOpenError(f"{self.path.name} has no pages.")
 
+        # MuPDF rebuilt the xref table; only some repairs lose content (#2).
+        self.was_repaired: bool = doc.is_repaired
+        self.is_damaged: bool = self.was_repaired and _has_read_errors(doc)
+        # A damaged page tree can point at objects that are gone; garbage
+        # collection then fails ("cycle in page tree") and breaks ``raw`` too.
+        self._no_garbage = self.is_damaged
         self._raw: pymupdf.Document | None = doc
         self._history = History()
         self._gen: dict[int, int] = {}  # page xref -> content generation
@@ -569,6 +592,11 @@ class PdfDocument(QObject):
     # -- saving -----------------------------------------------------------------
 
     def save(self) -> None:
+        if self.is_damaged:
+            raise PdfEditError(
+                "This file was damaged when opened; save it under a new name "
+                "so the original is kept."
+            )
         self.save_as(self.path)
 
     def save_as(self, path: str | Path) -> None:
@@ -578,14 +606,16 @@ class PdfDocument(QObject):
         raw = self.raw
         dead_pages = _stray_pages(raw) - self._orphans_at_open
         dead_widgets = _unplaced_widgets(raw) - self._unplaced_widgets_at_open
+        garbage = 0 if self._no_garbage else 1
         if dead_pages or dead_widgets:
-            data = _scrubbed_bytes(raw, dead_pages, dead_widgets)
+            data = _scrubbed_bytes(raw, dead_pages, dead_widgets, garbage)
         else:
-            data = raw.tobytes(garbage=1, deflate=True)
+            data = raw.tobytes(garbage=garbage, deflate=True)
         _atomic_write(target, data)
         self.path = target
         self._history.mark_clean()
         self._signed = False  # whatever signatures existed no longer validate
+        self.was_repaired = self.is_damaged = False  # the new file is whole
         self.state_changed.emit()
 
     # -- lifecycle ----------------------------------------------------------

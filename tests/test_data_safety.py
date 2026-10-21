@@ -11,6 +11,7 @@ be un-marked.
 from __future__ import annotations
 
 import os
+import re
 import stat
 import sys
 from pathlib import Path
@@ -282,22 +283,76 @@ def test_add_text_undo_redo_keeps_one_field_and_highlight(qapp, tmp_path):
 # -- B. damaged file (#2) --------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="#2 damaged PDFs open silently, no was_repaired")
-def test_truncated_file_reports_repair(qapp, tmp_path):
-    full = tmp_path / "full.pdf"
+def _four_page_bytes() -> bytes:
     doc = pymupdf.open()
     for i in range(4):
         page = doc.new_page()
         for j in range(40):  # enough content that page 1 survives truncation
             page.insert_text((72, 72 + j * 15), f"Page {i + 1} line {j}", fontsize=8)
-    _save_pdf(doc, full)
-    data = full.read_bytes()
-    damaged = tmp_path / "damaged.pdf"
-    damaged.write_bytes(data[: len(data) // 3])
+    data = doc.tobytes()
+    doc.close()
+    return data
 
-    pdf = PdfDocument(damaged)  # opens (that part is current behaviour)
+
+def truncated_pdf(path: Path) -> Path:
+    """Cut to a third: pages 2-4 come back empty after repair."""
+    data = _four_page_bytes()
+    path.write_bytes(data[: len(data) // 3])
+    return path
+
+
+def shifted_xref_pdf(path: Path) -> Path:
+    """startxref off by 7 bytes: MuPDF repairs it, every page intact."""
+    data = _four_page_bytes()
+    m = re.search(rb"startxref\s+(\d+)", data)
+    shifted = str(int(m.group(1)) + 7).encode()
+    path.write_bytes(data[: m.start(1)] + shifted + data[m.end(1):])
+    return path
+
+
+def test_truncated_file_is_damaged_and_save_refuses(qapp, tmp_path):
+    damaged = truncated_pdf(tmp_path / "damaged.pdf")
+    original = damaged.read_bytes()
+    pdf = PdfDocument(damaged)
     try:
         assert pdf.was_repaired is True
+        assert pdf.is_damaged is True
+        pdf.rotate_pages([0], 90)
+        with pytest.raises(PdfEditError, match="damaged"):
+            pdf.save()
+        assert damaged.read_bytes() == original
+
+        recovered = tmp_path / "damaged (recovered).pdf"
+        pdf.save_as(recovered)
+        assert pdf.was_repaired is False and pdf.is_damaged is False
+        assert damaged.read_bytes() == original
+        pdf.rotate_pages([0], 90)  # the open document still works
+        pdf.save()  # now saves to the recovered copy
+        with pymupdf.open(str(recovered)) as check:
+            assert check.page_count == 4 and check[0].rotation == 180
+            assert "Page 1 line 0" in check[0].get_text()
+    finally:
+        pdf.close()
+
+
+def test_harmless_repair_is_not_damaged(qapp, tmp_path):
+    path = shifted_xref_pdf(tmp_path / "shifted.pdf")
+    pdf = PdfDocument(path)
+    try:
+        assert pdf.was_repaired is True
+        assert pdf.is_damaged is False
+        pdf.rotate_pages([0], 90)
+        pdf.save()
+        with pymupdf.open(str(path)) as check:
+            assert check[0].rotation == 90 and check.page_count == 4
+    finally:
+        pdf.close()
+
+
+def test_intact_file_is_not_repaired(qapp, make_pdf):
+    pdf = PdfDocument(make_pdf())
+    try:
+        assert pdf.was_repaired is False and pdf.is_damaged is False
     finally:
         pdf.close()
 

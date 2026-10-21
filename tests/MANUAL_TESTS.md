@@ -74,3 +74,11 @@ by hand on Windows before a release. Use three or four small PDFs.
 28. OCR a scanned page with Tesseract installed; afterwards Ctrl+F finds its words.
     Without Tesseract you should see the install hint.
 29. Open a signed PDF and save: a warning explains the signature will be invalidated.
+
+## Damaged files and saving (area A)
+
+30. Open a truncated PDF (`private/manual/corrupt.pdf`, or any PDF cut short). A
+    warning says it is damaged and some pages may be missing or blank. Edit it and
+    press Ctrl+S: the Save As dialog suggests "<name> (recovered).pdf" in the same
+    folder, and the original file is unchanged. After saving, Ctrl+S saves to the
+    recovered copy without asking.

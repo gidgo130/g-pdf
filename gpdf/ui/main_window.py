@@ -292,7 +292,16 @@ class MainWindow(QMainWindow):
 
         tab = DocumentTab(PdfDocument(resolved))  # may raise PdfOpenError
         self.adopt_tab(tab)
+        self._warn_if_damaged(tab)
         return tab
+
+    def _warn_if_damaged(self, tab: DocumentTab) -> None:
+        if tab.document.is_damaged:
+            QMessageBox.warning(
+                self, APP_NAME,
+                f"{tab.document.name} is damaged. {APP_NAME} recovered what it could, "
+                "but some pages may be missing or blank. To keep the original safe, "
+                "Save will ask for a new file name.")
 
     # -- tab bookkeeping ----------------------------------------------------
 

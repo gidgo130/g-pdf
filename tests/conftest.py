@@ -6,13 +6,25 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pymupdf
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 
 @pytest.fixture(scope="session")
 def qapp():
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+@pytest.fixture(autouse=True)
+def no_unexpected_message_boxes(monkeypatch):
+    """A modal QMessageBox would block the offscreen suite forever, so fail
+    instead. Tests that expect a dialog patch it (or an ask_* helper) again."""
+
+    def refuse(*args, **kwargs):
+        raise AssertionError(f"unexpected QMessageBox: {args!r}")
+
+    for name in ("warning", "question", "information", "critical", "exec"):
+        monkeypatch.setattr(QMessageBox, name, refuse)
 
 
 @pytest.fixture
