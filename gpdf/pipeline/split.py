@@ -160,7 +160,7 @@ def _verify(path, pages):
 
 
 def split_document(src, out, decisions=None, accept_flagged=False, force=False,
-                   progress=None) -> SplitReport:
+                   progress=None, split_progress=None) -> SplitReport:
     """Write ``out`` with the spreads of ``src`` split into single pages.
 
     Without ``decisions`` the detector's guesses are used for unflagged pages. With a
@@ -169,7 +169,8 @@ def split_document(src, out, decisions=None, accept_flagged=False, force=False,
     which pages are flagged, and the reasons, come from it, not from the file's
     possibly stale "detected" (see with_review). ``force`` allows overwriting
     ``out`` and a decisions file whose source stamp no longer matches.
-    ``progress(done, total)`` is called while detecting and while splitting.
+    ``progress(done, total)`` is called while detecting, ``split_progress(done, total)``
+    while splitting (``progress`` for both if it is not given).
     """
     t0 = time.perf_counter()
     src, out = Path(src), Path(out)
@@ -186,7 +187,7 @@ def split_document(src, out, decisions=None, accept_flagged=False, force=False,
         else:
             saved = load_decisions(decisions, src, len(doc), force)
             decisions = with_review(make_decisions(src, doc, analyze(doc, progress)), saved)
-        report = _build(doc, src, out, decisions, accept_flagged, progress)
+        report = _build(doc, src, out, decisions, accept_flagged, split_progress or progress)
     finally:
         doc.close()
     report.seconds = round(time.perf_counter() - t0, 2)

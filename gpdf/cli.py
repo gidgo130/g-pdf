@@ -126,7 +126,8 @@ def _split(args, split) -> int:
         return _sheet_only(args, split, src, stem)
     report = split.split_document(src, out, decisions=args.decisions,
                                   accept_flagged=args.accept_flagged, force=args.force,
-                                  progress=_progress("pages"))
+                                  progress=_progress("detecting"),
+                                  split_progress=_progress("splitting"))
     if args.report:
         _check_writable(split, src, args.report, force=True)
         report.save(args.report)

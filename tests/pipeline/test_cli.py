@@ -280,3 +280,31 @@ def test_forced_dry_run_backs_up_a_reviewed_decisions_file(src, dry, capsys):
     dec_path.write_text("{not json", "utf-8")                  # unreadable: kept as well
     assert run(src, outdir, "--dry-run", "--force") == 0
     assert len(list(outdir.glob("*.bak.json"))) == 2
+
+
+class _Tty:
+    """A stderr that says it is a terminal, so the CLI shows progress."""
+
+    def __init__(self):
+        import io
+
+        self.buf = io.StringIO()
+
+    def isatty(self):
+        return True
+
+    def write(self, s):
+        return self.buf.write(s)
+
+    def flush(self):
+        pass
+
+
+def test_split_progress_labels_detecting_then_splitting(src, tmp_path, monkeypatch):
+    tty = _Tty()
+    monkeypatch.setattr(sys, "stderr", tty)
+    assert run(src, tmp_path / "out", "--accept-flagged") == 0
+    lines = tty.buf.getvalue().split("\n")
+    assert lines[0].endswith("detecting 7/7") and "\r  detecting 1/7" in lines[0]
+    assert lines[1].endswith("splitting 7/7") and "\r  splitting 1/7" in lines[1]
+    assert "pages " not in tty.buf.getvalue()
