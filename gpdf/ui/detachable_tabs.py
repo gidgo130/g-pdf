@@ -27,7 +27,7 @@ from __future__ import annotations
 import sys
 import uuid
 
-from PySide6.QtCore import QDir, QEvent, QMimeData, QPoint, Qt, Signal
+from PySide6.QtCore import QDir, QEvent, QMimeData, QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QDrag, QGuiApplication, QMouseEvent, QPixmap
 from PySide6.QtWidgets import QTabBar, QTabWidget, QWidget
 
@@ -72,6 +72,29 @@ def drag_was_cancelled() -> bool:
             )
         return bool(QGuiApplication.mouseButtons() & Qt.MouseButton.LeftButton)
     except Exception:
+        return False
+
+
+class _EscWatcher(QObject):
+    """Records an Esc press during a tab drag (X11/macOS deliver it to Qt; on
+    Windows the OLE drag loop doesn't, and drag_was_cancelled() covers that)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.pressed = False
+        self._done = False
+
+    def install(self) -> None:
+        if not self._done:
+            QGuiApplication.instance().installEventFilter(self)
+
+    def uninstall(self) -> None:
+        self._done = True
+        QGuiApplication.instance().removeEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+            self.pressed = True
         return False
 
 
@@ -167,11 +190,18 @@ class DetachableTabBar(QTabBar):
                 drag.setPixmap(pixmap)
                 drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
 
-        drag.exec(Qt.DropAction.MoveAction)
+        esc = _EscWatcher()
+        # Qt's own drag filter swallows Esc and the newest filter runs first, so
+        # install ours once the drag's event loop is running.
+        QTimer.singleShot(0, esc.install)
+        try:
+            drag.exec(Qt.DropAction.MoveAction)
+        finally:
+            esc.uninstall()
 
         if drag_is_pending(token):  # nobody took it: Esc, or dropped outside
             discard_drag(token)
-            if drag_was_cancelled():
+            if esc.pressed or drag_was_cancelled():
                 return
             self.detach_requested.emit(tab, QCursor.pos())
 
