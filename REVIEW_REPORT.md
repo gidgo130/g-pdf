@@ -26,6 +26,8 @@ Work in progress. Findings are verified on Windows only where the
 | 5 | Deps | `pyproject.toml` | Unbounded `PyMuPDF>=1.24.3` installed 2.0, which bundles onnxruntime + numpy + networkx (~130 MB) and ML layout models, imported on `import pymupdf` (0.15 s → ~0.9 s). | Pinned `<2` (f33e8be) | Yes |
 | 6 | Packaging | `pyproject.toml` | `PySide6` meta-package also installs WebEngine + Pdf (~130 MB unused). `PySide6-Essentials` + `PySide6-Addons` (TTS) would do. | Open | n/a |
 | 7 | Test | `tests/test_tabs.py` 339 | Path-string comparison failed on Windows (see run 2). | Fixed via code | Yes |
+| 8 | UX | `ui/detachable_tabs.py` `DetachableTabWidget.dropEvent` | Dropping a dragged tab on its own window's page area moved it to the end instead of detaching (browsers detach). Owner chose: detach. | Fixed + test | Pending retest |
+| 9 | UX | `ui/page_panel.py` | Thumbnails are white pages on a white panel with no border; only faint text visible, large empty cells. | Open (area C) | Yes (seen) |
 
 ## Handoff check (Step 1)
 - HANDOFF.md: "repo is public" was stale at the time (now public); no local git
@@ -45,7 +47,7 @@ Files: `private/manual/` (synthetic, gitignored).
 
 | # | Test | Result | Notes |
 |---|---|---|---|
-| 1 | Tab detach to desktop | | |
+| 1 | Tab detach to desktop | Pass | Over its own page area it moved the tab to the end; changed to detach (#8), retest |
 | 2 | Re-dock onto tab strip | | |
 | 3 | Drop tab on page area | | |
 | 4 | Reorder within strip | | |

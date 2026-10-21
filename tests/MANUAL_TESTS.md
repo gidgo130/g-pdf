@@ -8,7 +8,8 @@ by hand on Windows before a release. Use three or four small PDFs.
 
 1. Open three PDFs. Drag the middle tab **down about 50 px** and release over
    empty desktop. A new window appears near the cursor holding that tab; the
-   original window keeps the other two.
+   original window keeps the other two. Repeat, releasing over the **same window's
+   page area**: it detaches the same way.
 2. Drag the new window's tab back onto the **first window's tab strip**, between
    two tabs. It lands where you dropped it, and the now-empty window closes.
 3. Detach a tab again and drop it on the **page area** of the other window. It

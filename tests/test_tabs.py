@@ -313,6 +313,24 @@ def test_dropping_on_the_page_area_appends_the_tab(qapp, make_pdf):
     assert names(b) == ["3.pdf", "1.pdf"]
 
 
+def test_dropping_on_its_own_page_area_detaches_the_tab(qapp, make_pdf):
+    a = MainWindow()
+    a.open_path(make_pdf("1.pdf"))
+    t2 = a.open_path(make_pdf("2.pdf"))
+    a.open_path(make_pdf("3.pdf"))
+
+    token = dt.register_drag(t2)
+    mime = dt.make_tab_mime(token)  # keep a reference: QDropEvent doesn't own it
+    event = drop_event(mime)
+    a.tabs.dropEvent(event)
+
+    assert event.isAccepted() and not dt.drag_is_pending(token)
+    assert names(a) == ["1.pdf", "3.pdf"]
+    others = [w for w in MainWindow.windows() if w is not a]
+    assert len(others) == 1 and names(others[0]) == ["2.pdf"]
+    assert t2.window() is others[0]
+
+
 def test_drop_with_unknown_token_is_ignored(qapp, make_pdf):
     win = MainWindow()
     win.open_path(make_pdf("1.pdf"))
