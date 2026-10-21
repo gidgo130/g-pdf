@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import pytest
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt
-from PySide6.QtGui import QDropEvent
-from PySide6.QtWidgets import QInputDialog, QMessageBox
+from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent
+from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox
 
 from gpdf.ui import page_panel
 from gpdf.ui.main_window import MainWindow
@@ -102,6 +102,29 @@ def test_panel_drop_reorders(win, qapp):
     assert labels(tab.document) == ["2", "3", "4", "1", "5"]
     assert tab.panel.selected_pages() == [3]
     page_panel._registry.pop(token, None)
+
+
+def test_panel_viewport_accepts_drops(win):
+    w, tab = win
+    assert tab.panel.viewport().acceptDrops()
+
+
+def test_drag_events_on_viewport_reach_panel_and_reorder(win, qapp):
+    w, tab = win
+    panel = tab.panel
+    mime, token = page_panel._make_mime(tab.document, [0])  # keep a reference to mime
+    r = panel.visualRect(panel.model().index(3))
+    pos = QPointF(r.right() - 2, r.center().y())
+    act, btn, mod = Qt.DropAction.MoveAction, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
+    try:
+        enter = QDragEnterEvent(pos.toPoint(), act, mime, btn, mod)
+        QApplication.sendEvent(panel.viewport(), enter)
+        assert enter.isAccepted()
+        QApplication.sendEvent(panel.viewport(), QDragMoveEvent(pos.toPoint(), act, mime, btn, mod))
+        QApplication.sendEvent(panel.viewport(), QDropEvent(pos, act, mime, btn, mod))
+        assert labels(tab.document) == ["2", "3", "4", "1", "5"]
+    finally:
+        page_panel._registry.pop(token, None)
 
 
 def test_panel_drop_between_documents_copies(win, qapp, make_pdf):

@@ -117,6 +117,7 @@ class PagePanel(QListView):
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setDragEnabled(False)  # we run our own QDrag
         self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)  # QListView gets drops on its viewport
         self.setDropIndicatorShown(False)
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.setMinimumWidth(THUMB_SIDE + 60)

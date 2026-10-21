@@ -29,6 +29,7 @@ Work in progress. Findings are verified on Windows only where the
 | 8 | UX | `ui/detachable_tabs.py` `DetachableTabWidget.dropEvent` | Dropping a dragged tab on its own window's page area moved it to the end instead of detaching (browsers detach). Owner chose: detach. | Fixed + test | Yes |
 | 10 | UX | `ui/detachable_tabs.py` `start_tab_drag` | Esc during a tab drag detaches instead of cancelling: `QDrag.exec` returns IgnoreAction for both. | Fixed: cancel if the primary button or Esc is still held when the drag ends (`drag_was_cancelled`, Win32 `GetAsyncKeyState`) + 2 tests | Yes |
 | 11 | UX | `ui/main_window.py` `open_path` | Opening a file already open in another window focuses it there; owner wants the tab moved to the window where it was dropped/opened. | Fixed + 4 tests | Yes |
+| 13 | Broken feature | `ui/page_panel.py` `PagePanel.__init__` | `setAcceptDrops(True)` on a `QListView` is not enough: drops arrive on its viewport, which never accepted them. Real thumbnail drags (reorder, cross-window copy) and PDF file drops on the panel never reached `dropEvent`. Tests missed it because they called `dropEvent` directly. Verified with a simulated X11 mouse drag: after `viewport().setAcceptDrops(True)` reorder and drop work. | Fixed + 2 tests (events sent to the viewport) | Pending retest |
 | 9 | UX | `ui/page_panel.py` | Thumbnails are white pages on a white panel with no border; only faint text visible, large empty cells. | Open (area C) | Yes (seen) |
 
 ## Handoff check (Step 1)
@@ -63,9 +64,9 @@ Files: `private/manual/` (synthetic, gitignored).
 | 12 | Resize on fit-width | | |
 | 13 | Scroll 150-page PDF | | |
 | 14 | 125/150% sharpness, mixed-DPI monitors | | |
-| 15 | Thumbnail click / multi-select | | |
-| 16 | Thumbnail drag reorder + undo | | |
-| 17 | Thumbnail drag to other window (copy) | | |
+| 15 | Thumbnail click / multi-select | Pass | |
+| 16 | Thumbnail drag reorder + undo | Fail | Fixed by #13/#14, retest |
+| 17 | Thumbnail drag to other window (copy) | Fail | Fixed by #13/#14, retest |
 | 18 | Drop .pdf on panel | | |
 | 19 | Rotate/delete/dup/blank/insert/extract; delete-all refused | | |
 | 20 | Close dirty: Save/Discard/Cancel | | |
