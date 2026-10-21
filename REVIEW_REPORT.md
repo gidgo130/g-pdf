@@ -27,7 +27,7 @@ Work in progress. Findings are verified on Windows only where the
 | 6 | Packaging | `pyproject.toml` | `PySide6` meta-package also installs WebEngine + Pdf (~130 MB unused). `PySide6-Essentials` + `PySide6-Addons` (TTS) would do. | Open | n/a |
 | 7 | Test | `tests/test_tabs.py` 339 | Path-string comparison failed on Windows (see run 2). | Fixed via code | Yes |
 | 8 | UX | `ui/detachable_tabs.py` `DetachableTabWidget.dropEvent` | Dropping a dragged tab on its own window's page area moved it to the end instead of detaching (browsers detach). Owner chose: detach. | Fixed + test | Yes |
-| 10 | UX | `ui/detachable_tabs.py` `start_tab_drag` | Esc during a tab drag detaches instead of cancelling: `QDrag.exec` returns IgnoreAction for both. | Fixed: cancel if the primary button or Esc is still held when the drag ends (`drag_was_cancelled`, Win32 `GetAsyncKeyState`) + 2 tests | Yes |
+| 10 | UX | `ui/detachable_tabs.py` `start_tab_drag` | Esc during a tab drag detaches instead of cancelling: `QDrag.exec` returns IgnoreAction for both. | Fixed (Windows: GetAsyncKeyState; X11/macOS: Esc watcher) | Yes |
 | 11 | UX | `ui/main_window.py` `open_path` | Opening a file already open in another window focuses it there; owner wants the tab moved to the window where it was dropped/opened. | Fixed + 4 tests | Yes |
 | 12 | UX / feature | `ui/pdf_view.py` | Middle-button navigation: click (press+release without moving) toggles browser-style autoscroll; press-and-drag pans. | Planned (after area A) | n/a |
 | 13 | Broken feature | `ui/page_panel.py` `PagePanel.__init__` | `setAcceptDrops(True)` on a `QListView` is not enough: drops arrive on its viewport, which never accepted them. Real thumbnail drags (reorder, cross-window copy) and PDF file drops on the panel never reached `dropEvent`. Tests missed it because they called `dropEvent` directly. Verified with a simulated X11 mouse drag: after `viewport().setAcceptDrops(True)` reorder and drop work. | Fixed + 2 tests (events sent to the viewport) | Pending retest |
@@ -83,4 +83,4 @@ Files: `private/manual/` (synthetic, gitignored).
 | 29 | Signed PDF save warning | | |
 
 ## Notes by area
-- Area F: page drag/drop tests called `dropEvent` directly and passed while real drops were impossible (#13).
+- Area F: page drag/drop tests called `dropEvent` directly and passed while real drops were impossible (#13). Added tests/realinput (real X11 mouse via xdotool, CI only) covering manual tests 1, 7, 16, 17; Esc-cancel on X11 needed _EscWatcher.
