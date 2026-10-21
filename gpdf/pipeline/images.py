@@ -5,6 +5,11 @@ Spec: docs/prototypes/spread_split_proto.py (physical split helpers). A page can
 only when it is exactly one image covering the page that this module can re-encode
 without changing it: 1-bit (any filter) -> CCITT G4; DCT (JPEG) -> JPEG with the
 source's quantisation tables; other 8-bit grey/RGB -> lossless Flate.
+
+Each half keeps the source's own pixels (after a lossless 90-degree transpose/flip) and
+is drawn with the source's placement, shifted to the half page: a residual (deskew)
+rotation is kept, not resampled, and where the image falls short of the page the page
+background shows, as on the source.
 """
 
 from __future__ import annotations
@@ -36,11 +41,23 @@ class SourceImage:
 
 @dataclass
 class Upright:
-    """Page pixels re-oriented to the displayed page, covering exactly page.rect."""
+    """The page image re-oriented to the displayed page (no resampling)."""
 
     pixels: np.ndarray         # (H, W) grey or (H, W, 3) RGB, uint8
+    matrix: pymupdf.Matrix     # upright pixel coordinates -> display points of page.rect
     sx: float                  # pixels per point, horizontally
     sy: float                  # pixels per point, vertically
+
+
+@dataclass
+class Half:
+    """One page of a split spread: a crop of the upright pixels and where to draw it."""
+
+    pixels: np.ndarray         # may be empty if the half page holds no image
+    origin: tuple[int, int]    # (column, row) of pixels[0, 0] in Upright.pixels
+    width: float               # half page size, points
+    height: float
+    matrix: pymupdf.Matrix     # image unit square (row 0 at the top) -> half page points
 
 
 def _image_matrix(page, info) -> pymupdf.Matrix:
@@ -139,9 +156,9 @@ def examine(page) -> tuple[SourceImage | None, list[str]]:
 
 
 def upright_pixels(page, src: SourceImage) -> Upright:
-    """The page image re-oriented (transpose/flip) to the displayed page, cropped to
-    page.rect and padded with white where the image falls short of it. Residual image
-    rotation (<= MAX_IMAGE_ROT_DEG) is ignored."""
+    """The page image re-oriented (transpose/flip) to the displayed page, and the matrix
+    placing those pixels on the page exactly as the source does (residual rotation,
+    offset and overhang included)."""
     info = next(i for i in page.get_image_info(xrefs=True) if i["xref"] == src.xref)
     M = _image_matrix(page, info)
     ex, ey = _axes(M)
@@ -152,29 +169,70 @@ def upright_pixels(page, src: SourceImage) -> Upright:
         raise ValueError(f"image {src.xref} decodes to {pix.n} components, expected {src.n}")
     a = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.stride)[:, : pix.width * pix.n]
     a = a.reshape(pix.height, pix.width, pix.n)
+    # U maps coordinates in the re-oriented array back to stored pixel coordinates.
+    U = pymupdf.Matrix(1, 0, 0, 1, 0, 0)
+
+    def flip_cols(a):
+        nonlocal U
+        U = pymupdf.Matrix(-1, 0, 0, 1, a.shape[1], 0) * U
+        return a[:, ::-1]
+
+    def flip_rows(a):
+        nonlocal U
+        U = pymupdf.Matrix(1, 0, 0, -1, 0, a.shape[0]) * U
+        return a[::-1]
+
     if abs(ex.x) >= abs(ex.y):
         if ex.x < 0:
-            a = a[:, ::-1]
+            a = flip_cols(a)
         if ey.y < 0:
-            a = a[::-1]
+            a = flip_rows(a)
     else:
         a = a.transpose(1, 0, 2)
+        U = pymupdf.Matrix(0, 1, 1, 0, 0, 0) * U
         if ex.y < 0:
-            a = a[::-1]
+            a = flip_rows(a)
         if ey.x < 0:
-            a = a[:, ::-1]
-    disp = pymupdf.Rect(pymupdf.Point(0, 0) * M, pymupdf.Point(1, 1) * M).normalize()
-    sx, sy = a.shape[1] / disp.width, a.shape[0] / disp.height
+            a = flip_cols(a)
+    A = U * pymupdf.Matrix(1 / pix.width, 0, 0, 1 / pix.height, 0, 0) * M
+    pixels = a[:, :, 0] if a.shape[2] == 1 else a
+    return Upright(pixels, A, 1 / math.hypot(A.a, A.b), 1 / math.hypot(A.c, A.d))
+
+
+def split_halves(page, src: SourceImage, cut) -> tuple[Half, Half, int]:
+    """(left, right, whitened) for a cut from (cut[0], top) to (cut[1], bottom), as
+    fractions of the displayed width. The left page is display x in [0, max(cut)], the
+    right one [min(cut), width], both the source's height. The cut is solved in pixel
+    space through the image placement; each half stores only the pixels inside its page
+    (no off-page overhang), with the other page's pixels beyond the cut whitened.
+    ``whitened`` counts the stored pixels that were whitened and not already white."""
+    up = upright_pixels(page, src)
+    a, A = up.pixels, up.matrix
+    H, W = a.shape[:2]
     r = page.rect
-    W, H = round(r.width * sx), round(r.height * sy)
-    ox, oy = round((disp.x0 - r.x0) * sx), round((disp.y0 - r.y0) * sy)
-    out = np.full((H, W, a.shape[2]), WHITE, np.uint8)
-    x0, y0 = max(0, ox), max(0, oy)
-    x1, y1 = min(W, ox + a.shape[1]), min(H, oy + a.shape[0])
-    if x1 > x0 and y1 > y0:
-        out[y0:y1, x0:x1] = a[y0 - oy: y1 - oy, x0 - ox: x1 - ox]
-    pixels = out[:, :, 0] if out.shape[2] == 1 else out
-    return Upright(pixels, W / r.width, H / r.height)
+    xt, xb = cut[0] * r.width, cut[1] * r.width
+    inv = ~A
+    pt, pb = pymupdf.Point(r.x0 + xt, r.y0) * inv, pymupdf.Point(r.x0 + xb, r.y1) * inv
+
+    def column(y):                           # the cut line in pixel space, at row y
+        return pt.x + (pb.x - pt.x) * (y - pt.y) / (pb.y - pt.y)
+
+    b = cut_boundary(H, W, column(0.5), column(H - 0.5))     # at the row centres
+    left, right, _ = halves(a, b)
+    out, whitened = [], 0
+    for half, off, x0, x1 in ((left, 0, 0.0, max(xt, xb)),
+                              (right, int(b.min()), min(xt, xb), r.width)):
+        box = pymupdf.Rect(r.x0 + x0, r.y0, r.x0 + x1, r.y1) * inv
+        c0, r0 = max(off, math.floor(box.x0)), max(0, math.floor(box.y0))
+        c1, r1 = min(off + half.shape[1], math.ceil(box.x1)), min(H, math.ceil(box.y1))
+        c1, r1 = max(c0, c1), max(r0, r1)
+        px = np.ascontiguousarray(half[r0:r1, c0 - off: c1 - off])
+        changed = px != a[r0:r1, c0:c1]
+        whitened += int((changed if changed.ndim == 2 else changed.any(-1)).sum())
+        m = (pymupdf.Matrix(c1 - c0, 0, 0, r1 - r0, c0, r0) * A
+             * pymupdf.Matrix(1, 0, 0, 1, -(r.x0 + x0), -r.y0))
+        out.append(Half(px, (c0, r0), x1 - x0, r.height, m))
+    return out[0], out[1], whitened
 
 
 def cut_boundary(H: int, W: int, x_top_px: float, x_bottom_px: float) -> np.ndarray:
@@ -254,12 +312,28 @@ def jpeg_half(src_jpeg: bytes, half_pil) -> bytes:
     return b.getvalue()
 
 
-def write_half(page, pixels: np.ndarray, src: SourceImage) -> None:
-    """Fill a new page (sized to the half) with the half's pixels, encoded as for src."""
+def draw_image(page, xref, matrix) -> None:
+    """Make ``xref`` the page's only content, drawn through ``matrix`` (image unit square,
+    row 0 at the top -> page points, y down). PDF image space has row 0 at v = 1 and PDF
+    user space is y-up, hence the flip and the inverse transformation matrix."""
+    doc = page.parent
+    cm = pymupdf.Matrix(1, 0, 0, -1, 0, 1) * matrix * ~page.transformation_matrix
+    doc.xref_set_key(page.xref, "Resources", f"<< /XObject << /Im0 {xref} 0 R >> >>")
+    c = doc.get_new_xref()
+    doc.update_object(c, "<<>>")
+    doc.update_stream(c, f"q {' '.join(f'{v:.6f}' for v in cm)} cm /Im0 Do Q".encode())
+    doc.xref_set_key(page.xref, "Contents", f"{c} 0 R")
+
+
+def write_half(page, half: Half, src: SourceImage) -> None:
+    """Fill a new page (sized to the half) with the half's pixels, encoded as for src and
+    placed as on the source page. A half without pixels stays blank."""
     from PIL import Image
 
+    pixels = half.pixels
+    if pixels.size == 0:
+        return
     doc = page.parent
-    pixels = np.ascontiguousarray(pixels)
     h, w = pixels.shape[:2]
     if src.kind == G4:
         x = g4_xobject(doc, Image.fromarray(pixels > 127))
@@ -268,4 +342,4 @@ def write_half(page, pixels: np.ndarray, src: SourceImage) -> None:
                           "/DCTDecode")
     else:
         x = image_xobject(doc, w, h, src.n, 8, pixels.tobytes())
-    page.insert_image(page.rect, xref=x, keep_proportion=False)
+    draw_image(page, x, half.matrix)

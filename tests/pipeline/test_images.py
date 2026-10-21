@@ -77,7 +77,7 @@ def test_rotated_placement_comes_out_upright(k, rot):
     assert np.array_equal(images.upright_pixels(page, src).pixels, up)
 
 
-def test_crop_box_crops_and_short_image_is_padded_white():
+def test_crop_box_crops_and_short_image_leaves_page_background():
     doc = pymupdf.open()
     a = marked()
     # page 500x300 px at 200 dpi = 180x108 pt; the image starts 1.8 pt (5 px) right of the
@@ -85,10 +85,20 @@ def test_crop_box_crops_and_short_image_is_padded_white():
     page, _ = g4_page(doc, a, rect=pymupdf.Rect(1.8, 0, 181.8, 108), page_size=(180, 108))
     src, why = images.examine(page)
     assert why == []
-    px = images.upright_pixels(page, src).pixels
-    assert px.shape == (300, 500)
-    assert (px[:, :5] == 255).all()
-    assert np.array_equal(px[:, 5:] < 128, a[:, :495])
+    up = images.upright_pixels(page, src)
+    assert np.array_equal(up.pixels < 128, a)                 # stored pixels, not padded
+    left, right, whitened = images.split_halves(page, src, (0.5, 0.5))
+    assert whitened == 0 and (left.width, right.width) == (90, 90)
+    assert left.origin == (0, 0) and np.array_equal(left.pixels < 128, a[:, :245])
+    assert right.origin == (245, 0) and np.array_equal(right.pixels < 128, a[:, 245:495])
+    out = pymupdf.open()
+    for half in (left, right):
+        images.write_half(out.new_page(width=half.width, height=half.height), half, src)
+    shown = [np.frombuffer((p := pg.get_pixmap(dpi=200, colorspace=pymupdf.csGRAY)).samples,
+                           np.uint8).reshape(p.height, p.stride)[:, : p.width] for pg in out]
+    assert (shown[0][:, :5] == 255).all()                     # page background, not the image
+    assert (np.array_equal(shown[0][:, 5:] < 128, a[:, :245])
+            and np.array_equal(shown[1] < 128, a[:, 245:495]))
 
 
 def test_small_image_is_refused_for_coverage():
@@ -159,7 +169,8 @@ def test_jpeg_half_keeps_source_tables_and_flate_half_is_lossless():
     doc = pymupdf.open()
     page = doc.new_page(width=96, height=64)
     src = images.SourceImage(0, images.JPEG, 3, ["/DCTDecode"], b.getvalue())
-    images.write_half(page, rgb[:, :40], src)
+    images.write_half(page, images.Half(rgb[:, :40], (0, 0), 40, 64,
+                                        pymupdf.Matrix(40, 0, 0, 64, 0, 0)), src)
     x = page.get_images()[0][0]
     assert doc.xref_get_key(x, "Filter")[1] == "/DCTDecode"
     assert doc.xref_get_key(x, "ColorSpace")[1] == "/DeviceRGB"
@@ -167,7 +178,8 @@ def test_jpeg_half_keeps_source_tables_and_flate_half_is_lossless():
 
     grad = np.broadcast_to(np.arange(40, dtype=np.uint8)[None, :, None] * 6, (64, 40, 3))
     page = doc.new_page(width=96, height=64)
-    images.write_half(page, grad, images.SourceImage(0, images.FLATE, 3, []))
+    images.write_half(page, images.Half(grad, (0, 0), 40, 64, pymupdf.Matrix(40, 0, 0, 64, 0, 0)),
+                      images.SourceImage(0, images.FLATE, 3, []))
     x = page.get_images()[0][0]
     assert doc.xref_get_key(x, "Filter")[1] == "/FlateDecode"
     assert doc.xref_get_key(x, "ColorSpace")[1] == "/DeviceRGB"

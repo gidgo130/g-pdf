@@ -120,14 +120,9 @@ def _split_page(out, pno, page, cut, result):
     if src is None:
         result.left_whole = "; ".join(why)
         return False
-    up = images.upright_pixels(page, src)
-    H, W = up.pixels.shape[:2]
-    b = images.cut_boundary(H, W, cut[0] * W, cut[1] * W)
-    left, right, result.whitened_px = images.halves(up.pixels, b)
-    sx, sy = up.sx, up.sy
-    del up
-    for k, half in enumerate((left, right)):            # physical size = pixels / image dpi
-        p = out.new_page(pno + k, width=half.shape[1] / sx, height=H / sy)
+    left, right, result.whitened_px = images.split_halves(page, src, cut)
+    for k, half in enumerate((left, right)):
+        p = out.new_page(pno + k, width=half.width, height=half.height)
         images.write_half(p, half, src)
     result.encoding = src.kind
     result.needs_ocr = bool(page.get_text("text").strip())
