@@ -118,6 +118,9 @@ pip install -e ".[prep]"          # from a clone; or: pip install "g-pdf[prep]"
    guess for those pages instead. Without `--decisions`, the detector's guesses
    are used and flagged pages stay whole.
 
+Pages pieced together from black-and-white images, text and lines are first
+drawn into one black-and-white image, which is then split.
+
 Split pages lose their links, annotations and any text layer. The report lists
 those pages, and the text pages need OCR again. Bookmarks to a split page now
 point to its first half. Page labels are dropped. Existing output files are only
@@ -136,6 +139,32 @@ gpdf-cli split book.pdf -o out --sheet-only --decisions out\book_split.decisions
 
 The sheet then opens showing that saved review. Without `--decisions` it shows
 the detector's guesses.
+
+## Book prep: OCR
+
+`gpdf-cli ocr` adds an invisible, searchable text layer over each scanned page.
+The scan image itself is not changed. It needs Tesseract 5 with the book's
+languages. On Windows:
+
+1. Download the installer from <https://github.com/UB-Mannheim/tesseract/wiki>.
+2. In the installer, under **Additional language data**, tick **Spanish**.
+   English is included.
+3. Add `C:\Program Files\Tesseract-OCR` to `PATH`, or let gpdf-cli find it
+   there. You can also use `--tesseract PATH` or the `GPDF_TESSERACT` variable.
+
+Then:
+
+```powershell
+gpdf-cli ocr outook_split.pdf -o out --lang spa        # eng+spa for English with Spanish quotes
+```
+
+This writes `outook_split_ocr.pdf` and `outook_split_ocr.report.json`, and
+lists the pages with the lowest confidence. Only pages that have a scan image
+and no text yet are read. Pages that already have a text layer, blank pages and
+pages without an image are listed and left as they are. `--pages 40-59` limits
+the run to those pages, and `--jobs N` sets how many Tesseract processes run at
+once (the default is one fewer than the number of CPUs). If Tesseract fails on
+a page, that page is left without text and the command exits with code 2.
 
 ## Keyboard shortcuts
 
