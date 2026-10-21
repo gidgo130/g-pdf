@@ -181,7 +181,7 @@ def _prune_fields(raw: pymupdf.Document, dead: set[int]) -> set[int]:
 
 
 def _scrubbed_bytes(
-    raw: pymupdf.Document, dead_pages: set[int], dead_widgets: set[int], garbage: int = 1
+    raw: pymupdf.Document, dead_pages: set[int], dead_widgets: set[int]
 ) -> bytes:
     """``raw`` saved with ``dead_pages`` blanked and ``dead_widgets`` pruned,
     done on a scratch copy so ``raw`` (and with it undo) is untouched.
@@ -199,7 +199,7 @@ def _scrubbed_bytes(
                 keep = [x for x in refs if x not in removed]
                 if keep != refs:
                     _set_ref_array(scratch, *co, keep)
-        return scratch.tobytes(garbage=garbage, deflate=True)
+        return scratch.tobytes(garbage=1, deflate=True)
     finally:
         scratch.close()
 
@@ -228,6 +228,85 @@ def _disk_stamp(path: Path) -> tuple[int, int] | None:
     except OSError:
         return None
     return st.st_mtime_ns, st.st_size
+
+
+def _is_type(raw: pymupdf.Document, xref: int, name: str) -> bool:
+    """True if ``xref`` exists and is a dict with /Type ``name``."""
+    return 0 < xref < raw.xref_length() and _get_key(raw, xref, "Type") == ("name", name)
+
+
+def _is_stream(raw: pymupdf.Document, xref: int) -> bool:
+    if not 0 < xref < raw.xref_length():
+        return False
+    try:
+        return raw.xref_is_stream(xref)
+    except Exception:
+        return False
+
+
+def _mend_damaged(raw: pymupdf.Document) -> None:
+    """Make a damaged document safe to save (#2). Page-tree entries whose
+    object is gone become blank pages, sized like the nearest intact page, and
+    /Contents references to missing streams are dropped. Left dangling, those
+    references make garbage collection on save corrupt the page tree ("cycle in
+    page tree"), in the open document and in the file written."""
+    intact = {
+        i: raw[i].mediabox for i in range(raw.page_count)
+        if _is_type(raw, raw.page_xref(i), "/Page")
+    }
+
+    def size_near(index: int) -> pymupdf.Rect:
+        if not intact:
+            return pymupdf.Rect(0, 0, 595, 842)
+        return intact[min(intact, key=lambda i: abs(i - index))]
+
+    index = 0
+    seen: set[int] = set()
+
+    def mend_kids(node: int) -> None:
+        nonlocal index
+        seen.add(node)
+        kids = _ref_array(raw, node, "Kids")
+        mended = []
+        for x in kids:
+            if _is_type(raw, x, "/Pages") and x not in seen:
+                mend_kids(x)
+            elif not _is_type(raw, x, "/Page"):
+                r = size_near(index)
+                x = raw.get_new_xref()
+                raw.update_object(
+                    x, f"<</Type/Page/Parent {node} 0 R"
+                    f"/MediaBox[{r.x0:g} {r.y0:g} {r.x1:g} {r.y1:g}]>>")
+                index += 1
+            else:
+                index += 1
+            mended.append(x)
+        if mended != kids:
+            _set_ref_array(raw, node, "Kids", mended)
+
+    kind, value = _get_key(raw, raw.pdf_catalog(), "Pages")
+    if kind == "xref" and _is_type(raw, int(value.split()[0]), "/Pages"):
+        mend_kids(int(value.split()[0]))
+        raw._reset_page_refs()
+
+    for i in range(raw.page_count):
+        page = raw.page_xref(i)
+        kind, value = _get_key(raw, page, "Contents")
+        if kind == "xref":
+            ref = int(value.split()[0])
+            if _is_stream(raw, ref):
+                continue
+            try:
+                is_array = raw.xref_object(ref, compressed=True).startswith("[")
+            except Exception:
+                is_array = False
+            if not is_array:
+                raw.xref_set_key(page, "Contents", "null")
+                continue
+        refs = _ref_array(raw, page, "Contents")
+        keep = [x for x in refs if _is_stream(raw, x)]
+        if keep != refs:
+            _set_ref_array(raw, page, "Contents", keep)
 
 
 def _ranges(indices: Sequence[int]) -> list[tuple[int, int]]:
@@ -278,9 +357,8 @@ class PdfDocument(QObject):
         # MuPDF rebuilt the xref table; only some repairs lose content (#2).
         self.was_repaired: bool = doc.is_repaired
         self.is_damaged: bool = self.was_repaired and _has_read_errors(doc)
-        # A damaged page tree can point at objects that are gone; garbage
-        # collection then fails ("cycle in page tree") and breaks ``raw`` too.
-        self._no_garbage = self.is_damaged
+        if self.is_damaged:
+            _mend_damaged(doc)  # part of opening: not undoable, not dirty
         self._raw: pymupdf.Document | None = doc
         self._history = History()
         self._gen: dict[int, int] = {}  # page xref -> content generation
@@ -629,11 +707,10 @@ class PdfDocument(QObject):
         raw = self.raw
         dead_pages = _stray_pages(raw) - self._orphans_at_open
         dead_widgets = _unplaced_widgets(raw) - self._unplaced_widgets_at_open
-        garbage = 0 if self._no_garbage else 1
         if dead_pages or dead_widgets:
-            data = _scrubbed_bytes(raw, dead_pages, dead_widgets, garbage)
+            data = _scrubbed_bytes(raw, dead_pages, dead_widgets)
         else:
-            data = raw.tobytes(garbage=garbage, deflate=True)
+            data = raw.tobytes(garbage=1, deflate=True)
         _atomic_write(target, data)
         self.path = target
         self._stamp = _disk_stamp(target)

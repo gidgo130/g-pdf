@@ -337,6 +337,66 @@ def test_truncated_file_is_damaged_and_save_refuses(qapp, tmp_path):
         pdf.close()
 
 
+def test_damaged_file_still_works_after_save_as(qapp, tmp_path):
+    """Was: save_as garbage-collected the dangling page-tree refs, then the
+    next page load raised "cycle in page tree", in the open document and in
+    the file written."""
+    pdf = PdfDocument(truncated_pdf(tmp_path / "damaged.pdf"))
+    try:
+        pdf.save_as(tmp_path / "damaged (recovered).pdf")
+        pdf.rotate_pages([0], 90)  # reloads every page
+        PdfDocument(tmp_path / "damaged (recovered).pdf").close()
+    finally:
+        pdf.close()
+
+
+def test_recovered_file_is_whole_with_the_same_text(qapp, tmp_path):
+    pdf = PdfDocument(truncated_pdf(tmp_path / "damaged.pdf"))
+    try:
+        assert pdf.is_damaged and not pdf.is_dirty  # the clean-up isn't an edit
+        shown = [page.get_text() for page in pdf.raw]
+        assert "Page 1 line 0" in shown[0]
+        recovered = tmp_path / "damaged (recovered).pdf"
+        pdf.save_as(recovered)
+    finally:
+        pdf.close()
+    with pymupdf.open(str(recovered)) as check:
+        assert check.is_repaired is False
+        assert [page.get_text() for page in check] == shown
+
+
+def test_deleted_page_of_damaged_file_is_not_saved(qapp, tmp_path):
+    pdf = PdfDocument(truncated_pdf(tmp_path / "damaged.pdf"))
+    try:
+        pdf.delete_pages([0])
+        out = tmp_path / "out.pdf"
+        pdf.save_as(out)
+    finally:
+        pdf.close()
+    with pymupdf.open(str(out)) as check:
+        assert check.page_count == 3
+        assert _stray_pages(check) == set()
+        assert all("Page 1 line" not in page.get_text() for page in check)
+
+
+def _page_objects(raw: pymupdf.Document) -> list[tuple[int, tuple[str, str]]]:
+    return [(raw.page_xref(i), raw.xref_get_key(raw.page_xref(i), "Contents"))
+            for i in range(raw.page_count)]
+
+
+def test_cleanup_leaves_intact_files_alone(qapp, make_pdf):
+    path = make_pdf()
+    with pymupdf.open(str(path)) as plain:
+        expected = _page_objects(plain)
+        document_mod._mend_damaged(plain)  # even when called on it directly
+        assert _page_objects(plain) == expected
+    pdf = PdfDocument(path)
+    try:
+        assert _page_objects(pdf.raw) == expected
+    finally:
+        pdf.close()
+
+
 def test_harmless_repair_is_not_damaged(qapp, tmp_path):
     path = shifted_xref_pdf(tmp_path / "shifted.pdf")
     pdf = PdfDocument(path)
