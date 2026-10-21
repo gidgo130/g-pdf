@@ -66,6 +66,46 @@ If PowerShell refuses to run `Activate.ps1`, allow local scripts once with
 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, then try again.
 In `cmd.exe`, use `.venv\Scripts\activate.bat` instead.
 
+## Book prep (gpdf-cli)
+
+`gpdf-cli split` turns two-page spread scans into single pages. It writes a new
+file and never changes the original. It needs the `prep` extra (numpy, Pillow):
+
+```powershell
+pip install -e ".[prep]"          # from a clone; or: pip install "g-pdf[prep]"
+```
+
+1. **Dry run.** Nothing is split yet:
+
+   ```powershell
+   gpdf-cli split book.pdf -o out --dry-run
+   ```
+
+   This writes `out\book_split.report.json` and `out\book_split.decisions.json`
+   and lists the pages the detector is unsure about ("flagged"), with reasons.
+2. **Review** the flagged pages in `book_split.decisions.json` (page numbers
+   start at 1). For each page, set `"action"` to `"split"` or `"keep"`. If needed,
+   set `"cut"` to `[top, bottom]` as fractions of the page width (for example
+   `[0.5, 0.5]` for the middle). Then set `"reviewed": true`. Pages the detector
+   is sure about are already marked as reviewed.
+3. **Real run:**
+
+   ```powershell
+   gpdf-cli split book.pdf -o out --decisions out\book_split.decisions.json
+   ```
+
+   This writes `out\book_split.pdf`. Reviewed pages are applied exactly as you
+   set them. Flagged pages you did not review stay whole, and the command
+   exits with code 2 and lists them. `--accept-flagged` takes the detector's
+   guess for those pages instead. Without `--decisions`, the detector's guesses
+   are used and flagged pages stay whole.
+
+Split pages lose their links, annotations and any text layer. The report lists
+those pages, and the text pages need OCR again. Bookmarks to a split page now
+point to its first half. Page labels are dropped. Existing output files are only
+replaced with `--force`. If the PDF changed after the dry run, the decisions file
+is refused; run the dry run again or pass `--force`.
+
 ## Keyboard shortcuts
 
 | Action | Shortcut |
