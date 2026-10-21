@@ -87,10 +87,20 @@ pip install -e ".[prep]"          # from a clone; or: pip install "g-pdf[prep]"
    sheet.
 2. **Review** in the sheet: open `book_split.review.html` in Edge, Chrome or
    Firefox (it works offline, straight from the file). It starts at the first
-   flagged page. Drag the round handles to move the cut (Shift-drag moves the
-   whole line); the dashed line is the detector's guess. Press **S** to split,
-   **K** to keep the page whole, **Enter** to accept what is shown, **R** to
-   reset the cut, and the arrow keys to move between pages. Click a thumbnail
+   flagged page. The dashed line is the detector's guess; the red line is the
+   cut. To move it:
+   - click near the top or bottom edge of the page (or the close-up) to put
+     that end of the cut there;
+   - drag a round handle to move one end (Shift-drag moves the whole line), or
+     drag the line itself to move all of it; while you hold it, the mouse wheel
+     turns it 0.1° per notch about the point under the cursor;
+   - **Ctrl+←/→** move it by 0.1% of the width (with Shift: 1%), **Ctrl+↑/↓**
+     turn it 0.1° clockwise / counter-clockwise about its middle (with Shift:
+     1°), and **V** makes it vertical.
+
+   Press **S** to split, **K** to keep the page whole, **Enter** to accept what
+   is shown, **R** to reset the cut, the arrow keys to move between pages, and
+   **?** for the list of keys. Click a thumbnail
    to change a page the detector was sure about. Then click **Save decisions**
    and save `book_split.decisions.json`, preferably in the `out` folder (Firefox
    puts it in Downloads). The sheet keeps unsaved work in the browser and offers
@@ -112,8 +122,20 @@ Split pages lose their links, annotations and any text layer. The report lists
 those pages, and the text pages need OCR again. Bookmarks to a split page now
 point to its first half. Page labels are dropped. Existing output files are only
 replaced with `--force`, except the review sheet, which holds no state and is
-always rewritten. If the PDF changed after the dry run, the decisions file
-is refused; run the dry run again or pass `--force`.
+always rewritten. A forced dry run first copies a decisions file that holds a
+review to `book_split.decisions.<date-time>.bak.json`. If the PDF changed after
+the dry run, the decisions file is refused; run the dry run again or pass
+`--force`.
+
+To rebuild only the review sheet (for example after a g-pdf update) without
+touching the decisions file or the report:
+
+```powershell
+gpdf-cli split book.pdf -o out --sheet-only --decisions out\book_split.decisions.json
+```
+
+The sheet then opens showing that saved review. Without `--decisions` it shows
+the detector's guesses.
 
 ## Keyboard shortcuts
 

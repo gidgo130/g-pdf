@@ -101,14 +101,33 @@ by hand on Windows before a release. Use three or four small PDFs.
 
 ## Book prep review sheet
 
-33. Run `gpdf-cli split <Bürger PDF> -o <outdir> --dry-run --force` and open
+33. Use a scratch folder, never `private/book-prep/` (it holds the saved reviews):
+    run `gpdf-cli split <Bürger PDF> -o <scratch> --dry-run` and open
     `teoria-de-la-vanguardia_split.review.html` in **Edge**. It loads offline,
     starts at the first flagged page, and the page image, cut line and close-up
-    line up. Review every flagged page with S / K / Enter, dragging a cut at
-    least once and Shift-dragging once; the top bar reaches "Flagged reviewed:
-    9 / 9". Click **Save decisions**: Edge's save dialog suggests
-    `teoria-de-la-vanguardia_split.decisions.json`; save it in `<outdir>`. Copy
+    line up. On one page try every cut control and watch the Cut and Slant rows
+    change, with both views in step: click in the top band of the page (the top
+    end jumps there; a click in the middle of the page does nothing); drag the
+    line body (moves as a whole); hold it and turn the wheel (turns about the
+    cursor's height; without holding, the wheel scrolls the page); drag a handle,
+    and Shift-drag one; Ctrl+←/→ and Ctrl+↑/↓ with and without Shift; V
+    (vertical, Slant +0.00 deg); ? (the key list). Hold Ctrl+Shift+→: the line
+    stops at the right clamp without bending. Review every flagged page with S /
+    K / Enter; the top bar reaches "Flagged reviewed: 9 / 9". Click **Save
+    decisions**: Edge's save dialog suggests
+    `teoria-de-la-vanguardia_split.decisions.json`; save it in `<scratch>`. Copy
     the next-step command and run it: exit code 0 (`echo $LASTEXITCODE`), and
     the output has the source's page count plus one page per split spread (the
     "split N spreads" line). Reopen the sheet: a banner offers to restore your
     review; Restore brings back every decision, Discard returns to the detector's.
+
+34. `--sheet-only`, in the same `<scratch>` after test 33: note the SHA-256 of the
+    decisions and report files (`Get-FileHash`), then run `gpdf-cli split <Bürger
+    PDF> -o <scratch> --sheet-only --decisions
+    <scratch>\teoria-de-la-vanguardia_split.decisions.json`. It prints "showing:
+    ... 9 / 9 flagged reviewed" and the sheet's size; both hashes are unchanged and
+    no other file appears. Open the sheet (Discard any restore banner): every page
+    shows your saved decision and cut, and pages you changed carry the "changed"
+    badge; spreads you kept whole say "kept whole". Then run `--dry-run --force`
+    there: it prints a `backup:` line, and the `.bak.json` file equals your saved
+    decisions.
