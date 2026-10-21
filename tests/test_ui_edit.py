@@ -119,10 +119,10 @@ def test_drag_events_on_viewport_reach_panel_and_reorder(win, qapp):
     pos = QPointF(r.center().x(), r.bottom() - 2)
     act, btn, mod = Qt.DropAction.MoveAction, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
     try:
-        enter = QDragEnterEvent(pos.toPoint(), act, mime, btn, mod)
+        enter = QDragEnterEvent(pos, act, mime, btn, mod)
         QApplication.sendEvent(panel.viewport(), enter)
         assert enter.isAccepted()
-        QApplication.sendEvent(panel.viewport(), QDragMoveEvent(pos.toPoint(), act, mime, btn, mod))
+        QApplication.sendEvent(panel.viewport(), QDragMoveEvent(pos, act, mime, btn, mod))
         QApplication.sendEvent(panel.viewport(), QDropEvent(pos, act, mime, btn, mod))
         assert labels(tab.document) == ["2", "3", "4", "1", "5"]
     finally:
