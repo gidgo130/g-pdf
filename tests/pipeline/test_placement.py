@@ -9,45 +9,12 @@ import pymupdf  # noqa: E402
 
 from gpdf.pipeline import images  # noqa: E402
 
-FLIP = pymupdf.Matrix(1, 0, 0, -1, 0, 1)       # PDF image space has row 0 at v = 1
-ROT90_UNIT = pymupdf.Matrix(0, 1, -1, 0, 1, 0)  # stored unit -> upright unit for np.rot90(u, 1)
+from .synth import place, rotated_page  # noqa: E402
 
 
 def render(page, dpi=50):
     pix = page.get_pixmap(dpi=dpi, colorspace=pymupdf.csGRAY)
     return np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.stride)[:, : pix.width]
-
-
-def rotated_page(doc, width, height, rotation, margin=20):
-    """A page displaying width x height points, with a crop box inside a larger media box."""
-    w, h = (height, width) if rotation % 180 else (width, height)
-    page = doc.new_page(width=w + 2 * margin, height=h + 2 * margin)
-    page.set_cropbox(pymupdf.Rect(margin, margin, margin + w, margin + h))
-    page.set_rotation(rotation)
-    assert page.rect == pymupdf.Rect(0, 0, width, height)
-    return page
-
-
-def place(page, xref, display, k=0):
-    """Draw image ``xref`` so that its unit square maps to ``display`` points (row 0 at the
-    top, y down) as if stored upright, when it is stored as np.rot90(upright, k). The
-    placement is checked against what PyMuPDF reports back."""
-    stored = pymupdf.Matrix(1, 0, 0, 1, 0, 0)
-    for _ in range(k % 4):
-        stored = stored * ROT90_UNIT
-    M = stored * display
-    cb, mb = page.cropbox, page.mediabox
-    to_pdf = pymupdf.Matrix(1, 0, 0, -1, cb.x0, mb.height - cb.y0)   # unrotated page -> PDF
-    cm = FLIP * M * ~page.rotation_matrix * to_pdf
-    doc = page.parent
-    doc.xref_set_key(page.xref, "Resources", f"<< /XObject << /Im0 {xref} 0 R >> >>")
-    c = doc.get_new_xref()
-    doc.update_object(c, "<<>>")
-    doc.update_stream(c, f"q {' '.join(f'{v:.6f}' for v in cm)} cm /Im0 Do Q".encode())
-    doc.xref_set_key(page.xref, "Contents", f"{c} 0 R")
-    (info,) = page.get_image_info(xrefs=True)
-    got = pymupdf.Matrix(info["transform"]) * page.rotation_matrix
-    assert all(abs(u - v) < 1e-3 for u, v in zip(got, M)), (got, M)
 
 
 def blobs(shown, x_split):
@@ -84,3 +51,104 @@ def test_asymmetric_marker_lands_where_it_was(rotation, k):
         images.write_half(p, half, src)
     assert blobs(render(out[0], 100), 150) == [(40, 40, 79, 79), None]
     assert blobs(render(out[1], 100), 100) == [None, (440 - 300, 340, 559 - 300, 359)]
+
+
+def decode(doc, xref):
+    pix = pymupdf.Pixmap(doc, xref)
+    a = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, pix.n)
+    return a[:, :, 0] if pix.n == 1 else a
+
+
+@pytest.fixture(scope="module", params=[(1.5, "g4"), (-1.5, "jpeg")], ids=["g4+1.5", "jpeg-1.5"])
+def deskewed(request, synth, tmp_path_factory):
+    """A deskewed spread (pixels tilted, image matrix turning them back) and its split."""
+    skew, encoding = request.param
+    from gpdf.pipeline import split
+
+    path = tmp_path_factory.mktemp("deskew") / "deskewed.pdf"
+    doc = pymupdf.open()
+    truth = synth.add_deskewed(doc, "deskewed", skew=skew, encoding=encoding)
+    doc.save(str(path))
+    with pymupdf.open(path) as d:
+        (cut,) = split.analyze(d)
+    rep = split.split_document(path, path.with_name("deskewed_split.pdf"))
+    return {"src": path, "out": rep.output, "truth": truth, "cut": cut, "page": rep.pages[0]}
+
+
+def test_deskewed_page_is_split_with_the_cut_in_the_gap(deskewed, synth):
+    c, t, p = deskewed["cut"], deskewed["truth"], deskewed["page"]
+    assert c.is_spread and not c.flagged
+    assert not any("cannot split" in r for r in c.reasons)
+    assert p.action == "split" and p.image_rotation_deg == -t.notes["skew"]
+    assert 0.94 < p.image_cover < 0.96
+    strip = t.notes["strip"]
+    with pymupdf.open(deskewed["src"]) as src:
+        r = src[0].rect
+    gl, gr = (strip + g * synth.PT for g in t.gap)       # text is straight on the display
+    for row in range(synth.TOP, synth.TOP + synth.BLOCK_H):
+        y = row * synth.PT
+        x = c.x_top + (c.x_bottom - c.x_top) * y / r.height
+        assert gl < x < gr, (row, x, gl, gr)
+
+
+def test_deskewed_halves_render_like_the_source(deskewed):
+    from .test_split import corr
+
+    p = deskewed["page"]
+    strip_px = round((deskewed["truth"].notes["strip"] - 8) * 50 / 72)   # minus the tilt
+    with pymupdf.open(deskewed["src"]) as src, pymupdf.open(deskewed["out"]) as out:
+        full = render(src[0]).astype(np.float32)
+        W = full.shape[1]
+        assert (full[:, :strip_px] == 255).all()
+        for o, (x0, x1) in zip(p.out_pages, ((0, max(p.cut) * W), (min(p.cut) * W, W))):
+            h = render(out[o - 1]).astype(float)
+
+            def clip(dx):
+                c = full[:, max(0, round(x0) + dx): round(x1) + dx]
+                return np.asarray(Image.fromarray(c, "F").resize((h.shape[1], h.shape[0])))
+
+            here = corr(h, clip(0))
+            assert here > 0.9
+            assert here > max(corr(h, clip(-3)), corr(h, clip(3)))
+            if p.encoding == "jpeg":
+                assert np.abs(h - clip(0)).mean() < 4
+        left = render(out[p.out_pages[0] - 1])
+        assert (left[:, :strip_px] == 255).all()              # the blank strip stays blank
+
+
+def test_deskewed_halves_keep_the_source_pixels(deskewed):
+    p = deskewed["page"]
+    with pymupdf.open(deskewed["src"]) as src_doc, pymupdf.open(deskewed["out"]) as out:
+        page = src_doc[0]
+        src, _ = images.examine(page)
+        up = images.upright_pixels(page, src).pixels.astype(int)
+        halves = images.split_halves(page, src, p.cut)[:2]
+        diffs = 0
+        for o, half in zip(p.out_pages, halves):
+            x = out[o - 1].get_images()[0][0]
+            got = decode(out, x).astype(int)
+            c0, r0 = half.origin
+            s = up[r0: r0 + got.shape[0], c0: c0 + got.shape[1]]
+            assert got.shape == s.shape == half.pixels.shape
+            if p.encoding == "g4":
+                assert out.xref_get_key(x, "Filter")[1] == "/CCITTFaxDecode"
+                d = got != s
+                assert (got[d] == 255).all()
+                diffs += int(d.sum())
+            else:
+                assert out.xref_get_key(x, "Filter")[1] == "/DCTDecode"
+                assert np.abs(got - s).mean() < 4
+        if p.encoding == "g4":
+            assert diffs == p.whitened_px
+
+
+def test_deskewed_page_beyond_three_degrees_is_refused(synth, tmp_path):
+    from gpdf.pipeline import split
+
+    path = tmp_path / "steep.pdf"
+    doc = pymupdf.open()
+    synth.add_deskewed(doc, "steep", skew=3.5)
+    doc.save(str(path))
+    rep = split.split_document(path, tmp_path / "steep_split.pdf", accept_flagged=True)
+    (p,) = rep.pages
+    assert p.action == "keep" and p.left_whole == "cannot split: image rotated 3.5 deg"

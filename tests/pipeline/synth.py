@@ -194,6 +194,43 @@ def new_page(doc, w_px=W, h_px=H):
     return doc.new_page(width=w_px * PT, height=h_px * PT)
 
 
+# ---------------------------------------------------------------- placement
+FLIP = pymupdf.Matrix(1, 0, 0, -1, 0, 1)       # PDF image space has row 0 at v = 1
+ROT90_UNIT = pymupdf.Matrix(0, 1, -1, 0, 1, 0)  # stored unit -> upright unit for np.rot90(u, 1)
+
+
+def rotated_page(doc, width, height, rotation, margin=20):
+    """A page displaying width x height points, with a crop box inside a larger media box."""
+    w, h = (height, width) if rotation % 180 else (width, height)
+    page = doc.new_page(width=w + 2 * margin, height=h + 2 * margin)
+    page.set_cropbox(pymupdf.Rect(margin, margin, margin + w, margin + h))
+    page.set_rotation(rotation)
+    assert page.rect == pymupdf.Rect(0, 0, width, height)
+    return page
+
+
+def place(page, xref, display, k=0):
+    """Draw image ``xref`` so that its unit square maps to ``display`` points (row 0 at the
+    top, y down) as if stored upright, when it is stored as np.rot90(upright, k). The
+    placement is checked against what PyMuPDF reports back."""
+    stored = pymupdf.Matrix(1, 0, 0, 1, 0, 0)
+    for _ in range(k % 4):
+        stored = stored * ROT90_UNIT
+    M = stored * display
+    cb, mb = page.cropbox, page.mediabox
+    to_pdf = pymupdf.Matrix(1, 0, 0, -1, cb.x0, mb.height - cb.y0)   # unrotated page -> PDF
+    cm = FLIP * M * ~page.rotation_matrix * to_pdf
+    doc = page.parent
+    doc.xref_set_key(page.xref, "Resources", f"<< /XObject << /Im0 {xref} 0 R >> >>")
+    c = doc.get_new_xref()
+    doc.update_object(c, "<<>>")
+    doc.update_stream(c, f"q {' '.join(f'{v:.6f}' for v in cm)} cm /Im0 Do Q".encode())
+    doc.xref_set_key(page.xref, "Contents", f"{c} 0 R")
+    (info,) = page.get_image_info(xrefs=True)
+    got = pymupdf.Matrix(info["transform"]) * page.rotation_matrix
+    assert all(abs(u - v) < 1e-3 for u, v in zip(got, M)), (got, M)
+
+
 # ---------------------------------------------------------------- pages
 def add_one_bit_spread(doc, name, encode=g4, shadow=None, skew=0.0, fold=0.5, gap_mm=30.0,
                        left=True, right=True, seeds=(1, 2), flagged=False, text_layer=False):
@@ -313,6 +350,32 @@ def add_two_images(doc):
     put_image(page, g4(doc, np.ascontiguousarray(black[:, :PW])), pymupdf.Rect(0, 0, PW * PT, H * PT))
     put_image(page, g4(doc, np.ascontiguousarray(black[:, PW:])), pymupdf.Rect(PW * PT, 0, W * PT, H * PT))
     return Truth("two_images", True, gap, True)
+
+
+def add_deskewed(doc, name, skew=1.5, encoding="g4", strip=40.0, rotation=90, seeds=(25, 26)):
+    """Unruh-like deskewed scan: the stored pixels are tilted by ``skew`` degrees and the
+    image matrix turns them back, so the text displays straight. /Rotate ``rotation`` with
+    a crop box; the page is ``strip`` points wider than the image on the left (blank there)
+    and the tilted image overhangs the other edges a little. ``gap`` is in composition
+    pixels; composition pixel (x, y) displays at (strip + x * PT, y * PT)."""
+    dark, gap = text_spread(seeds)
+    dark[:, :4] = 1                                   # scanner edge at the left
+    tilted, aff = rotate(dark, skew)
+    shadow, _ = rotate(np.ascontiguousarray(soft_shadow(W / 2, 0.75, 4.0)), skew)
+    if encoding == "g4":
+        x = g4(doc, to_black(tilted, shadow, seed=len(doc)))
+    else:
+        paper = np.array([238, 230, 214], np.float32)
+        ink = np.array([35, 30, 28], np.float32)
+        s = 0.5 * shadow[..., None]
+        rgb = paper * (1 - s) * (1 - tilted[..., None]) + ink * tilted[..., None]
+        x = jpeg_rgb(doc, rgb.clip(0, 255).astype(np.uint8))
+    page = rotated_page(doc, W * PT + strip, H * PT, rotation)
+    # stored pixel -> composition pixel is PIL's affine (output -> source) data
+    to_comp = pymupdf.Matrix(aff[0], aff[3], aff[1], aff[4], aff[2], aff[5])
+    place(page, x, pymupdf.Matrix(W, 0, 0, H, 0, 0) * to_comp
+          * pymupdf.Matrix(PT, 0, 0, PT, strip, 0))
+    return Truth(name, True, gap, False, encoding=encoding, notes={"strip": strip, "skew": skew})
 
 
 def build_book(path) -> list[Truth]:

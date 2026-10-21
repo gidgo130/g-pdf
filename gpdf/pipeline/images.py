@@ -21,8 +21,8 @@ from dataclasses import dataclass
 import numpy as np
 import pymupdf
 
-FULL_COVER = 0.98          # the image must cover at least this fraction of the page
-MAX_IMAGE_ROT_DEG = 0.5    # residual rotation of the image matrix we ignore
+MIN_COVER = 0.85           # the image's bounding box must cover this fraction of the page
+MAX_IMAGE_ROT_DEG = 3.0    # residual (deskew) rotation of the image on the page, kept as is
 WHITE = 255
 
 G4, JPEG, FLATE = "g4", "jpeg", "flate"
@@ -37,6 +37,8 @@ class SourceImage:
     n: int                     # colour components (1 grey, 3 RGB)
     filters: list[str]
     jpeg: bytes | None = None  # the source JPEG (kind JPEG), for its tables
+    rotation_deg: float = 0.0  # residual rotation on the displayed page (+ = clockwise)
+    cover: float = 1.0         # fraction of the page inside the image's bounding box
 
 
 @dataclass
@@ -73,9 +75,11 @@ def _axes(M):
 
 
 def _residual_rotation_deg(M) -> float:
-    ex, _ = _axes(M)
-    a = math.degrees(math.atan2(ex.y, ex.x)) % 90
-    return min(a, 90 - a)
+    """Signed rotation beyond quarter turns, degrees (positive = clockwise on the displayed
+    page): the angle of the image axis that upright_pixels makes run left to right."""
+    ex, ey = _axes(M)
+    v = ex if abs(ex.x) >= abs(ex.y) else ey
+    return math.degrees(math.atan2(v.y, v.x) if v.x > 0 else math.atan2(-v.y, -v.x))
 
 
 def _resolve(doc, xref, key):
@@ -108,6 +112,21 @@ def _trivial_decode(value: str, n: int) -> bool:
     return nums == [0.0, 1.0] * n
 
 
+def _has_drawings(page) -> bool:
+    """Vector drawings in the page content. get_drawings() also reports annotation
+    appearances; annotations are dropped from split pages and counted on their own, so
+    look at an annotation-free copy of the page when it has any."""
+    if not page.first_annot and not page.first_widget:
+        return bool(page.get_drawings())
+    tmp = pymupdf.open()
+    try:
+        tmp.insert_pdf(page.parent, from_page=page.number, to_page=page.number,
+                       links=False, annots=False, widgets=False)
+        return bool(tmp[0].get_drawings())
+    finally:
+        tmp.close()
+
+
 def examine(page) -> tuple[SourceImage | None, list[str]]:
     """The page's single full-page image if this module can split it, else (None, reasons)."""
     doc = page.parent
@@ -120,14 +139,16 @@ def examine(page) -> tuple[SourceImage | None, list[str]]:
         return None, ["cannot split: inline image"]
     M = _image_matrix(page, info)
     reasons = []
-    disp = pymupdf.Rect(pymupdf.Point(0, 0) * M, pymupdf.Point(1, 1) * M).normalize()
+    disp = pymupdf.Rect(0, 0, 1, 1) * M             # bounding box of the 4 corners
     area = page.rect.get_area()
     cover = (disp & page.rect).get_area() / area if area else 0
-    if cover < FULL_COVER:
+    if cover < MIN_COVER:
         reasons.append(f"cannot split: image covers {cover:.0%} of the page")
     rot = _residual_rotation_deg(M)
-    if rot > MAX_IMAGE_ROT_DEG:
-        reasons.append(f"cannot split: image rotated {rot:.1f} deg")
+    if abs(rot) > MAX_IMAGE_ROT_DEG:
+        reasons.append(f"cannot split: image rotated {abs(rot):.1f} deg")
+    if _has_drawings(page):
+        reasons.append("cannot split: page has drawings besides the scan")
     if doc.xref_get_key(x, "ImageMask")[1] == "true":
         reasons.append("cannot split: image mask")
     if doc.xref_get_key(x, "SMask")[0] != "null" or doc.xref_get_key(x, "Mask")[0] != "null":
@@ -146,13 +167,14 @@ def examine(page) -> tuple[SourceImage | None, list[str]]:
     if reasons:
         return None, reasons
     filters = _filters(doc, x)
+    placed = {"rotation_deg": rot, "cover": cover}
     if bpc == 1:
-        return SourceImage(x, G4, 1, filters), []
+        return SourceImage(x, G4, 1, filters, **placed), []
     if filters == ["/DCTDecode"]:
         ext = doc.extract_image(x)
         if ext.get("ext") in ("jpg", "jpeg"):
-            return SourceImage(x, JPEG, n, filters, ext["image"]), []
-    return SourceImage(x, FLATE, n, filters), []
+            return SourceImage(x, JPEG, n, filters, ext["image"], **placed), []
+    return SourceImage(x, FLATE, n, filters, **placed), []
 
 
 def upright_pixels(page, src: SourceImage) -> Upright:

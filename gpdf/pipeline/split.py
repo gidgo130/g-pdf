@@ -125,6 +125,8 @@ def _split_page(out, pno, page, cut, result):
         p = out.new_page(pno + k, width=half.width, height=half.height)
         images.write_half(p, half, src)
     result.encoding = src.kind
+    result.image_rotation_deg = round(src.rotation_deg, 2)
+    result.image_cover = round(src.cover, 3)
     result.needs_ocr = bool(page.get_text("text").strip())
     result.links_dropped = len(page.get_links())
     result.annots_dropped = len(list(page.annots())) + len(list(page.widgets()))

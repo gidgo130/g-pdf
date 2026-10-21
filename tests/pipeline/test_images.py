@@ -108,6 +108,27 @@ def test_small_image_is_refused_for_coverage():
     assert src is None and "covers 83%" in why[0]
 
 
+@pytest.mark.parametrize("cover, ok", [(0.84, False), (0.90, True)])
+def test_coverage_limit(cover, ok):
+    """The image may fall short of the page (a blank strip on the left) down to 85%."""
+    doc = pymupdf.open()
+    page, _ = g4_page(doc, marked(), rect=pymupdf.Rect(180 * (1 - cover), 0, 180, 108),
+                      page_size=(180, 108))
+    src, why = images.examine(page)
+    if ok:
+        assert why == [] and src.cover == pytest.approx(cover)
+    else:
+        assert src is None and why == [f"cannot split: image covers {cover:.0%} of the page"]
+
+
+def test_annotation_appearance_is_not_a_drawing():
+    doc = pymupdf.open()
+    page, _ = g4_page(doc, marked())
+    page.add_text_annot((30, 30), "nota")
+    assert page.get_drawings()                  # PyMuPDF reports the note icon ...
+    assert images.examine(page)[1] == []        # ... but it is not page content
+
+
 def test_unsupported_images_are_refused_with_reasons():
     doc = pymupdf.open()
     cases = {}
@@ -136,12 +157,16 @@ def test_unsupported_images_are_refused_with_reasons():
     page = doc.new_page(width=72, height=72)
     page.insert_image(page.rect, pixmap=pymupdf.Pixmap(pymupdf.csRGB, 10, 10, bytes(300), False))
     cases["ICCBased"] = page.number
-    # residual image rotation of 2 degrees
+    # residual image rotation of 3.5 degrees (the limit is 3)
     page, _ = g4_page(doc, marked())
-    r, t = page.rect, math.radians(2)
+    r, t = page.rect, math.radians(3.5)
     set_cm(page, (r.width * math.cos(t), r.width * math.sin(t), -r.height * math.sin(t),
                   r.height * math.cos(t), 0, 0))
-    cases["rotated 2.0 deg"] = page.number
+    cases["rotated 3.5 deg"] = page.number
+    # a vector line drawn over the scan
+    page, _ = g4_page(doc, marked())
+    page.draw_line((10, 10), (100, 10))
+    cases["page has drawings besides the scan"] = page.number
     for needle, pno in cases.items():
         src, why = images.examine(doc[pno])
         assert src is None, needle

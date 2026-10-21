@@ -118,6 +118,8 @@ class PageResult:
     left_whole: str = ""               # why a flagged or spread page was kept whole
     encoding: str = ""                 # g4 / jpeg / flate for split pages
     whitened_px: int = 0
+    image_rotation_deg: float | None = None   # split pages: residual rotation of the scan
+    image_cover: float | None = None          # split pages: page fraction the scan covers
     needs_ocr: bool = False            # a text layer was dropped
     links_dropped: int = 0
     annots_dropped: int = 0
