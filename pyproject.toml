@@ -17,9 +17,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# Book prep (gpdf-cli split): pixel work on scanned pages.
+prep = ["numpy>=1.26", "Pillow>=10.3"]
 
 [project.scripts]
 g-pdf = "gpdf.__main__:main"
+gpdf-cli = "gpdf.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["gpdf*"]
