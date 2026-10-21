@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """gpdf-cli: book prep from the command line. No Qt (it must not import gpdf.core/gpdf.ui).
 
-    gpdf-cli split book.pdf -o OUTDIR --dry-run     # detect; write report + decisions file
+    gpdf-cli split book.pdf -o OUTDIR --dry-run     # detect; write report, decisions file
+                                                    # and the review sheet (.review.html)
     gpdf-cli split book.pdf -o OUTDIR --decisions OUTDIR/book_split.decisions.json
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
@@ -13,6 +14,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 
 from gpdf import __version__
@@ -40,8 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("-o", "--outdir", metavar="OUTDIR", type=Path, required=True,
                    help="folder for the output files (created if missing)")
     s.add_argument("--dry-run", action="store_true",
-                   help="detect only: write <name>_split.report.json and "
-                        "<name>_split.decisions.json for review")
+                   help="detect only: write <name>_split.report.json, "
+                        "<name>_split.decisions.json and the review sheet "
+                        "<name>_split.review.html (open it in a browser)")
+    s.add_argument("--no-sheet", action="store_true",
+                   help="dry run: don't write the review sheet")
     s.add_argument("--decisions", metavar="FILE", type=Path,
                    help="apply a reviewed decisions file")
     s.add_argument("--accept-flagged", action="store_true",
@@ -141,7 +146,21 @@ def _dry_run(args, split, src, stem) -> int:
             print(f"  p. {p.page:>4}  {p.confidence:.2f}  {kind}: {'; '.join(p.reasons)}")
     print(f"report:    {report_path}")
     print(f"decisions: {dec_path}")
-    print("review: set \"action\" (split/keep), optionally \"cut\", and \"reviewed\": true; "
+    if args.no_sheet:
+        print("review: set \"action\" (split/keep), optionally \"cut\", and \"reviewed\": true; "
+              "then run again with --decisions")
+        return EXIT_OK
+    sheet = args.outdir / f"{stem}_split.review.html"
+    _check_writable(split, src, sheet, force=True)        # holds no state: always replaced
+    import pymupdf
+
+    from gpdf.pipeline import review
+
+    t0 = time.perf_counter()
+    with pymupdf.open(src) as doc:
+        size = review.write_review_sheet(doc, decisions, sheet, stem, _progress("sheet"))
+    print(f"sheet:     {sheet} ({size / 1e6:.1f} MB, {time.perf_counter() - t0:.1f} s)")
+    print("review: open the sheet in a browser, review the flagged pages and Save decisions; "
           "then run again with --decisions")
     return EXIT_OK
 

@@ -2,6 +2,7 @@
 """The offline review sheet: embedded data, images, and that it is self-contained."""
 
 import base64
+import os
 import io
 import json
 import re
@@ -113,3 +114,63 @@ def test_script_end_in_the_data_is_escaped(tmp_path):
     assert data["pages"][0]["splittable"] is False
     assert text.count("</script>") == 2                         # data block + code block
     assert "<title>Review: a &lt;b&gt; &amp; c.pdf</title>" in text
+
+
+# ---------------------------------------------------------------- gpdf-cli split --dry-run
+def dry_run(src, outdir, *extra):
+    from gpdf import cli
+
+    return cli.main(["split", str(src), "-o", str(outdir), "--dry-run", *extra])
+
+
+@pytest.fixture
+def mini_copy(mini, tmp_path):
+    import shutil
+
+    src = tmp_path / "mini.pdf"
+    shutil.copy(mini[0], src)
+    return src
+
+
+def test_dry_run_writes_the_sheet_unless_no_sheet(mini_copy, tmp_path, capsys):
+    out = tmp_path / "out"
+    assert dry_run(mini_copy, out) == 0
+    sheet = out / "mini_split.review.html"
+    printed = capsys.readouterr().out
+    assert f"sheet:     {sheet} (" in printed and " MB, " in printed
+    assert "open the sheet in a browser" in printed
+    _, data = sheet_data(sheet.read_text("utf-8"))
+    assert data["decisions"] == json.loads((out / "mini_split.decisions.json").read_text("utf-8"))
+    assert data["outdir"] == str(out.resolve())
+    bare = tmp_path / "bare"
+    assert dry_run(mini_copy, bare, "--no-sheet") == 0
+    assert not (bare / "mini_split.review.html").exists()
+    assert "sheet:" not in capsys.readouterr().out
+
+
+def test_existing_sheet_is_replaced_without_force(mini_copy, tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    sheet = out / "mini_split.review.html"
+    sheet.write_text("old sheet", "utf-8")
+    assert dry_run(mini_copy, out) == 0                 # no decisions file yet: no --force
+    assert sheet.read_text("utf-8").startswith("<!doctype html>")
+    assert not [f for f in os.listdir(out) if f.endswith(".tmp")]
+
+
+def test_sheet_for_a_non_ascii_path_with_spaces(mini, tmp_path):
+    import shutil
+
+    folder = tmp_path / "carpeta con espacios"
+    folder.mkdir()
+    src = folder / "Vasconcelos, José. prueba.pdf"
+    shutil.copy(mini[0], src)
+    out = folder / "salida ñ"
+    assert dry_run(src, out) == 0
+    sheet = out / "Vasconcelos, José. prueba_split.review.html"
+    text = sheet.read_text("utf-8")
+    _, data = sheet_data(text)
+    assert data["source_name"] == "Vasconcelos, José. prueba.pdf"
+    assert data["stem"] == "Vasconcelos, José. prueba"
+    assert data["decisions"]["source"] == str(src.resolve())
+    assert "<title>Review: Vasconcelos, José. prueba.pdf</title>" in text

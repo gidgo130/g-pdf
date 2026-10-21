@@ -44,11 +44,12 @@ def run(src, outdir, *extra):
     return cli.main(["split", str(src), "-o", str(outdir), *extra])
 
 
-def test_dry_run_writes_report_and_decisions_only(src, tmp_path, capsys):
+def test_dry_run_writes_report_decisions_and_sheet_only(src, tmp_path, capsys):
     before = sha(src)
     outdir = tmp_path / "out"
     assert run(src, outdir, "--dry-run") == 0
-    assert sorted(os.listdir(outdir)) == ["mini_split.decisions.json", "mini_split.report.json"]
+    assert sorted(os.listdir(outdir)) == ["mini_split.decisions.json", "mini_split.report.json",
+                                          "mini_split.review.html"]
     assert sha(src) == before
     dec = json.loads((outdir / "mini_split.decisions.json").read_text("utf-8"))
     assert dec["schema"] == 1 and dec["source_size"] == os.path.getsize(src)
