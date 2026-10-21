@@ -599,3 +599,39 @@ def test_replace_span_keeps_line_art_under_text(qapp, tmp_path):
         assert len(pdf.raw[0].get_drawings()) == before
     finally:
         pdf.close()
+
+
+def _link_state(page):
+    return [(l["kind"], l.get("page"), tuple(round(v, 1) for v in l["from"])) for l in page.get_links()]
+
+
+def test_replace_span_keeps_link_over_text(qapp, tmp_path):
+    src = tmp_path / "link.pdf"
+    doc = pymupdf.open()
+    doc.new_page()
+    doc.new_page()
+    page = doc[0]  # a page object taken before the next new_page() goes stale
+    page.insert_text((72, 100), "Click here now", fontsize=12)
+    page.insert_link({
+        "kind": pymupdf.LINK_GOTO, "from": pymupdf.Rect(72, 88, 160, 104),
+        "page": 1, "to": pymupdf.Point(0, 0),
+    })
+    _save_pdf(doc, src)
+
+    pdf = PdfDocument(src)
+    try:
+        before = _link_state(pdf.raw[0])
+        assert len(before) == 1
+        span = textedit.span_at(pdf, 0, 80, 97)
+        textedit.replace_span(pdf, 0, span, "Tap here now")
+        assert "Tap" in pdf.raw[0].get_text()
+        assert _link_state(pdf.raw[0]) == before
+        out = tmp_path / "out.pdf"
+        pdf.save_as(out)
+    finally:
+        pdf.close()
+    reopened = pymupdf.open(str(out))
+    try:
+        assert _link_state(reopened[0]) == before
+    finally:
+        reopened.close()

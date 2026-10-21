@@ -14,6 +14,7 @@ different from its neighbours.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -121,6 +122,25 @@ def _redact_band(x0: float, x1: float, baseline: float, size: float) -> pymupdf.
     return pymupdf.Rect(x0 + inset, baseline - 0.45 * size, x1 - inset, baseline - 0.30 * size)
 
 
+def _link_xrefs(page: pymupdf.Page) -> list[int]:
+    return [link["xref"] for link in page.get_links()]
+
+
+def _restore_links(page: pymupdf.Page, keep: list[int]) -> None:
+    """apply_redactions drops overlapped links from /Annots (the link objects
+    survive); re-append any that went missing. get_links() is stale here, so
+    /Annots is read and written through the xref API."""
+    doc = page.parent
+    kind, value = doc.xref_get_key(page.xref, "Annots")
+    if kind == "xref":  # indirect array: "n 0 R"
+        value = doc.xref_object(int(value.split()[0]), compressed=True)
+    present = [int(n) for n in re.findall(r"(\d+) 0 R", value)] if kind != "null" else []
+    missing = [x for x in keep if x not in present]
+    if missing:
+        refs = [*present, *missing]
+        doc.xref_set_key(page.xref, "Annots", "[" + " ".join(f"{x} 0 R" for x in refs) + "]")
+
+
 def replace_span(doc: PdfDocument, index: int, span: TextSpan, new_text: str) -> None:
     """Replace one span's text (undoable). Raises PdfEditError with a readable
     message if it can't be done; the page is left unchanged in that case."""
@@ -135,6 +155,7 @@ def replace_span(doc: PdfDocument, index: int, span: TextSpan, new_text: str) ->
 
     def mutate(page: pymupdf.Page) -> None:
         _check_editable(page)
+        keep = _link_xrefs(page)
         rect = _redact_band(span.bbox[0], span.bbox[2], span.origin[1], span.size)
         page.add_redact_annot(rect, fill=False)
         page.apply_redactions(
@@ -145,6 +166,7 @@ def replace_span(doc: PdfDocument, index: int, span: TextSpan, new_text: str) ->
             pymupdf.Point(span.origin), new_text,
             fontname=span.font, fontsize=span.size, color=span.color,
         )
+        _restore_links(page, keep)
 
     _check_editable(doc.raw[index])
     doc.edit_page(index, "Edit text", mutate)
@@ -166,6 +188,7 @@ def replace_text(doc: PdfDocument, index: int, old: str, new: str) -> int:
         raise PdfEditError(f"The standard fonts can't draw these characters: {bad!r}.")
 
     def mutate(p: pymupdf.Page) -> None:
+        keep = _link_xrefs(p)
         for rect, s in spans:
             p.add_redact_annot(_redact_band(rect.x0, rect.x1, s.origin[1], s.size), fill=False)
         p.apply_redactions(
@@ -178,6 +201,7 @@ def replace_text(doc: PdfDocument, index: int, old: str, new: str) -> int:
                 pymupdf.Point(rect.x0, s.origin[1]), new,
                 fontname=s.font, fontsize=s.size, color=s.color,
             )
+        _restore_links(p, keep)
 
     doc.edit_page(index, "Replace text", mutate)
     return len(spans)
