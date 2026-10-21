@@ -12,7 +12,7 @@ license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
 dependencies = [
     "PySide6>=6.6",
-    "PyMuPDF>=1.24.3",
+    "PyMuPDF>=1.24.3,<2",  # 2.x bundles onnxruntime + ML layout models (~130 MB)
 ]
 
 [project.optional-dependencies]
