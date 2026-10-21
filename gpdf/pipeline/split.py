@@ -71,7 +71,7 @@ def analyze(doc, progress=None) -> list[spreads.PageCut]:
         r = doc[c.page].rect
         if c.is_spread or r.width / r.height >= spreads.SPREAD_ASPECT:
             src, why = images.examine(doc[c.page])
-            if src is None:
+            if src is None or src.flatten:             # unsplittable, or flattened: review
                 c.confidence = round(min(c.confidence, spreads.FLAG_BELOW - 0.05), 3)
                 c.reasons.extend(why)
     return cuts
@@ -129,7 +129,8 @@ def _split_page(out, pno, page, cut, result):
     result.encoding = src.kind
     result.image_rotation_deg = round(src.rotation_deg, 2)
     result.image_cover = round(src.cover, 3)
-    result.needs_ocr = bool(page.get_text("text").strip())
+    result.needs_ocr = bool(src.flatten) or bool(page.get_text("text").strip())
+    result.flattened = src.flatten
     result.links_dropped = len(page.get_links())
     result.annots_dropped = len(list(page.annots())) + len(list(page.widgets()))
     return True

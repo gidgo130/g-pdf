@@ -2,9 +2,14 @@
 """Pixels of a scanned page, upright, and writers for the two halves of a split spread.
 
 Spec: docs/prototypes/spread_split_proto.py (physical split helpers). A page can be split
-only when it is exactly one image covering the page that this module can re-encode
-without changing it: 1-bit (any filter) -> CCITT G4; DCT (JPEG) -> JPEG with the
-source's quantisation tables; other 8-bit grey/RGB -> lossless Flate.
+when it is exactly one image covering the page that this module can re-encode without
+changing it: 1-bit (any filter) -> CCITT G4; DCT (JPEG) -> JPEG with the source's
+quantisation tables; other 8-bit grey/RGB -> lossless Flate.
+
+A colourless page pieced together from 1-bit images, visible text and drawings (the
+producer replaced the scanned text with fonts and kept leftovers as images) is
+"flattened" instead: rendered whole at the dpi of its largest image, without
+anti-aliasing, and thresholded to 1 bit; those pixels are cut and written as G4.
 
 Each half keeps the source's own pixels (after a lossless 90-degree transpose/flip) and
 is drawn with the source's placement, shifted to the half page: a residual (deskew)
@@ -24,6 +29,12 @@ import pymupdf
 MIN_COVER = 0.85           # the image's bounding box must cover this fraction of the page
 MAX_IMAGE_ROT_DEG = 3.0    # residual (deskew) rotation of the image on the page, kept as is
 WHITE = 255
+FLATTEN_DEFAULT_DPI = 300  # flattened pages without images
+COLOUR_CHECK_DPI = 30      # a flattened page must render colourless at this resolution:
+COLOUR_TOL = 8             # every pixel's channels closer together than this
+THRESHOLD = 128            # flattened grey below this is black
+
+DRAWINGS = "cannot split: page has drawings besides the scan"
 
 G4, JPEG, FLATE = "g4", "jpeg", "flate"
 
@@ -39,6 +50,8 @@ class SourceImage:
     jpeg: bytes | None = None  # the source JPEG (kind JPEG), for its tables
     rotation_deg: float = 0.0  # residual rotation on the displayed page (+ = clockwise)
     cover: float = 1.0         # fraction of the page inside the image's bounding box
+    flatten: dict | None = None  # flattened page (xref 0): dpi, images,
+                                 # visible_text_spans, drawings
 
 
 @dataclass
@@ -112,28 +125,81 @@ def _trivial_decode(value: str, n: int) -> bool:
     return nums == [0.0, 1.0] * n
 
 
-def _has_drawings(page) -> bool:
+def _drawing_count(page) -> int:
     """Vector drawings in the page content. get_drawings() also reports annotation
     appearances; annotations are dropped from split pages and counted on their own, so
     look at an annotation-free copy of the page when it has any."""
     if not page.first_annot and not page.first_widget:
-        return bool(page.get_drawings())
+        return len(page.get_drawings())
     tmp = pymupdf.open()
     try:
         tmp.insert_pdf(page.parent, from_page=page.number, to_page=page.number,
                        links=False, annots=False, widgets=False)
-        return bool(tmp[0].get_drawings())
+        return len(tmp[0].get_drawings())
     finally:
         tmp.close()
 
 
 def examine(page) -> tuple[SourceImage | None, list[str]]:
-    """The page's single full-page image if this module can split it, else (None, reasons)."""
-    doc = page.parent
+    """How to split the page: its single full-page image, or a flatten source for a
+    pieced-together black-and-white page (with a "will be flattened" reason); else
+    (None, reasons why it cannot be split)."""
     infos = page.get_image_info(xrefs=True)
-    if len(infos) != 1:
-        return None, [f"cannot split: {len(infos)} images on the page (need exactly one)"]
-    info = infos[0]
+    if len(infos) == 1:
+        src, reasons = _examine_one(page, infos[0])
+        if src is not None or reasons != [DRAWINGS]:
+            return src, reasons
+    else:
+        reasons = [f"cannot split: {len(infos)} images on the page (need exactly one)"]
+    flat = _flatten_source(page, infos)
+    return (flat, [flatten_reason(flat.flatten)]) if flat else (None, reasons)
+
+
+def _plural(n, word):
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def flatten_reason(f: dict) -> str:
+    """Why a page is flattened (never starts with "cannot split:")."""
+    parts = ([_plural(f["images"], "image")] if f["images"] else []) + (
+        ["visible text"] if f["visible_text_spans"] else []) + (
+        [_plural(f["drawings"], "drawing")] if f["drawings"] else [])
+    return f"will be flattened at {f['dpi']} dpi" + (": " + ", ".join(parts) if parts else "")
+
+
+def _flatten_source(page, infos) -> SourceImage | None:
+    """A flatten source if every image is 1-bit DeviceGray (or an image mask) without
+    SMask/Mask and the page renders colourless; else None."""
+    doc = page.parent
+    for info in infos:
+        x = info["xref"]
+        if not x:
+            return None                                  # inline image: not checked
+        if doc.xref_get_key(x, "SMask")[0] != "null" or doc.xref_get_key(x, "Mask")[0] != "null":
+            return None
+        if doc.xref_get_key(x, "ImageMask")[1] == "true":
+            continue
+        bpc_t, bpc = _resolve(doc, x, "BitsPerComponent")
+        if bpc_t != "int" or int(bpc) != 1 or _resolve(doc, x, "ColorSpace")[1] != "/DeviceGray":
+            return None
+    pix = page.get_pixmap(dpi=COLOUR_CHECK_DPI, colorspace=pymupdf.csRGB, annots=False)
+    a = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.stride)[:, : pix.width * 3]
+    a = a.reshape(pix.height, pix.width, 3).astype(np.int16)
+    if a.size and (a.max(-1) - a.min(-1)).max() >= COLOUR_TOL:
+        return None
+    dpi = FLATTEN_DEFAULT_DPI
+    if infos:
+        big = max(infos, key=lambda i: abs(pymupdf.Rect(i["bbox"]).get_area()))
+        ex, _ = _axes(_image_matrix(page, big))
+        dpi = round(big["width"] / (math.hypot(ex.x, ex.y) / 72))
+    spans = sum(1 for s in page.get_texttrace() if s["type"] != 3 and s["opacity"] > 0)
+    flat = {"dpi": dpi, "images": len(infos), "visible_text_spans": spans,
+            "drawings": _drawing_count(page)}
+    return SourceImage(0, G4, 1, [], flatten=flat)
+
+
+def _examine_one(page, info) -> tuple[SourceImage | None, list[str]]:
+    doc = page.parent
     x = info["xref"]
     if not x:
         return None, ["cannot split: inline image"]
@@ -147,8 +213,8 @@ def examine(page) -> tuple[SourceImage | None, list[str]]:
     rot = _residual_rotation_deg(M)
     if abs(rot) > MAX_IMAGE_ROT_DEG:
         reasons.append(f"cannot split: image rotated {abs(rot):.1f} deg")
-    if _has_drawings(page):
-        reasons.append("cannot split: page has drawings besides the scan")
+    if _drawing_count(page):
+        reasons.append(DRAWINGS)
     if doc.xref_get_key(x, "ImageMask")[1] == "true":
         reasons.append("cannot split: image mask")
     if doc.xref_get_key(x, "SMask")[0] != "null" or doc.xref_get_key(x, "Mask")[0] != "null":
@@ -177,10 +243,31 @@ def examine(page) -> tuple[SourceImage | None, list[str]]:
     return SourceImage(x, FLATE, n, filters, **placed), []
 
 
+def flatten_pixels(page, dpi: int) -> Upright:
+    """The whole page rendered in display orientation at ``dpi``, grey, without
+    anti-aliasing or annotations, thresholded to black and white. The pixels cover exactly
+    page.rect, axis-aligned."""
+    old = pymupdf.TOOLS.show_aa_level()
+    pymupdf.TOOLS.set_aa_level(0)
+    try:
+        pix = page.get_pixmap(dpi=dpi, colorspace=pymupdf.csGRAY, annots=False)
+    finally:
+        pymupdf.TOOLS.set_aa_level(old["graphics"])
+        if old["text"] != old["graphics"]:
+            pymupdf.mupdf.fz_set_text_aa_level(old["text"])
+    a = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.stride)[:, : pix.width]
+    pixels = np.where(a < THRESHOLD, 0, WHITE).astype(np.uint8)
+    r = page.rect
+    A = pymupdf.Matrix(r.width / pix.width, 0, 0, r.height / pix.height, r.x0, r.y0)
+    return Upright(pixels, A, pix.width / r.width, pix.height / r.height)
+
+
 def upright_pixels(page, src: SourceImage) -> Upright:
     """The page image re-oriented (transpose/flip) to the displayed page, and the matrix
     placing those pixels on the page exactly as the source does (residual rotation,
-    offset and overhang included)."""
+    offset and overhang included). A flatten source renders the page instead."""
+    if src.flatten:
+        return flatten_pixels(page, src.flatten["dpi"])
     info = next(i for i in page.get_image_info(xrefs=True) if i["xref"] == src.xref)
     M = _image_matrix(page, info)
     ex, ey = _axes(M)

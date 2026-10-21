@@ -343,13 +343,53 @@ def add_rotated(doc):
 
 
 def add_two_images(doc):
-    """A spread made of two separate images (Unruh pp. 1-3): cannot be split."""
+    """A spread made of two separate images, one of them 8-bit grey: cannot be split (nor
+    flattened, which takes 1-bit pieces only)."""
     dark, gap = text_spread((9, 10))
     black = to_black(dark, soft_shadow(W / 2, 0.75, 4.0), seed=len(doc))
     page = new_page(doc)
     put_image(page, g4(doc, np.ascontiguousarray(black[:, :PW])), pymupdf.Rect(0, 0, PW * PT, H * PT))
-    put_image(page, g4(doc, np.ascontiguousarray(black[:, PW:])), pymupdf.Rect(PW * PT, 0, W * PT, H * PT))
+    put_image(page, grey8(doc, np.where(black[:, PW:], 0, 255).astype(np.uint8)),
+              pymupdf.Rect(PW * PT, 0, W * PT, H * PT))
     return Truth("two_images", True, gap, True)
+
+
+PIECE_DPI = 300
+PIECED_LINES = 24                 # visible text lines per page of a pieced spread
+
+
+def add_pieced_spread(doc, variant=None):
+    """Unruh pp. 1-3: the scanned text replaced by visible font text, with leftovers kept
+    as 1-bit images at 300 dpi (a gutter-shadow strip in G4, a page-edge strip in Flate
+    bpc 1, a 3x3 speck) and a black vector line. ``variant`` spoils it for flattening:
+    "rgb" (an RGB piece), "smask" (a piece with an SMask) or "red" (a red line)."""
+    page = new_page(doc)
+    r = page.rect
+    k = PIECE_DPI / 72
+    rows = round(r.height * k)
+    rng = np.random.default_rng(len(doc))
+    shadow = rng.random((rows, 30)) < np.linspace(0.2, 0.9, 30)[None, :]   # dithered ramp
+    edge = rng.random((rows, 20)) < 0.6
+    speck = np.ones((3, 3), bool)
+    gx = r.width / 2 - 15 / k
+    pieces = [(g4(doc, shadow), pymupdf.Rect(gx, 0, gx + 30 / k, r.height)),
+              (flate1(doc, edge), pymupdf.Rect(0, 0, 20 / k, r.height)),
+              (g4(doc, speck), pymupdf.Rect(500, 400, 500 + 3 / k, 400 + 3 / k))]
+    if variant == "rgb":
+        rgb = np.zeros((3, 3, 3), np.uint8)
+        pieces[2] = (images.image_xobject(doc, 3, 3, 3, 8, rgb.tobytes()), pieces[2][1])
+    if variant == "smask":
+        sm = images.image_xobject(doc, 3, 3, 1, 8, bytes([255] * 9))
+        doc.xref_set_key(pieces[2][0], "SMask", f"{sm} 0 R")
+    for x, rect in pieces:
+        put_image(page, x, rect)
+    for i in range(PIECED_LINES):
+        line = SENTENCES[i % len(SENTENCES)]
+        page.insert_text((40, 50 + 15 * i), line[:44], fontname="tiro", fontsize=9)
+        page.insert_text((r.width / 2 + 40, 50 + 15 * i), line[44:88], fontname="tiro", fontsize=9)
+    page.draw_line((40, r.height - 40), (r.width / 2 - 40, r.height - 40),
+                   color=(1, 0, 0) if variant == "red" else (0, 0, 0), width=1)
+    return page
 
 
 def add_deskewed(doc, name, skew=1.5, encoding="g4", strip=40.0, rotation=90, seeds=(25, 26)):

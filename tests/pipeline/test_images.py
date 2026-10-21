@@ -132,10 +132,10 @@ def test_annotation_appearance_is_not_a_drawing():
 def test_unsupported_images_are_refused_with_reasons():
     doc = pymupdf.open()
     cases = {}
-    # two images
+    # two images, one 8-bit (two 1-bit ones would be flattened: test_flatten)
     page, _ = g4_page(doc, marked())
-    page.insert_image(pymupdf.Rect(0, 0, 10, 10), xref=images.g4_xobject(
-        doc, Image.fromarray(~marked(20, 20))))
+    page.insert_image(pymupdf.Rect(0, 0, 10, 10), xref=images.image_xobject(
+        doc, 20, 20, 1, 8, bytes(400)))
     cases["2 images"] = page.number
     # non-trivial Decode
     page, x = g4_page(doc, marked())
@@ -163,9 +163,9 @@ def test_unsupported_images_are_refused_with_reasons():
     set_cm(page, (r.width * math.cos(t), r.width * math.sin(t), -r.height * math.sin(t),
                   r.height * math.cos(t), 0, 0))
     cases["rotated 3.5 deg"] = page.number
-    # a vector line drawn over the scan
+    # a red vector line drawn over the scan (a black one would be flattened)
     page, _ = g4_page(doc, marked())
-    page.draw_line((10, 10), (100, 10))
+    page.draw_line((10, 10), (100, 10), color=(1, 0, 0))
     cases["page has drawings besides the scan"] = page.number
     for needle, pno in cases.items():
         src, why = images.examine(doc[pno])
