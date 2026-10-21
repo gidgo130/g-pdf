@@ -35,7 +35,8 @@ def _save_pdf(doc: pymupdf.Document, path: Path) -> Path:
 
 
 def _toc_links_pdf(path: Path) -> Path:
-    """3 pages, TOC One/Two/Three -> 1/2/3, GOTO links p1->p3 and p3->p1."""
+    """3 pages, TOC One/Two/Three -> 1/2/3, GOTO links p1->p3 and p3->p1,
+    named destination "sec3" -> p3 with a NAMED link to it on p2."""
     doc = pymupdf.open()
     for i in range(3):
         page = doc.new_page()
@@ -49,6 +50,14 @@ def _toc_links_pdf(path: Path) -> Path:
         "kind": pymupdf.LINK_GOTO, "from": pymupdf.Rect(72, 200, 172, 220),
         "page": 0, "to": pymupdf.Point(0, 0),
     })
+    p3 = doc[2].xref
+    names = doc.get_new_xref()
+    doc.update_object(names, f"<</Names[(sec3)[{p3} 0 R/XYZ 0 800 0]]>>")
+    doc.xref_set_key(doc.pdf_catalog(), "Names", f"<</Dests {names} 0 R>>")
+    doc[1].insert_link({
+        "kind": pymupdf.LINK_NAMED, "from": pymupdf.Rect(72, 300, 172, 320),
+        "name": "sec3", "nameddest": "sec3",
+    })
     return _save_pdf(doc, path)
 
 
@@ -58,12 +67,16 @@ def _nav_state(raw: pymupdf.Document):
         [(link["kind"], link.get("page")) for link in raw[i].get_links()]
         for i in range(raw.page_count)
     ]
-    return toc, links
+    if hasattr(raw, "_resolved_names"):  # resolve_names() caches its result
+        del raw._resolved_names
+    names = {name: dest["page"] for name, dest in raw.resolve_names().items()}
+    return toc, links, names
 
 
 _EXPECTED_NAV = (
     [(1, "One", 1), (1, "Two", 2), (1, "Three", 3)],
-    [[(pymupdf.LINK_GOTO, 2)], [], [(pymupdf.LINK_GOTO, 0)]],
+    [[(pymupdf.LINK_GOTO, 2)], [(pymupdf.LINK_NAMED, 2)], [(pymupdf.LINK_GOTO, 0)]],
+    {"sec3": 2},
 )
 
 
@@ -109,14 +122,11 @@ def _path_failed_edit(doc, check):
 
 
 @pytest.mark.parametrize("path", [
-    pytest.param(_path_add_text_undo_redo, id="add_text-undo-redo",
-                 marks=pytest.mark.xfail(strict=True, reason="#1 page swap kills TOC/links")),
-    pytest.param(_path_ocr_replace, id="ocr-replace-page-bytes",
-                 marks=pytest.mark.xfail(strict=True, reason="#1 page swap kills TOC/links")),
+    pytest.param(_path_add_text_undo_redo, id="add_text-undo-redo"),
+    pytest.param(_path_ocr_replace, id="ocr-replace-page-bytes"),
     pytest.param(_path_delete_undo, id="delete-undo",
                  marks=pytest.mark.xfail(strict=True, reason="#1 page swap kills TOC/links")),
-    pytest.param(_path_failed_edit, id="failed-edit",
-                 marks=pytest.mark.xfail(strict=True, reason="#1 page swap kills TOC/links")),
+    pytest.param(_path_failed_edit, id="failed-edit"),
 ])
 def test_bookmarks_and_links_survive(qapp, tmp_path, path):
     src = _toc_links_pdf(tmp_path / "nav.pdf")
@@ -141,6 +151,61 @@ def test_bookmarks_and_links_survive(qapp, tmp_path, path):
         path(doc, check)
     finally:
         doc.close()
+
+
+def test_add_text_undo_redo_keeps_page_xref(qapp, tmp_path):
+    doc = PdfDocument(_toc_links_pdf(tmp_path / "nav.pdf"))
+    try:
+        xref = doc.raw.page_xref(2)
+        textedit.add_text(doc, 2, 72, 150, "added")
+        assert doc.raw.page_xref(2) == xref
+        assert doc.undo()
+        assert doc.raw.page_xref(2) == xref
+        assert doc.redo()
+        assert doc.raw.page_xref(2) == xref
+        assert "added" in doc.raw[2].get_text()
+    finally:
+        doc.close()
+
+
+def _field_pdf(path: Path) -> Path:
+    """2 unrotated pages; page 1 has text field "customer_name" and a highlight."""
+    doc = pymupdf.open()
+    for i in range(2):
+        doc.new_page().insert_text((72, 72), f"Page {i + 1}", fontsize=24)
+    page = doc[0]
+    page.add_highlight_annot(page.search_for("Page 1")[0])
+    widget = pymupdf.Widget()
+    widget.field_type = pymupdf.PDF_WIDGET_TYPE_TEXT
+    widget.field_name = "customer_name"
+    widget.rect = pymupdf.Rect(72, 200, 272, 224)
+    page.add_widget(widget)
+    return _save_pdf(doc, path)
+
+
+def test_add_text_undo_redo_keeps_one_field_and_highlight(qapp, tmp_path):
+    doc = PdfDocument(_field_pdf(tmp_path / "field.pdf"))
+    try:
+        textedit.add_text(doc, 0, 72, 300, "added")
+        assert doc.undo()
+        assert doc.redo()
+        out = tmp_path / "out.pdf"
+        doc.save_as(out)
+    finally:
+        doc.close()
+    reopened = pymupdf.open(out)
+    try:
+        page = reopened[0]
+        assert [w.field_name for w in page.widgets()] == ["customer_name"]
+        assert [a.type[1] for a in page.annots()] == ["Highlight"]
+        assert "added" in page.get_text()
+        fields = [
+            w.field_name for p in reopened for w in p.widgets()
+            if w.field_name == "customer_name"
+        ]
+        assert fields == ["customer_name"]
+    finally:
+        reopened.close()
 
 
 # -- B. damaged file (#2) --------------------------------------------------------
@@ -169,7 +234,6 @@ def test_truncated_file_reports_repair(qapp, tmp_path):
 # -- C. failed edit (#4) -----------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="#4 failed edit swaps the page object (new xref)")
 def test_failed_edit_keeps_page_xref(qapp, make_pdf):
     doc = PdfDocument(make_pdf())
     try:
@@ -603,6 +667,37 @@ def test_replace_span_keeps_line_art_under_text(qapp, tmp_path):
 
 def _link_state(page):
     return [(l["kind"], l.get("page"), tuple(round(v, 1) for v in l["from"])) for l in page.get_links()]
+
+
+def test_replace_span_keeps_link_in_indirect_annots(qapp, tmp_path):
+    src = tmp_path / "indirect.pdf"
+    doc = pymupdf.open()
+    doc.new_page()
+    doc.new_page()
+    page = doc[0]
+    page.insert_text((72, 100), "Click here now", fontsize=12)
+    page.insert_link({
+        "kind": pymupdf.LINK_GOTO, "from": pymupdf.Rect(72, 88, 160, 104),
+        "page": 1, "to": pymupdf.Point(0, 0),
+    })
+    kind, value = doc.xref_get_key(page.xref, "Annots")
+    assert kind == "array"
+    x = doc.get_new_xref()
+    doc.update_object(x, value)
+    doc.xref_set_key(page.xref, "Annots", f"{x} 0 R")
+    assert doc.xref_get_key(page.xref, "Annots")[0] == "xref"
+    _save_pdf(doc, src)
+
+    pdf = PdfDocument(src)
+    try:
+        before = _link_state(pdf.raw[0])
+        assert len(before) == 1
+        span = textedit.span_at(pdf, 0, 80, 97)
+        textedit.replace_span(pdf, 0, span, "Tap here now")
+        assert "Tap" in pdf.raw[0].get_text()
+        assert _link_state(pdf.raw[0]) == before
+    finally:
+        pdf.close()
 
 
 def test_replace_span_keeps_link_over_text(qapp, tmp_path):

@@ -14,13 +14,12 @@ different from its neighbours.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import pymupdf
 
-from gpdf.core.document import PdfDocument, PdfEditError
+from gpdf.core.document import PdfDocument, PdfEditError, annot_xrefs
 
 _FAMILIES = {
     # (monospace, serif) -> font names for (regular, bold, italic, bold-italic)
@@ -131,10 +130,7 @@ def _restore_links(page: pymupdf.Page, keep: list[int]) -> None:
     survive); re-append any that went missing. get_links() is stale here, so
     /Annots is read and written through the xref API."""
     doc = page.parent
-    kind, value = doc.xref_get_key(page.xref, "Annots")
-    if kind == "xref":  # indirect array: "n 0 R"
-        value = doc.xref_object(int(value.split()[0]), compressed=True)
-    present = [int(n) for n in re.findall(r"(\d+) 0 R", value)] if kind != "null" else []
+    present = annot_xrefs(doc, page.xref)
     missing = [x for x in keep if x not in present]
     if missing:
         refs = [*present, *missing]

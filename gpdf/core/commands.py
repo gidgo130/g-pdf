@@ -121,27 +121,39 @@ class InsertCommand(Command):
 
 
 class SetPageBytesCommand(Command):
-    """Swap one page for another version of itself (used by edits and OCR)."""
+    """Swap one page's content for another version of itself (used by OCR).
+
+    The page object is kept. OCR bakes annotations into the page image, so
+    only the page's links are kept on ``do``; ``undo`` brings all back."""
 
     def __init__(
         self, owner: PdfDocument, index: int, label: str, before: bytes, after: bytes
     ) -> None:
+        from gpdf.core.document import annot_xrefs
+
         self.owner = owner
         self.index = index
         self.label = label
         self.before = before
         self.after = after
         self.byte_cost = len(before) + len(after)
+        raw = owner._raw
+        self.before_annots = annot_xrefs(raw, raw.page_xref(index))
+        self.links = [
+            x for x in self.before_annots
+            if raw.xref_get_key(x, "Subtype")[1] == "/Link"
+        ]
 
     def do(self) -> None:
-        self.owner._replace_page(self.index, self.after)
+        self.owner._restore_page(self.index, self.after, self.links)
 
     def undo(self) -> None:
-        self.owner._replace_page(self.index, self.before)
+        self.owner._restore_page(self.index, self.before, self.before_annots)
 
 
 class EditPageCommand(Command):
-    """Mutate one page in place; undo/redo swap whole-page snapshots.
+    """Mutate one page in place; undo/redo restore whole-page snapshots into
+    the same page object.
 
     The first ``do`` runs ``mutate`` on the live page, then snapshots the
     result so redo doesn't have to trust ``mutate`` to be repeatable. If
@@ -156,30 +168,37 @@ class EditPageCommand(Command):
         before: bytes,
         mutate: Callable[[pymupdf.Page], None],
     ) -> None:
+        from gpdf.core.document import annot_xrefs
+
         self.owner = owner
         self.index = index
         self.label = label
         self.before = before
         self.after: bytes | None = None
+        self.before_annots = annot_xrefs(owner._raw, owner._raw.page_xref(index))
+        self.after_annots: list[int] = []
         self._mutate = mutate
         self.byte_cost = len(before)
 
     def do(self) -> None:
+        from gpdf.core.document import annot_xrefs
+
         owner = self.owner
         if self.after is None:
             try:
                 self._mutate(owner._raw[self.index])
             except Exception:
-                owner._replace_page(self.index, self.before)
+                owner._restore_page(self.index, self.before, self.before_annots)
                 raise
+            self.after_annots = annot_xrefs(owner._raw, owner._raw.page_xref(self.index))
             self.after = owner._extract_bytes([self.index])
             self.byte_cost = len(self.before) + len(self.after)
             owner._page_changed(self.index)
         else:
-            owner._replace_page(self.index, self.after)
+            owner._restore_page(self.index, self.after, self.after_annots)
 
     def undo(self) -> None:
-        self.owner._replace_page(self.index, self.before)
+        self.owner._restore_page(self.index, self.before, self.before_annots)
 
 
 class MetadataCommand(Command):

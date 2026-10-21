@@ -16,6 +16,7 @@ Not thread-safe: PyMuPDF documents must only be used from one thread at a time.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
@@ -42,6 +43,26 @@ class PdfOpenError(Exception):
 
 class PdfEditError(Exception):
     """Raised when an operation can't be applied (message is user-readable)."""
+
+
+# Page dict keys that describe what a page looks like. Restoring a snapshot
+# copies these onto the existing page object; every other key (/Parent,
+# /StructParents, /Tabs ...) stays as it is.
+CONTENT_KEYS = (
+    "Contents", "Resources", "MediaBox", "CropBox", "BleedBox", "TrimBox",
+    "ArtBox", "Rotate", "UserUnit", "Group",
+)
+
+
+def annot_xrefs(raw: pymupdf.Document, page_xref: int) -> list[int]:
+    """The xrefs in a page's /Annots, read through the xref API (works when
+    the Page wrapper is stale). Handles a direct or an indirect array."""
+    kind, value = raw.xref_get_key(page_xref, "Annots")
+    if kind == "null":
+        return []
+    if kind == "xref":  # indirect array: "n 0 R"
+        value = raw.xref_object(int(value.split()[0]), compressed=True)
+    return [int(n) for n in re.findall(r"(\d+) 0 R", value)]
 
 
 def _ranges(indices: Sequence[int]) -> list[tuple[int, int]]:
@@ -229,14 +250,31 @@ class PdfDocument(QObject):
         finally:
             src.close()
 
-    def _replace_page(self, index: int, data: bytes) -> None:
+    def _restore_page(self, index: int, data: bytes, annots: list[int]) -> None:
+        """Put a page snapshot (``data``, one page) back INTO the existing page
+        object, so its xref, and with it every bookmark, link, named
+        destination and structure tag pointing at it, stays valid. ``annots``
+        becomes the page's /Annots (the snapshot's own annotations are not
+        used)."""
         raw = self.raw
+        o = raw.page_xref(index)
+        n = raw.page_count
         src = pymupdf.open(stream=data, filetype="pdf")
         try:
-            raw.insert_pdf(src, start_at=index, join_duplicates=1)
+            src.xref_set_key(src.page_xref(0), "Annots", "null")
+            raw.insert_pdf(src, start_at=-1, join_duplicates=1)
         finally:
             src.close()
-        raw.delete_page(index + 1)
+        t = raw.page_xref(n)
+        for key in CONTENT_KEYS:
+            kind, value = raw.xref_get_key(t, key)
+            raw.xref_set_key(o, key, "null" if kind == "null" else value)
+        raw.xref_set_key(
+            o, "Annots",
+            "[" + " ".join(f"{x} 0 R" for x in annots) + "]" if annots else "null",
+        )
+        raw._delete_page(n)  # unlink the temporary page only
+        raw._reset_page_refs()
         self._page_changed(index)
         self._structure_changed()
 
