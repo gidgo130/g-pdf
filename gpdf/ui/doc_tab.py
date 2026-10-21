@@ -5,14 +5,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFileDialog, QInputDialog, QMessageBox, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from gpdf import APP_NAME
 from gpdf.core import ocr, textedit
-from gpdf.core.document import PdfDocument, PdfEditError
+from gpdf.core.document import FileChangedError, PdfDocument, PdfEditError
 from gpdf.ui.bookmarks import BookmarksTree
 from gpdf.ui.find_bar import FindBar
 from gpdf.ui.page_panel import PagePanel
@@ -25,6 +25,28 @@ from gpdf.ui.read_aloud import ReadAloudBar, ReadAloudController
 IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff);;All files (*)"
 
 
+# Dialogs with custom buttons; module-level so tests can replace them.
+
+def ask_file_changed(parent: QWidget, name: str) -> str:
+    """Save hit a file another program changed (#15). Returns "save_as",
+    "overwrite", "discard" or "cancel"."""
+    box = QMessageBox(QMessageBox.Icon.Warning, APP_NAME,
+                      f"{name} was changed by another program since you opened it.",
+                      parent=parent)
+    box.setInformativeText(
+        "Save As keeps both versions. Overwrite replaces the other program's "
+        "changes with yours. Discard my changes opens the file as the other "
+        "program saved it; your edits are lost.")
+    save_as = box.addButton("Save As…", QMessageBox.ButtonRole.AcceptRole)
+    overwrite = box.addButton("Overwrite", QMessageBox.ButtonRole.DestructiveRole)
+    discard = box.addButton("Discard my changes", QMessageBox.ButtonRole.DestructiveRole)
+    box.addButton(QMessageBox.StandardButton.Cancel)
+    box.setDefaultButton(save_as)
+    box.exec()
+    return {save_as: "save_as", overwrite: "overwrite", discard: "discard"}.get(
+        box.clickedButton(), "cancel")
+
+
 class DocumentTab(QWidget):
     """A PDF plus its view, page panel and tools. Owns the document: call
     :meth:`dispose` to close it.
@@ -32,6 +54,9 @@ class DocumentTab(QWidget):
     Tabs can move between windows, so nothing here may refer to a particular
     window; the window that currently holds the tab wires up its own signals.
     """
+
+    # "Discard my changes": the window replaces this tab with a fresh one.
+    reload_requested = Signal(object)
 
     def __init__(self, document: PdfDocument, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -248,16 +273,28 @@ class DocumentTab(QWidget):
             QMessageBox.StandardButton.Cancel)
         return answer == QMessageBox.StandardButton.Save
 
-    def _save_to(self, path: str | None) -> bool:
+    def _save_to(self, path: str | None, force: bool = False) -> bool:
         try:
             if path is None:
-                self.document.save()
+                self.document.save(force=force)
             else:
                 self.document.save_as(path)
             return True
+        except FileChangedError:
+            return self._on_file_changed()
         except OSError as exc:
             self.show_error(f"Could not save: {exc}")
             return False
+
+    def _on_file_changed(self) -> bool:
+        choice = ask_file_changed(self, self.document.name)
+        if choice == "save_as":
+            return self.save_as()
+        if choice == "overwrite":
+            return self._save_to(None, force=True)
+        if choice == "discard":
+            self.reload_requested.emit(self)  # may dispose of this tab
+        return False
 
     def confirm_close(self) -> bool:
         """Ask about unsaved changes. True if it is OK to close the tab."""

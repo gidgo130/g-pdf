@@ -315,6 +315,7 @@ class MainWindow(QMainWindow):
         tab.view.current_page_changed.connect(self._refresh_status)
         tab.view.zoom_changed.connect(self._refresh_status)
         tab.document.state_changed.connect(self._refresh)
+        tab.reload_requested.connect(self.reload_tab)
         self.tabs.setCurrentIndex(i)
         self._after_tabs_changed()
 
@@ -332,11 +333,26 @@ class MainWindow(QMainWindow):
             (tab.view.current_page_changed, self._refresh_status),
             (tab.view.zoom_changed, self._refresh_status),
             (tab.document.state_changed, self._refresh),
+            (tab.reload_requested, self.reload_tab),
         ):
             try:
                 signal.disconnect(slot)
             except (RuntimeError, TypeError):
                 pass
+
+    def reload_tab(self, tab: DocumentTab) -> None:
+        """Replace ``tab`` with the file as it is on disk, at the same index,
+        dropping its edits without asking. If the file won't open, keep it."""
+        try:
+            fresh = DocumentTab(PdfDocument(tab.path))
+        except PdfOpenError as exc:
+            QMessageBox.warning(self, APP_NAME, str(exc))
+            return
+        index = self.tabs.indexOf(tab)
+        self.release_tab(tab)
+        tab.dispose()
+        self.adopt_tab(fresh, index)
+        self._warn_if_damaged(fresh)
 
     def _after_tabs_changed(self) -> None:
         self._refresh()

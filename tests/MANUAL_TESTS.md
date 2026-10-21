@@ -82,3 +82,13 @@ by hand on Windows before a release. Use three or four small PDFs.
     press Ctrl+S: the Save As dialog suggests "<name> (recovered).pdf" in the same
     folder, and the original file is unchanged. After saving, Ctrl+S saves to the
     recovered copy without asking.
+31. Open a PDF here and edit it. Change and save the same file in another program
+    (e.g. add a comment in Edge or Acrobat), then press Ctrl+S in g-pdf. A dialog
+    says the file was changed by another program. Try each button (redo the
+    setup each time):
+    - **Save As…** saves your version under a new name; the other file is kept.
+    - **Overwrite** writes your version over the other program's.
+    - **Discard my changes** replaces the tab, in the same place, with the file
+      as the other program saved it; no ● marker.
+    - **Cancel** changes nothing; the tab keeps its ● marker.
+    Saving twice in a row from g-pdf alone never shows this dialog.

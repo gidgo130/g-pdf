@@ -21,7 +21,9 @@ import pytest
 
 from gpdf.core import document as document_mod
 from gpdf.core import textedit
-from gpdf.core.document import PdfDocument, PdfEditError, _ref_array, _stray_pages
+from gpdf.core.document import (
+    FileChangedError, PdfDocument, PdfEditError, _ref_array, _stray_pages,
+)
 from gpdf.core.history import Command, History
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -387,24 +389,82 @@ def test_failed_edit_leaves_content_and_history_alone(qapp, make_pdf):
 # -- D. file changed on disk ---------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="#15 save overwrites a file changed by another program")
-def test_save_refuses_when_file_changed_on_disk(qapp, make_pdf, tmp_path):
+def change_on_disk(path: Path) -> bytes:
+    """Replace ``path`` with a one-page "THEIRS" PDF, as another program
+    would (new content, later mtime). Returns the bytes written."""
+    other = pymupdf.open()
+    other.new_page().insert_text((72, 72), "THEIRS", fontsize=24)
+    theirs = other.tobytes()
+    other.close()
+    path.write_bytes(theirs)
+    st = path.stat()
+    os.utime(path, (st.st_atime + 10, st.st_mtime + 10))
+    return theirs
+
+
+def test_save_refuses_when_file_changed_on_disk(qapp, make_pdf):
     path = make_pdf("mine.pdf")
     doc = PdfDocument(path)
     try:
-        other = pymupdf.open()
-        other.new_page().insert_text((72, 72), "THEIRS", fontsize=24)
-        theirs = tmp_path / "theirs.pdf"
-        _save_pdf(other, theirs)
-        theirs_bytes = theirs.read_bytes()
-        path.write_bytes(theirs_bytes)
-        st = path.stat()
-        os.utime(path, (st.st_atime + 10, st.st_mtime + 10))
-
+        theirs_bytes = change_on_disk(path)
         doc.rotate_pages([0], 90)
-        with pytest.raises(PdfEditError):
+        with pytest.raises(FileChangedError, match="changed by another program"):
             doc.save()
         assert path.read_bytes() == theirs_bytes
+        assert doc.is_dirty
+    finally:
+        doc.close()
+
+
+def test_forced_save_overwrites_changed_file(qapp, make_pdf):
+    path = make_pdf("mine.pdf")
+    doc = PdfDocument(path)
+    try:
+        change_on_disk(path)
+        doc.rotate_pages([0], 90)
+        doc.save(force=True)
+        with pymupdf.open(str(path)) as check:
+            assert check.page_count == 3 and check[0].rotation == 90
+        doc.rotate_pages([0], 90)
+        doc.save()  # the stamp is now our own write
+    finally:
+        doc.close()
+
+
+def test_saving_twice_does_not_trip_the_check(qapp, make_pdf):
+    path = make_pdf()
+    doc = PdfDocument(path)
+    try:
+        for _ in range(2):
+            doc.rotate_pages([0], 90)
+            doc.save()
+        with pymupdf.open(str(path)) as check:
+            assert check[0].rotation == 180
+    finally:
+        doc.close()
+
+
+def test_save_recreates_a_deleted_file(qapp, make_pdf):
+    path = make_pdf()
+    doc = PdfDocument(path)
+    try:
+        path.unlink()
+        doc.rotate_pages([0], 90)
+        doc.save()
+        with pymupdf.open(str(path)) as check:
+            assert check[0].rotation == 90
+    finally:
+        doc.close()
+
+
+def test_save_as_does_not_check_its_target(qapp, make_pdf):
+    path, other = make_pdf("a.pdf"), make_pdf("b.pdf")
+    doc = PdfDocument(path)
+    try:
+        change_on_disk(path)
+        doc.save_as(other)  # the user picked it in a dialog
+        doc.rotate_pages([0], 90)
+        doc.save()  # stamp follows the new path
     finally:
         doc.close()
 

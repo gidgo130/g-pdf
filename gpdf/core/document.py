@@ -7,8 +7,9 @@ take ``PdfDocument.raw`` for read access only).
 
 The file is read fully into memory and opened from those bytes, so g-pdf never
 holds a lock on the file on disk (Windows would otherwise refuse to let other
-programs, or us, replace it). The flip side: huge PDFs cost RAM, and changes
-made to the file by another program while it is open are not noticed.
+programs, or us, replace it). The flip side: huge PDFs cost RAM, and another
+program can change the file while it is open; ``save`` notices that (by mtime
+and size) and refuses unless forced.
 
 Not thread-safe: PyMuPDF documents must only be used from one thread at a time.
 """
@@ -43,6 +44,10 @@ class PdfOpenError(Exception):
 
 class PdfEditError(Exception):
     """Raised when an operation can't be applied (message is user-readable)."""
+
+
+class FileChangedError(PdfEditError):
+    """Raised by ``save`` when another program changed the file since we read it."""
 
 
 # Page dict keys that describe what a page looks like. Restoring a snapshot
@@ -216,6 +221,15 @@ def _has_read_errors(raw: pymupdf.Document) -> bool:
         pymupdf.TOOLS.mupdf_display_errors(shown)
 
 
+def _disk_stamp(path: Path) -> tuple[int, int] | None:
+    """(mtime in ns, size) of the file, or None if it can't be read."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size
+
+
 def _ranges(indices: Sequence[int]) -> list[tuple[int, int]]:
     """Collapse sorted unique indices into inclusive (from, to) runs."""
     runs: list[tuple[int, int]] = []
@@ -241,6 +255,7 @@ class PdfDocument(QObject):
             data = self.path.read_bytes()
         except Exception as exc:
             raise PdfOpenError(f"Could not open {self.path.name}: {exc}") from exc
+        self._stamp = _disk_stamp(self.path)  # what we read; see save()
         if b"%PDF" not in data[:1024]:
             raise PdfOpenError(f"{self.path.name} is not a PDF file.")
         try:
@@ -591,12 +606,20 @@ class PdfDocument(QObject):
 
     # -- saving -----------------------------------------------------------------
 
-    def save(self) -> None:
+    def save(self, force: bool = False) -> None:
+        """Save over the file. Unless ``force``, refuse (FileChangedError) if
+        another program changed it since we read or last wrote it (#15)."""
         if self.is_damaged:
             raise PdfEditError(
                 "This file was damaged when opened; save it under a new name "
                 "so the original is kept."
             )
+        if not force:
+            now = _disk_stamp(self.path)
+            if now is not None and now != self._stamp:
+                raise FileChangedError(
+                    f"{self.path.name} was changed by another program since you opened it."
+                )
         self.save_as(self.path)
 
     def save_as(self, path: str | Path) -> None:
@@ -613,6 +636,7 @@ class PdfDocument(QObject):
             data = raw.tobytes(garbage=garbage, deflate=True)
         _atomic_write(target, data)
         self.path = target
+        self._stamp = _disk_stamp(target)
         self._history.mark_clean()
         self._signed = False  # whatever signatures existed no longer validate
         self.was_repaired = self.is_damaged = False  # the new file is whole
