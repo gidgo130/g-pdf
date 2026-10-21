@@ -155,10 +155,10 @@ languages. On Windows:
 Then:
 
 ```powershell
-gpdf-cli ocr outook_split.pdf -o out --lang spa        # eng+spa for English with Spanish quotes
+gpdf-cli ocr out\book_split.pdf -o out --lang spa        # eng+spa for English with Spanish quotes
 ```
 
-This writes `outook_split_ocr.pdf` and `outook_split_ocr.report.json`, and
+This writes `out\book_split_ocr.pdf` and `out\book_split_ocr.report.json`, and
 lists the pages with the lowest confidence. Only pages that have a scan image
 and no text yet are read. Pages that already have a text layer, blank pages and
 pages without an image are listed and left as they are. `--pages 40-59` limits
