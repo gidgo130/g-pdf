@@ -848,7 +848,7 @@ def _widgets(raw: pymupdf.Document, index: int) -> list[tuple[str, str]]:
 def test_scratch_copy_keeps_object_numbers(qapp, tmp_path):
     doc = PdfDocument(_toc_links_pdf(tmp_path / "nav.pdf"))
     try:
-        textedit.add_text(doc, 0, 72, 150, "added")  # leaves a temporary page
+        textedit.add_text(doc, 0, 72, 150, "added")
         doc.delete_pages([2])
         raw = doc.raw
         scratch = pymupdf.open(stream=raw.tobytes(garbage=0), filetype="pdf")
@@ -1065,6 +1065,27 @@ def test_save_without_dead_objects_skips_scratch_copy(qapp, tmp_path, monkeypatc
     doc = PdfDocument(_form_pdf(tmp_path / "form.pdf"))
     try:
         doc.rotate_pages([0], 90)
+        opened = []
+        real_open = pymupdf.open
+
+        def spy(*args, **kwargs):
+            opened.append((args, kwargs))
+            return real_open(*args, **kwargs)
+
+        monkeypatch.setattr(document_mod.pymupdf, "open", spy)
+        doc.save_as(tmp_path / "out.pdf")
+        assert opened == []
+    finally:
+        doc.close()
+
+
+def test_edit_undo_redo_leaves_no_stray_page(qapp, tmp_path, monkeypatch):
+    doc = PdfDocument(_toc_links_pdf(tmp_path / "nav.pdf"))
+    try:
+        textedit.add_text(doc, 2, 72, 150, "added")
+        assert doc.undo()
+        assert doc.redo()  # undo and redo both restore via a temporary page
+        assert _stray_pages(doc.raw) == set()
         opened = []
         real_open = pymupdf.open
 

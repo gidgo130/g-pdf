@@ -413,6 +413,9 @@ class PdfDocument(QObject):
         )
         raw._delete_page(n)  # unlink the temporary page only
         raw._reset_page_refs()
+        # Blank it too, or every later save takes the scrub path. Its contents
+        # and resources live on in page ``o``.
+        raw.update_object(t, "null")
         self._page_changed(index)
         self._structure_changed()
 
