@@ -81,13 +81,21 @@ pip install -e ".[prep]"          # from a clone; or: pip install "g-pdf[prep]"
    gpdf-cli split book.pdf -o out --dry-run
    ```
 
-   This writes `out\book_split.report.json` and `out\book_split.decisions.json`
-   and lists the pages the detector is unsure about ("flagged"), with reasons.
-2. **Review** the flagged pages in `book_split.decisions.json` (page numbers
-   start at 1). For each page, set `"action"` to `"split"` or `"keep"`. If needed,
-   set `"cut"` to `[top, bottom]` as fractions of the page width (for example
-   `[0.5, 0.5]` for the middle). Then set `"reviewed": true`. Pages the detector
-   is sure about are already marked as reviewed.
+   This writes `out\book_split.report.json`, `out\book_split.decisions.json`
+   and the review sheet `out\book_split.review.html`, and lists the pages the
+   detector is unsure about ("flagged"), with reasons. `--no-sheet` skips the
+   sheet.
+2. **Review** in the sheet: open `book_split.review.html` in Edge, Chrome or
+   Firefox (it works offline, straight from the file). It starts at the first
+   flagged page. Drag the round handles to move the cut (Shift-drag moves the
+   whole line); the dashed line is the detector's guess. Press **S** to split,
+   **K** to keep the page whole, **Enter** to accept what is shown, **R** to
+   reset the cut, and the arrow keys to move between pages. Click a thumbnail
+   to change a page the detector was sure about. Then click **Save decisions**
+   and save `book_split.decisions.json`, preferably in the `out` folder (Firefox
+   puts it in Downloads). The sheet keeps unsaved work in the browser and offers
+   to restore it when reopened; **Load decisions...** reopens a saved file. The
+   sheet shows the command for the next step, with a Copy button.
 3. **Real run:**
 
    ```powershell
@@ -103,7 +111,8 @@ pip install -e ".[prep]"          # from a clone; or: pip install "g-pdf[prep]"
 Split pages lose their links, annotations and any text layer. The report lists
 those pages, and the text pages need OCR again. Bookmarks to a split page now
 point to its first half. Page labels are dropped. Existing output files are only
-replaced with `--force`. If the PDF changed after the dry run, the decisions file
+replaced with `--force`, except the review sheet, which holds no state and is
+always rewritten. If the PDF changed after the dry run, the decisions file
 is refused; run the dry run again or pass `--force`.
 
 ## Keyboard shortcuts

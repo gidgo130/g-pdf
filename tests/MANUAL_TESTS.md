@@ -98,3 +98,17 @@ by hand on Windows before a release. Use three or four small PDFs.
     keeps the ● marker; Save As… saves under a new name. Then edit again, close
     the tab, answer Save, and Cancel the failure dialog: the tab stays open.
     Repeat with a read-only file (Properties > Read-only).
+
+## Book prep review sheet
+
+33. Run `gpdf-cli split <Bürger PDF> -o <outdir> --dry-run --force` and open
+    `teoria-de-la-vanguardia_split.review.html` in **Edge**. It loads offline,
+    starts at the first flagged page, and the page image, cut line and close-up
+    line up. Review every flagged page with S / K / Enter, dragging a cut at
+    least once and Shift-dragging once; the top bar reaches "Flagged reviewed:
+    9 / 9". Click **Save decisions**: Edge's save dialog suggests
+    `teoria-de-la-vanguardia_split.decisions.json`; save it in `<outdir>`. Copy
+    the next-step command and run it: exit code 0 (`echo $LASTEXITCODE`), and
+    the output has the source's page count plus one page per split spread (the
+    "split N spreads" line). Reopen the sheet: a banner offers to restore your
+    review; Restore brings back every decision, Discard returns to the detector's.
