@@ -486,7 +486,6 @@ def test_undo_after_save_is_dirty_and_redo_is_clean(qapp, tmp_path):
 # -- I. redaction side effects ------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="#16 redaction rect eats the adjacent line")
 def test_replace_span_leaves_neighbouring_line_and_highlight(qapp, tmp_path):
     src = tmp_path / "lines.pdf"
     doc = pymupdf.open()
@@ -517,5 +516,86 @@ def test_replace_span_leaves_neighbouring_line_and_highlight(qapp, tmp_path):
         assert line2(page) == line2_before
         annots_after = [(a.type[1], tuple(round(v, 1) for v in a.rect)) for a in page.annots()]
         assert annots_after == annots_before
+    finally:
+        pdf.close()
+
+
+def _words_below(page, y):
+    return [w[4] for w in page.get_text("words") if w[3] > y]
+
+
+def test_replace_span_tight_line_spacing(qapp, tmp_path):
+    src = tmp_path / "tight.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "First line here", fontsize=12)
+    page.insert_text((72, 109), "Second line here", fontsize=12)  # 9 pt below
+    _save_pdf(doc, src)
+
+    pdf = PdfDocument(src)
+    try:
+        span = textedit.span_at(pdf, 0, 80, 98)
+        assert span is not None and span.text.startswith("First")
+        textedit.replace_span(pdf, 0, span, "Changed line here")
+        page = pdf.raw[0]
+        assert _words_below(page, 105) == ["Second", "line", "here"]
+        assert "Changed" in page.get_text()
+    finally:
+        pdf.close()
+
+
+def test_replace_text_leaves_next_line_alone(qapp, tmp_path):
+    src = tmp_path / "rt.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "First line here", fontsize=12)
+    page.insert_text((72, 112), "Second lineup here", fontsize=12)  # 12 pt below
+    _save_pdf(doc, src)
+
+    pdf = PdfDocument(src)
+    try:
+        assert textedit.replace_text(pdf, 0, "First", "Primo") == 1
+        page = pdf.raw[0]
+        line1 = [w[4] for w in page.get_text("words") if w[3] <= 105]
+        assert sorted(line1) == ["Primo", "here", "line"]
+        assert _words_below(page, 105) == ["Second", "lineup", "here"]
+    finally:
+        pdf.close()
+
+
+def test_replace_span_keeps_adjacent_bold_span(qapp, tmp_path):
+    src = tmp_path / "bold.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "Head", fontsize=12)
+    x = 72 + pymupdf.get_text_length("Head", fontname="helv", fontsize=12)
+    page.insert_text((x, 100), "TAIL", fontsize=12, fontname="hebo")
+    _save_pdf(doc, src)
+
+    pdf = PdfDocument(src)
+    try:
+        span = textedit.span_at(pdf, 0, 75, 97)
+        assert span is not None and span.text.strip() == "Head"
+        textedit.replace_span(pdf, 0, span, "Changed")
+        assert "TAIL" in pdf.raw[0].get_text()
+    finally:
+        pdf.close()
+
+
+def test_replace_span_keeps_line_art_under_text(qapp, tmp_path):
+    src = tmp_path / "art.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.draw_rect(pymupdf.Rect(60, 85, 300, 106), color=None, fill=(0.9, 0.9, 0.5))
+    page.insert_text((72, 100), "First line here", fontsize=12)
+    _save_pdf(doc, src)
+
+    pdf = PdfDocument(src)
+    try:
+        before = len(pdf.raw[0].get_drawings())
+        assert before >= 1
+        span = textedit.span_at(pdf, 0, 80, 97)
+        textedit.replace_span(pdf, 0, span, "Changed line here")
+        assert len(pdf.raw[0].get_drawings()) == before
     finally:
         pdf.close()

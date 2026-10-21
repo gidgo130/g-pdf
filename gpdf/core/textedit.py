@@ -114,14 +114,11 @@ def _unsupported_chars(font: str, text: str) -> str:
     return "".join(sorted({c for c in text if c not in "\n\t" and not f.has_glyph(ord(c))}))
 
 
-def _background(page: pymupdf.Page, rect: pymupdf.Rect) -> tuple[float, float, float]:
-    """Colour just outside the rect's top-left corner (to repaint the hole)."""
-    probe = pymupdf.Rect(rect.x0 - 2, rect.y0 - 2, rect.x0 - 1, rect.y0 - 1) & page.rect
-    if probe.is_empty:
-        return (1, 1, 1)
-    pix = page.get_pixmap(clip=probe, alpha=False, dpi=72)
-    r, g, b = pix.pixel(0, 0)[:3]
-    return (r / 255, g / 255, b / 255)
+def _redact_band(x0: float, x1: float, baseline: float, size: float) -> pymupdf.Rect:
+    """Thin strip in one line's x-height zone: every glyph of that line touches it;
+    glyphs of neighbouring lines and of adjacent spans on the same line don't."""
+    inset = 0.1 * size
+    return pymupdf.Rect(x0 + inset, baseline - 0.45 * size, x1 - inset, baseline - 0.30 * size)
 
 
 def replace_span(doc: PdfDocument, index: int, span: TextSpan, new_text: str) -> None:
@@ -138,9 +135,8 @@ def replace_span(doc: PdfDocument, index: int, span: TextSpan, new_text: str) ->
 
     def mutate(page: pymupdf.Page) -> None:
         _check_editable(page)
-        rect = pymupdf.Rect(span.bbox)
-        fill = _background(page, rect)
-        page.add_redact_annot(rect, fill=fill)
+        rect = _redact_band(span.bbox[0], span.bbox[2], span.origin[1], span.size)
+        page.add_redact_annot(rect, fill=False)
         page.apply_redactions(
             images=pymupdf.PDF_REDACT_IMAGE_NONE,
             graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
@@ -171,8 +167,7 @@ def replace_text(doc: PdfDocument, index: int, old: str, new: str) -> int:
 
     def mutate(p: pymupdf.Page) -> None:
         for rect, s in spans:
-            fill = _background(p, rect)
-            p.add_redact_annot(rect, fill=fill)
+            p.add_redact_annot(_redact_band(rect.x0, rect.x1, s.origin[1], s.size), fill=False)
         p.apply_redactions(
             images=pymupdf.PDF_REDACT_IMAGE_NONE,
             graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
