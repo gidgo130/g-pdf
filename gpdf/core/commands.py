@@ -7,8 +7,9 @@ implementation, split out only to keep ``document.py`` readable.
 
 Undo strategies, cheapest first:
 * reorder / rotate / metadata: remember the inverse, no page data kept;
-* delete / replace / OCR: keep a small standalone PDF of just the affected
-  pages and re-insert it on undo;
+* delete: unlink the page objects from the page tree, relink them on undo;
+* edit / OCR: keep a small standalone PDF of the page and restore its content
+  into the same page object on undo;
 * insert: undo is "delete those pages again".
 """
 
@@ -69,32 +70,80 @@ class RotateCommand(Command):
 
 
 class DeleteCommand(Command):
+    """Unlink pages from the page tree and keep the page objects alive, so
+    undo puts the very same objects back (bookmarks, links, named
+    destinations and structure tags to them stay valid).
+
+    While a page is out of the tree, MuPDF resolves anything still pointing
+    at it to the wrong page, so ``do`` neutralises bookmarks to deleted pages
+    and removes GoTo links to them from the remaining pages, as PyMuPDF's
+    ``delete_pages`` does, recording what it changed for ``undo``.
+
+    Uses PyMuPDF privates (``_delete_page``, ``_remove_toc_item``,
+    ``_reset_page_refs``) and ``mupdf.pdf_insert_page``; re-check if the
+    PyMuPDF pin changes.
+    """
+
     def __init__(self, owner: PdfDocument, indices: Sequence[int]) -> None:
         self.owner = owner
         self.indices = list(indices)  # sorted, unique
         self.label = "Delete pages"
-        self.saved = owner._extract_bytes(self.indices)
-        self.byte_cost = len(self.saved)
+        self.xrefs: list[int] = []
+        self.outline: list[tuple[int, str]] = []  # (item xref, its source)
+        self.annots: list[tuple[int, str]] = []  # (page xref, /Annots as written)
 
     def do(self) -> None:
-        self.owner._raw.delete_pages(self.indices)
+        from gpdf.core.document import annot_xrefs
+
+        raw = self.owner._raw
+        dead = set(self.indices)
+        self.xrefs = [raw.page_xref(i) for i in self.indices]
+        self.outline = []
+        toc = raw.get_toc(simple=False)
+        for i, ox in enumerate(raw.get_outline_xrefs()):
+            if toc[i][2] - 1 in dead:
+                self.outline.append((ox, raw.xref_object(ox)))
+                raw._remove_toc_item(ox)
+        self.annots = []
+        for i in range(raw.page_count):
+            if i in dead:
+                continue  # links ON deleted pages come back with the page
+            gone = {
+                link["xref"] for link in raw[i].get_links()
+                if link["kind"] == pymupdf.LINK_GOTO and link.get("page") in dead
+            }
+            if not gone:
+                continue
+            pxref = raw.page_xref(i)
+            kind, value = raw.xref_get_key(pxref, "Annots")
+            self.annots.append((pxref, value))
+            keep = [x for x in annot_xrefs(raw, pxref) if x not in gone]
+            raw.xref_set_key(
+                pxref, "Annots",
+                "[" + " ".join(f"{x} 0 R" for x in keep) + "]" if keep else "null",
+            )
+        for i in reversed(self.indices):
+            raw._delete_page(i)
+        raw._reset_page_refs()
+        self.byte_cost = sum(len(src) for _, src in self.outline) + sum(
+            len(value) for _, value in self.annots
+        )
         self.owner._structure_changed()
 
     def undo(self) -> None:
-        src = pymupdf.open(stream=self.saved, filetype="pdf")
-        try:
-            # Ascending order: each page goes back to its original position
-            # because every earlier page is already restored.
-            for k, index in enumerate(self.indices):
-                at = -1 if index >= self.owner._raw.page_count else index
-                # join_duplicates keeps form-field names unchanged instead of
-                # renaming them ("name [12]") because the deleted page's field
-                # is still registered in the document's form.
-                self.owner._raw.insert_pdf(
-                    src, from_page=k, to_page=k, start_at=at, join_duplicates=1
-                )
-        finally:
-            src.close()
+        raw = self.owner._raw
+        pdf = pymupdf._as_pdf_document(raw)
+        # Ascending order: each page goes back to its original position
+        # because every earlier page is already restored.
+        for index, xref in zip(self.indices, self.xrefs):
+            pymupdf.mupdf.pdf_insert_page(
+                pdf, index, pymupdf.mupdf.pdf_new_indirect(pdf, xref, 0)
+            )
+        raw._reset_page_refs()
+        for ox, src in self.outline:
+            raw.update_object(ox, src)
+        for pxref, value in self.annots:
+            raw.xref_set_key(pxref, "Annots", value)
         self.owner._structure_changed()
 
 

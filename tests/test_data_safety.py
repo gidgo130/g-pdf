@@ -124,8 +124,7 @@ def _path_failed_edit(doc, check):
 @pytest.mark.parametrize("path", [
     pytest.param(_path_add_text_undo_redo, id="add_text-undo-redo"),
     pytest.param(_path_ocr_replace, id="ocr-replace-page-bytes"),
-    pytest.param(_path_delete_undo, id="delete-undo",
-                 marks=pytest.mark.xfail(strict=True, reason="#1 page swap kills TOC/links")),
+    pytest.param(_path_delete_undo, id="delete-undo"),
     pytest.param(_path_failed_edit, id="failed-edit"),
 ])
 def test_bookmarks_and_links_survive(qapp, tmp_path, path):
@@ -149,6 +148,77 @@ def test_bookmarks_and_links_survive(qapp, tmp_path, path):
 
     try:
         path(doc, check)
+    finally:
+        doc.close()
+
+
+def _assert_nav(doc: PdfDocument, out: Path, stage: str) -> None:
+    """Full _EXPECTED_NAV, live and in a saved copy."""
+    assert _nav_state(doc.raw) == _EXPECTED_NAV, f"live, after {stage}"
+    doc.save_as(out)
+    reopened = pymupdf.open(out)
+    try:
+        assert _nav_state(reopened) == _EXPECTED_NAV, f"saved, after {stage}"
+    finally:
+        reopened.close()
+
+
+def test_delete_non_contiguous_neutralises_then_restores_nav(qapp, tmp_path):
+    doc = PdfDocument(_toc_links_pdf(tmp_path / "nav.pdf"))
+    try:
+        original = _texts(doc.raw)
+        doc.delete_pages([0, 2])  # the p1<->p3 links run between deleted pages
+        raw = doc.raw
+        assert _texts(raw) == [original[1]]
+        assert raw.get_toc(simple=True) == [[1, "One", -1], [1, "Two", 1], [1, "Three", -1]]
+        for i in range(raw.page_count):
+            for link in raw[i].get_links():
+                if link["kind"] == pymupdf.LINK_GOTO:
+                    assert raw[link["page"]].get_text().strip() != original[1]
+        assert doc.undo()
+        assert _texts(doc.raw) == original
+        _assert_nav(doc, tmp_path / "out.pdf", "undo")
+    finally:
+        doc.close()
+
+
+def test_delete_save_undo_restores_nav(qapp, tmp_path):
+    doc = PdfDocument(_toc_links_pdf(tmp_path / "nav.pdf"))
+    try:
+        doc.delete_pages([2])
+        doc.save_as(tmp_path / "deleted.pdf")  # page objects must survive a save
+        assert doc.undo()
+        _assert_nav(doc, tmp_path / "out.pdf", "delete, save, undo")
+    finally:
+        doc.close()
+
+
+def test_delete_undo_redo_undo_restores_nav(qapp, tmp_path):
+    doc = PdfDocument(_toc_links_pdf(tmp_path / "nav.pdf"))
+    try:
+        doc.delete_pages([0, 2])
+        assert doc.undo()
+        assert doc.redo()
+        assert doc.page_count == 1
+        assert doc.undo()
+        _assert_nav(doc, tmp_path / "out.pdf", "delete, undo, redo, undo")
+    finally:
+        doc.close()
+
+
+def test_edit_then_delete_undo_both(qapp, tmp_path):
+    doc = PdfDocument(_toc_links_pdf(tmp_path / "nav.pdf"))
+    try:
+        original = _texts(doc.raw)
+        xref = doc.raw.page_xref(2)
+        textedit.add_text(doc, 2, 72, 150, "added")
+        doc.delete_pages([2])
+        assert doc.undo()
+        assert "added" in doc.raw[2].get_text()
+        assert doc.undo()
+        assert _texts(doc.raw) == original
+        assert doc.raw.page_xref(2) == xref
+        _assert_nav(doc, tmp_path / "out.pdf", "edit, delete, undo both")
     finally:
         doc.close()
 

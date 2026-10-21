@@ -34,8 +34,11 @@ g-pdf is a local PDF workstation: PySide6 (Qt) + PyMuPDF, AGPL-3.0-or-later.
 - Anything that changes a page's appearance must call `_touch` / `_page_changed` so
   `page_token` (the render cache key) changes.
 - Views connect to document signals in `set_document` and must disconnect there.
-- `_replace_page` swaps the page object, which kills bookmarks and links to that page
-  (REVIEW_REPORT finding #1). Don't add new callers until it's fixed.
+- Page objects must keep their xref (bookmarks, links, named destinations and structure
+  tags point at them). Restore page content with `_restore_page`; `DeleteCommand` unlinks
+  and relinks the same objects. This uses PyMuPDF privates (`_delete_page`,
+  `_remove_toc_item`, `_reset_page_refs`, `mupdf.pdf_insert_page`); covered by tests,
+  re-check if the PyMuPDF pin changes.
 - Tests monkeypatch `QMessageBox`; a new modal dialog on a tested code path will hang the
   suite. Keep a Python reference to any `QMimeData` passed to a `QDropEvent`, or it segfaults.
 - Read-aloud must stay fully offline: no network or AI in the speech path.
