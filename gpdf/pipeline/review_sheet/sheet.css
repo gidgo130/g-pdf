@@ -79,6 +79,11 @@ main { padding: 10px 12px 40px; }
   background: var(--cut); border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
   cursor: ew-resize; touch-action: none;
 }
+.frame { user-select: none; }
+.band { position: absolute; left: 0; right: 0; height: calc(12% + 12px); cursor: crosshair; }
+.band.top { top: -12px; }
+.band.bottom { bottom: -12px; }
+.frame.on-line, .frame.on-line .band { cursor: move; }
 .handle.top { top: 0; }
 .handle.bottom { top: 100%; }
 .handle.inactive { background: var(--grey); }

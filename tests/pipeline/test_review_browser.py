@@ -270,3 +270,105 @@ def test_moves_stop_at_the_clamp_without_bending_the_line(browser, sheet, size5)
     page.keyboard.press("Control+Shift+ArrowUp")               # one more step is refused
     assert cut5(page) == c
     assert page.errors == []
+
+
+def main_img(page):
+    b = page.locator("#main-img").bounding_box()
+    return b["x"], b["y"], b["width"], b["height"]
+
+
+def test_click_in_the_top_or_bottom_band_moves_that_end(browser, sheet):
+    page = open_sheet(browser, sheet[2])
+    c0 = cut5(page)
+    x, y, w, h = main_img(page)
+    page.mouse.click(x + 0.3 * w, y + 0.05 * h)                # top band
+    c = cut5(page)
+    assert c[0] == pytest.approx(0.3, abs=0.003) and c[1] == c0[1]
+    page.mouse.click(x + 0.7 * w, y + h + 6)                   # below the image, by the handle
+    c = cut5(page)
+    assert c[0] == pytest.approx(0.3, abs=0.003) and c[1] == pytest.approx(0.7, abs=0.003)
+    page.mouse.click(x + 0.2 * w, y + 0.5 * h)                 # middle of the image: nothing
+    page.mouse.click(x + 0.5 * w, y + 0.5 * h)                 # on the line, no drag: nothing
+    assert cut5(page) == c
+    page.mouse.move(x + 0.4 * w, y + 0.5 * h)                  # a drag in the middle: nothing
+    page.mouse.down()
+    page.mouse.move(x + 0.45 * w, y + 0.5 * h, steps=4)
+    page.mouse.up()
+    assert cut5(page) == c
+    assert page.errors == []
+
+
+def test_drag_the_line_and_turn_it_with_the_wheel_while_held(browser, sheet, size5):
+    page = open_sheet(browser, sheet[2])
+    c0 = cut5(page)
+    x, y, w, h = main_img(page)
+    lx = x + (c0[0] + 0.5 * (c0[1] - c0[0])) * w
+    page.mouse.move(lx + 4, y + 0.5 * h)                       # within the hit zone
+    page.mouse.down()
+    page.mouse.move(lx + 4 + 30, y + 0.5 * h, steps=5)
+    page.mouse.up()
+    c1 = cut5(page)
+    assert c1[0] - c0[0] == pytest.approx(30 / w, abs=0.002)
+    assert c1[1] - c1[0] == pytest.approx(c0[1] - c0[0], abs=1e-6)
+
+    py = round(y + 0.25 * h)                                   # hold the line a quarter down
+    t = (py - y) / h                                           # (events carry whole pixels)
+    px = x + (c1[0] + t * (c1[1] - c1[0])) * w
+    pivot = c1[0] + t * (c1[1] - c1[0])
+    page.mouse.move(px, py)
+    page.mouse.down()
+    page.mouse.wheel(0, -100)                                  # one notch up: clockwise
+    page.mouse.wheel(0, -100)
+    c2 = cut5(page)
+    assert slant(c2, size5) == pytest.approx(slant(c1, size5) - 0.2, abs=1e-3)
+    assert c2[0] + t * (c2[1] - c2[0]) == pytest.approx(pivot, abs=1e-6)
+    page.mouse.wheel(0, 100)                                   # one notch down
+    c3 = cut5(page)
+    assert slant(c3, size5) == pytest.approx(slant(c1, size5) - 0.1, abs=1e-3)
+    page.mouse.up()
+    assert cut5(page) == c3                                    # release: not a click
+    assert page.evaluate("window.scrollY") == 0                # held: the page did not scroll
+
+    page.mouse.wheel(0, 300)                                   # not held: scrolls, no turn
+    page.wait_for_function("window.scrollY > 0")
+    assert cut5(page) == c3
+    assert page.errors == []
+
+
+def test_handle_drags_still_move_one_end_or_with_shift_the_whole_line(browser, sheet):
+    page = open_sheet(browser, sheet[2])
+    c0 = cut5(page)
+    _, _, w, _ = main_img(page)
+    hb = page.locator("#main-frame .handle.top").bounding_box()
+    hx, hy = hb["x"] + hb["width"] / 2, hb["y"] + hb["height"] / 2
+    page.mouse.move(hx, hy)
+    page.mouse.down()
+    page.mouse.move(hx - 20, hy, steps=4)
+    page.mouse.up()
+    c1 = cut5(page)
+    assert c1[0] == pytest.approx(c0[0] - 20 / w, abs=0.002) and c1[1] == c0[1]
+    page.keyboard.down("Shift")
+    page.mouse.move(hx - 20, hy)
+    page.mouse.down()
+    page.mouse.move(hx, hy, steps=4)
+    page.mouse.up()
+    page.keyboard.up("Shift")
+    c2 = cut5(page)
+    assert c2[0] - c1[0] == pytest.approx(20 / w, abs=0.002)
+    assert c2[1] - c2[0] == pytest.approx(c1[1] - c1[0], abs=1e-6)
+    assert page.errors == []
+
+
+def test_close_up_controls_the_same_cut(browser, sheet):
+    page = open_sheet(browser, sheet[2])
+    c0 = cut5(page)
+    x0, x1 = page.evaluate("JSON.parse(document.getElementById('gpdf-data').textContent)"
+                           ".pages[4].close.x")
+    b = page.locator("#close-img").bounding_box()              # tall: only its top is in view
+    page.mouse.click(b["x"] + 0.25 * b["width"], b["y"] + 4)   # top band
+    want = x0 + 0.25 * (x1 - x0)
+    assert cut5(page) == pytest.approx([want, c0[1]], abs=0.003)
+    x, _, w, _ = main_img(page)                                # the main view follows
+    hb = page.locator("#main-frame .handle.top").bounding_box()
+    assert (hb["x"] + hb["width"] / 2 - x) / w == pytest.approx(want, abs=0.003)
+    assert page.errors == []

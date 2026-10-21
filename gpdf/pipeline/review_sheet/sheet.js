@@ -501,46 +501,124 @@
     for (let i = 0; i < N; i++) updateTile(i);
   }
 
-  // ------------------------------------------------------------------ dragging
-  function attachDrag(frame, range) {
-    frame.querySelectorAll(".handle").forEach((hd) => {
-      const end = Number(hd.dataset.end);
-      hd.addEventListener("pointerdown", (e) => {
-        if (e.button !== 0) return;
-        e.preventDefault();
-        hd.setPointerCapture(e.pointerId);
-        const img = frame.querySelector("img").getBoundingClientRect();
-        const [x0, x1] = range();
-        const start = state[cur].cut.slice();
-        const startX = e.clientX;
-        const whole = e.shiftKey;
-        const move = (ev) => {
-          const d = (ev.clientX - startX) / img.width * (x1 - x0);
-          if (whole || ev.shiftKey) {
-            const lo = MIN_CUT - Math.min(start[0], start[1]);
-            const hi = MAX_CUT - Math.max(start[0], start[1]);
-            const dd = Math.min(hi, Math.max(lo, d));
-            state[cur].cut = [start[0] + dd, start[1] + dd];
-          } else {
-            const c = start.slice();
-            c[end] = clamp(start[end] + d);
-            state[cur].cut = c;
-          }
-          renderOverlays();
-        };
-        const up = () => {
-          hd.removeEventListener("pointermove", move);
-          hd.removeEventListener("pointerup", up);
-          hd.removeEventListener("pointercancel", up);
-          autosave();
-          renderAll();
-        };
-        hd.addEventListener("pointermove", move);
-        hd.addEventListener("pointerup", up);
-        hd.addEventListener("pointercancel", up);
-      });
-    });
+  // ------------------------------------------------------------------ mouse
+  // A click (press and release within CLICK_PX) in the top or bottom band of a view puts
+  // that end of the cut there; pressing on the line (or a handle) and dragging moves it,
+  // and the wheel turns it while the button is held.
+  const BAND = 0.12, BAND_OUTSIDE = 12, HIT_PX = 8, CLICK_PX = 3;
+  let drag = null;           // the press in progress
+  let wheelRest = 0;         // fractions of a wheel notch not yet used
+
+  function geometry(frame, range) {
+    const r = frame.querySelector("img").getBoundingClientRect();
+    const [x0, x1] = range();
+    return {
+      r: r,
+      toFrac: (cx) => x0 + (cx - r.left) / r.width * (x1 - x0),
+      toPx: (f) => r.left + (f - x0) / (x1 - x0) * r.width,
+      perPx: (x1 - x0) / r.width,
+    };
   }
+
+  function bandAt(g, cy) {
+    // 0 in the top band, 1 in the bottom band (both reach past the image, where the
+    // handles sit), -1 elsewhere
+    const h = g.r.height * BAND;
+    if (cy >= g.r.top - BAND_OUTSIDE && cy <= g.r.top + h) return 0;
+    if (cy <= g.r.bottom + BAND_OUTSIDE && cy >= g.r.bottom - h) return 1;
+    return -1;
+  }
+
+  function onLine(g, cx, cy) {
+    const c = state[cur].cut;
+    const ax = g.toPx(c[0]), ay = g.r.top, bx = g.toPx(c[1]), by = g.r.bottom;
+    if (cy < ay - HIT_PX || cy > by + HIT_PX) return false;
+    const dist = Math.abs((bx - ax) * (ay - cy) - (by - ay) * (ax - cx)) / Math.hypot(bx - ax, by - ay);
+    return dist <= HIT_PX;
+  }
+
+  function notches(e) {
+    // wheel notches in the event, whatever its deltaMode; small (touchpad) deltas add up
+    const n = e.deltaY / (e.deltaMode === 1 ? 3 : e.deltaMode === 2 ? 1 : 100);
+    if (Math.abs(n) >= 0.5) {
+      wheelRest = 0;
+      return Math.sign(n) * Math.max(1, Math.floor(Math.abs(n) + 0.3));
+    }
+    wheelRest += n;
+    const k = Math.trunc(wheelRest);
+    wheelRest -= k;
+    return k;
+  }
+
+  function attachMouse(frame, range) {
+    frame.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || drag) return;
+      const g = geometry(frame, range);
+      const hd = e.target.closest(".handle");
+      const band = hd ? Number(hd.dataset.end) : bandAt(g, e.clientY);
+      const line = !hd && onLine(g, e.clientX, e.clientY);
+      if (!hd && !line && band < 0) return;
+      e.preventDefault();
+      frame.setPointerCapture(e.pointerId);
+      drag = {
+        frame: frame, g: g, handle: !!hd, line: line, end: band, whole: !hd || e.shiftKey,
+        start: state[cur].cut.slice(), sx: e.clientX, px: e.clientX, py: e.clientY,
+        x: e.clientX, moved: false,
+      };
+    });
+    frame.addEventListener("pointermove", (e) => {
+      if (!drag) {
+        frame.classList.toggle("on-line", onLine(geometry(frame, range), e.clientX, e.clientY));
+        return;
+      }
+      if (drag.frame !== frame) return;
+      drag.x = e.clientX;
+      if (!drag.moved && Math.hypot(e.clientX - drag.px, e.clientY - drag.py) <= CLICK_PX) return;
+      drag.moved = true;
+      if (!drag.handle && !drag.line) return;              // a press in a band only clicks
+      const d = (e.clientX - drag.sx) * drag.g.perPx;
+      if (drag.whole || e.shiftKey) {
+        setCut(shifted(drag.start, d));
+      } else {
+        const c = drag.start.slice();
+        c[drag.end] = clamp(drag.start[drag.end] + d);
+        setCut(c);
+      }
+    });
+    const release = (e) => {
+      if (!drag || drag.frame !== frame) return;
+      const p = drag;
+      drag = null;
+      wheelRest = 0;
+      if (e.type === "pointerup" && !p.moved && !p.handle && p.end >= 0) {
+        const c = state[cur].cut.slice();
+        c[p.end] = clamp(p.g.toFrac(e.clientX));
+        setCut(c);
+      }
+      renderAll();
+    };
+    frame.addEventListener("pointerup", release);
+    frame.addEventListener("pointercancel", release);
+  }
+
+  // Only while the line is held: otherwise the wheel scrolls the page as usual.
+  document.addEventListener("wheel", (e) => {
+    if (!drag || !(drag.handle || drag.line)) return;
+    e.preventDefault();
+    const n = notches(e);
+    if (!n) return;
+    const t =Math.min(1, Math.max(0, (e.clientY - drag.g.r.top) / drag.g.r.height));
+    let c = state[cur].cut;
+    for (let k = 0; k < Math.abs(n); k++) {       // wheel up turns clockwise, like Ctrl+Up
+      const next = rotated(c, -Math.sign(n) * TURN, t);
+      if (!next) break;
+      c = next;
+    }
+    drag.start = c.slice();                        // further dragging moves the turned line
+    drag.sx = drag.x;
+    drag.moved = true;
+    setCut(c);
+  }, { passive: false });
 
   // ------------------------------------------------------------------ wiring
   function typing(t) {
@@ -611,8 +689,8 @@
   }
   window.addEventListener("resize", () => { fitTop(); renderReview(); });
 
-  attachDrag($("main-frame"), () => [0, 1]);
-  attachDrag($("close-frame"), closeRange);
+  attachMouse($("main-frame"), () => [0, 1]);
+  attachMouse($("close-frame"), closeRange);
   buildTiles();
 
   const savedState = readSaved();

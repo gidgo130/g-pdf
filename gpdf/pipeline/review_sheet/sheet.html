@@ -43,11 +43,13 @@
   <section id="review" aria-label="Review">
     <div class="view">
       <div class="frame" id="main-frame">
-        <img id="main-img" alt="">
+        <img id="main-img" alt="" draggable="false">
         <svg class="overlay" id="main-svg" aria-hidden="true">
           <line class="detected"></line>
           <line class="current"></line>
         </svg>
+        <div class="band top" title="Click: put the top of the cut here"></div>
+        <div class="band bottom" title="Click: put the bottom of the cut here"></div>
         <div class="handle top" data-end="0" title="Drag: move the top of the cut (Shift: whole line)"></div>
         <div class="handle bottom" data-end="1" title="Drag: move the bottom of the cut (Shift: whole line)"></div>
       </div>
@@ -55,11 +57,13 @@
     </div>
     <div class="closeup" id="closeup">
       <div class="frame" id="close-frame">
-        <img id="close-img" alt="Gutter close-up">
+        <img id="close-img" alt="Gutter close-up" draggable="false">
         <svg class="overlay" id="close-svg" aria-hidden="true">
           <line class="detected"></line>
           <line class="current"></line>
         </svg>
+        <div class="band top" title="Click: put the top of the cut here"></div>
+        <div class="band bottom" title="Click: put the bottom of the cut here"></div>
         <div class="handle top" data-end="0" title="Drag: move the top of the cut (Shift: whole line)"></div>
         <div class="handle bottom" data-end="1" title="Drag: move the bottom of the cut (Shift: whole line)"></div>
       </div>
@@ -80,9 +84,10 @@
         <button type="button" id="prev"><kbd>&larr;</kbd> Previous</button>
         <button type="button" id="next">Next <kbd>&rarr;</kbd></button>
       </div>
-      <p class="muted small">Drag the round handles to move the cut; Shift-drag moves the whole
-        line. Ctrl+arrows move and turn it, V makes it vertical. The dashed line is the
-        detector's cut.
+      <p class="muted small">Click near the top or bottom edge to put that end of the cut there.
+        Drag a round handle to move one end (Shift: the whole line), or drag the line itself to
+        move all of it; while holding it, the mouse wheel turns it. Ctrl+arrows move and turn
+        it, V makes it vertical. The dashed line is the detector's cut.
         <button type="button" id="keys-toggle" class="link" aria-expanded="false"
           aria-controls="keys"><kbd>?</kbd> keys</button></p>
       <table id="keys" class="small" hidden>
@@ -92,6 +97,7 @@
         <tr><td><kbd>Ctrl</kbd>+<kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>move the cut 0.1% of the width (Shift: 1%)</td></tr>
         <tr><td><kbd>Ctrl</kbd>+<kbd>&uarr;</kbd> <kbd>&darr;</kbd></td><td>turn it 0.1&deg; clockwise / counter-clockwise (Shift: 1&deg;)</td></tr>
         <tr><td><kbd>V</kbd></td><td>vertical through its middle</td></tr>
+        <tr><td>Wheel</td><td>while holding the line: turn it 0.1&deg; per notch</td></tr>
         <tr><td><kbd>R</kbd></td><td>reset to the detector's cut</td></tr>
         <tr><td><kbd>?</kbd></td><td>show / hide this list</td></tr>
       </table>
