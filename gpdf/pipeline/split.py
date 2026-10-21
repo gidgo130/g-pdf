@@ -116,6 +116,17 @@ def load_decisions(decisions, src, pages, force) -> Decisions:
     return decisions
 
 
+def with_review(fresh: Decisions, saved: Decisions) -> Decisions:
+    """``fresh`` (current detector verdicts, flags and reasons) with the owner's actions,
+    cuts and reviewed flags from ``saved``: a saved file's "detected" may be stale (made
+    by an older g-pdf). A split saved without a cut keeps the saved detector cut, the
+    line the owner reviewed."""
+    for d, s in zip(fresh.pages, saved.pages):
+        d.action, d.reviewed = s.action, s.reviewed
+        d.cut = s.cut if s.cut is not None or s.action != SPLIT else s.detected.cut
+    return fresh
+
+
 def _split_page(out, pno, page, cut, result):
     """Insert the two halves of ``page`` at out[pno], out[pno + 1]; False if it cannot split."""
     src, why = images.examine(page)
@@ -154,7 +165,9 @@ def split_document(src, out, decisions=None, accept_flagged=False, force=False,
 
     Without ``decisions`` the detector's guesses are used for unflagged pages. With a
     decisions file (path or Decisions), reviewed entries are applied exactly; unreviewed
-    flagged pages stay whole unless ``accept_flagged``. ``force`` allows overwriting
+    flagged pages stay whole unless ``accept_flagged``. The detector runs either way:
+    which pages are flagged, and the reasons, come from it, not from the file's
+    possibly stale "detected" (see with_review). ``force`` allows overwriting
     ``out`` and a decisions file whose source stamp no longer matches.
     ``progress(done, total)`` is called while detecting and while splitting.
     """
@@ -171,7 +184,8 @@ def split_document(src, out, decisions=None, accept_flagged=False, force=False,
         if decisions is None:
             decisions = make_decisions(src, doc, analyze(doc, progress))
         else:
-            decisions = load_decisions(decisions, src, len(doc), force)
+            saved = load_decisions(decisions, src, len(doc), force)
+            decisions = with_review(make_decisions(src, doc, analyze(doc, progress)), saved)
         report = _build(doc, src, out, decisions, accept_flagged, progress)
     finally:
         doc.close()

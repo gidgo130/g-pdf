@@ -3,32 +3,25 @@
 1-bit leftover images and a vector line, rendered and split as one 1-bit page."""
 
 import copy
+import json
+import re
+import shutil
 
 import pytest
 
-np =pytest.importorskip("numpy")
+np = pytest.importorskip("numpy")
 Image = pytest.importorskip("PIL.Image")
 import pymupdf  # noqa: E402
 
+from gpdf import cli  # noqa: E402
 from gpdf.pipeline import images, review, split  # noqa: E402
-from gpdf.pipeline.report import KEEP, SPLIT  # noqa: E402
+from gpdf.pipeline.report import KEEP, SPLIT, UNREVIEWED  # noqa: E402
 
 from . import synth  # noqa: E402
 from .test_split import corr, render  # noqa: E402
 
 PIECED, RGB, SMASK, RED = range(4)
 FLAT = {"dpi": 300, "images": 3, "visible_text_spans": 2 * synth.PIECED_LINES, "drawings": 1}
-
-
-@pytest.fixture(scope="module")
-def pieced(tmp_path_factory):
-    path = tmp_path_factory.mktemp("flatten") / "pieced.pdf"
-    doc = pymupdf.open()
-    for variant in (None, "rgb", "smask", "red"):
-        synth.add_pieced_spread(doc, variant)
-    doc.save(str(path), garbage=3, deflate=True)
-    doc.close()
-    return path
 
 
 @pytest.fixture(scope="module")
@@ -146,3 +139,72 @@ def test_anti_aliasing_is_restored_even_when_the_render_fails(pieced, monkeypatc
     finally:
         pymupdf.TOOLS.set_aa_level(before["graphics"])
         pymupdf.mupdf.fz_set_text_aa_level(before["text"])
+
+
+# decisions saved by an older g-pdf, when the pieced page could not be split
+STALE = {"is_spread": True, "cut": [0.5, 0.5], "confidence": 0.6, "flagged": True,
+         "reasons": ["cannot split: 3 images on the page (need exactly one)"]}
+
+
+@pytest.fixture
+def stale(pieced, tmp_path):
+    """(source copy, outdir, decisions path, decisions dict) after a dry run, with the
+    pieced page's "detected" made stale."""
+    src = tmp_path / "pieced.pdf"
+    shutil.copy(pieced, src)
+    outdir = tmp_path / "out"
+    assert cli.main(["split", str(src), "-o", str(outdir), "--dry-run", "--no-sheet"]) == 0
+    path = outdir / "pieced_split.decisions.json"
+    dec = json.loads(path.read_text("utf-8"))
+    dec["pages"][PIECED]["detected"] = dict(STALE)
+    path.write_text(json.dumps(dec, indent=1), "utf-8")
+    return src, outdir, path, dec
+
+
+def sheet_data(path):
+    text = path.read_text("utf-8")
+    (block,) = re.findall(r'<script type="application/json" id="gpdf-data">(.*?)</script>',
+                          text, re.S)
+    return json.loads(block)
+
+
+def test_sheet_only_uses_fresh_detection_with_the_saved_review(stale):
+    src, outdir, path, dec = stale
+    dec["pages"][PIECED].update(action="keep", cut=None, reviewed=False)
+    path.write_text(json.dumps(dec, indent=1), "utf-8")
+    before = path.read_bytes()
+    assert cli.main(["split", str(src), "-o", str(outdir), "--sheet-only",
+                     "--decisions", str(path)]) == 0
+    assert path.read_bytes() == before
+    data = sheet_data(outdir / "pieced_split.review.html")
+    assert data["pages"][PIECED]["splittable"]
+    p = data["decisions"]["pages"][PIECED]
+    assert (p["action"], p["cut"], p["reviewed"]) == ("keep", None, False)   # saved review
+    assert p["detected"]["reasons"] == [                                      # fresh
+        "will be flattened at 300 dpi: 3 images, visible text, 1 drawing"]
+    assert p["detected"]["flagged"]
+    for k in (RGB, SMASK, RED):
+        assert not data["pages"][k]["splittable"]
+
+
+def test_real_run_uses_fresh_detection_with_the_saved_review(stale, tmp_path):
+    src, outdir, path, dec = stale
+    dec["pages"][PIECED].update(action="split", cut=[0.49, 0.5], reviewed=True)
+    path.write_text(json.dumps(dec, indent=1), "utf-8")
+    rep = split.split_document(src, outdir / "a.pdf", decisions=path)
+    p = rep.pages[PIECED]
+    assert (p.action, p.cut, p.flattened) == (SPLIT, [0.49, 0.5], FLAT)
+    assert p.reasons == ["will be flattened at 300 dpi: 3 images, visible text, 1 drawing"]
+
+    # a stale "detector was sure" does not let an unreviewed flagged page through
+    dec["pages"][PIECED]["detected"]["flagged"] = False
+    dec["pages"][PIECED].update(reviewed=False)
+    path.write_text(json.dumps(dec, indent=1), "utf-8")
+    rep = split.split_document(src, outdir / "b.pdf", decisions=path)
+    assert rep.pages[PIECED].left_whole == UNREVIEWED and rep.pages[PIECED].flagged
+
+    # a split saved without a cut takes the saved detector cut (the line the owner saw)
+    dec["pages"][PIECED].update(cut=None, reviewed=True)
+    path.write_text(json.dumps(dec, indent=1), "utf-8")
+    rep = split.split_document(src, outdir / "c.pdf", decisions=path)
+    assert rep.pages[PIECED].cut == STALE["cut"]

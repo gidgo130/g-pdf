@@ -208,8 +208,7 @@ def _sheet_only(args, split, src, stem) -> int:
     decisions, report = split.dry_run(src, progress=_progress("detecting"))
     if saved:
         saved = split.load_decisions(saved, src, len(decisions.pages), args.force)
-        for d, s in zip(decisions.pages, saved.pages):
-            d.action, d.cut, d.reviewed = s.action, s.cut, s.reviewed
+        decisions = split.with_review(decisions, saved)
     print(f"{src.name}: {report.pages_in} pages, {len(report.flagged)} flagged "
           f"({report.seconds:.1f} s)")
     if saved:

@@ -372,3 +372,31 @@ def test_close_up_controls_the_same_cut(browser, sheet):
     hb = page.locator("#main-frame .handle.top").bounding_box()
     assert (hb["x"] + hb["width"] / 2 - x) / w == pytest.approx(want, abs=0.003)
     assert page.errors == []
+
+
+def test_saving_a_sheet_made_from_stale_decisions_writes_fresh_detection(browser, pieced,
+                                                                        tmp_path):
+    src = tmp_path / "pieced.pdf"
+    shutil.copy(pieced, src)
+    outdir = tmp_path / "out"
+    assert cli.main(["split", str(src), "-o", str(outdir), "--dry-run", "--no-sheet"]) == 0
+    path = outdir / "pieced_split.decisions.json"
+    dec = json.loads(path.read_text("utf-8"))
+    fresh = dec["pages"][0]["detected"]
+    dec["pages"][0]["detected"] = dict(fresh, reasons=["cannot split: 3 images on the page "
+                                                       "(need exactly one)"])
+    path.write_text(json.dumps(dec), "utf-8")
+    assert cli.main(["split", str(src), "-o", str(outdir), "--sheet-only",
+                     "--decisions", str(path)]) == 0
+    page = open_sheet(browser, outdir / "pieced_split.review.html", NO_PICKER)
+    assert page.evaluate("gpdfSheet.current()") == 1
+    assert not page.locator("#act-split").is_disabled()          # splittable now
+    page.keyboard.press("s")
+    with page.expect_download() as dl:
+        page.click("#save")
+    dl.value.save_as(tmp_path / "saved.json")
+    saved = json.loads((tmp_path / "saved.json").read_text("utf-8"))
+    assert saved["pages"][0]["detected"] == fresh
+    assert (saved["pages"][0]["action"], saved["pages"][0]["reviewed"]) == ("split", True)
+    Decisions.load(tmp_path / "saved.json")
+    assert page.errors == []
