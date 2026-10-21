@@ -7,12 +7,17 @@ g-pdf is a local PDF workstation: PySide6 (Qt) + PyMuPDF, AGPL-3.0-or-later.
 - Activate: `.\.venv\Scripts\Activate.ps1` (Python 3.14). Install: `python -m pip install -e ".[dev]"`.
 - Test: `python -m pytest -q` (Qt runs offscreen via `tests/conftest.py`). Run it before every commit.
 - Launch: `python -m gpdf [files]`. Hand-test files live in `private/manual/`.
+- `tests/realinput/` drives a real X11 mouse (xdotool under Xvfb). It runs only in CI and is
+  skipped on Windows; add a test there for any new drag/drop or mouse gesture.
 - PyMuPDF is pinned `<2` (2.x bundles onnxruntime + ML models). Don't add or upgrade
   dependencies without asking.
 
 ## Git
-- Small commits: one fix plus its test. Show the diff and wait for approval before
-  committing. Don't push; the owner pushes.
+- Small commits: one fix plus its test. Commit on your own once the full suite passes;
+  end with a list of commits (hash, what changed, tests added). Ask first only for:
+  changes over ~30 lines without an approved plan, changes to the deliberate design
+  choices below, dependency changes, deleting files. Don't push; the owner pushes and
+  reviews CI (GitHub Actions: Windows suite + Linux real-mouse tests).
 - Never stage `private/`, PDFs (except `tests/fixtures/`), tessdata, `*.traineddata` or
   binaries. Check `git status` before committing.
 - `HANDOFF.md` and `REVIEW_PROMPT.md` are gitignored personal notes; don't commit them.
