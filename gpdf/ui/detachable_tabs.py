@@ -13,6 +13,7 @@ How it works
 * If nobody took the widget when the drag ends (the drop landed outside every
   tab area), the source emits ``detach_requested`` and the window builds a new
   window for it.
+  Dropping a tab on its *own* window's page area also detaches it.
 
 This module only does gestures and signalling. Actually moving a tab between
 windows lives in ``MainWindow`` so it can be unit-tested without a mouse.
@@ -218,7 +219,12 @@ class DetachableTabWidget(QTabWidget):
         mime = event.mimeData()
         tab = take_dragged_tab(mime)
         if tab is not None:
-            self.tab_dropped.emit(tab, -1)
+            if self.indexOf(tab) >= 0:
+                # Own tab dropped on its own page area: detach, as browsers do.
+                where = self.mapToGlobal(event.position().toPoint())
+                self.detach_requested.emit(tab, where)
+            else:
+                self.tab_dropped.emit(tab, -1)
             event.acceptProposedAction()
             return
         paths = dropped_pdf_paths(mime)
