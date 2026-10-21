@@ -101,6 +101,11 @@ main { padding: 10px 12px 40px; }
 .warn { background: var(--warn-bg); padding: 4px 8px; border-radius: 6px; margin: 0 0 8px; }
 .warn[hidden] { display: none; }
 .actions { display: grid; gap: 6px; margin-bottom: 8px; }
+button.link { border: 0; background: none; padding: 0; color: var(--accent); font-size: 12px; }
+#keys { border-collapse: collapse; margin: 0 0 8px; }
+#keys[hidden] { display: none; }
+#keys td { padding: 2px 6px 2px 0; vertical-align: top; }
+#keys td:first-child { white-space: nowrap; }
 .actions.nav { grid-template-columns: 1fr 1fr; }
 
 #sheet h2 { font-size: 16px; margin: 24px 0 8px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }

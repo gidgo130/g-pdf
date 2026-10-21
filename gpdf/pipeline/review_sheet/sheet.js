@@ -250,6 +250,63 @@
     renderAll();
   }
 
+  // ------------------------------------------------------------------ moving the cut
+  const NUDGE = 0.001, NUDGE_BIG = 0.01;   // fractions of the page width
+  const TURN = 0.1, TURN_BIG = 1;          // degrees, in display geometry
+
+  const inRange = (c) => c.every((v) => v >= MIN_CUT - 1e-9 && v <= MAX_CUT + 1e-9);
+
+  function setCut(c) {
+    state[cur].cut = c;
+    autosave();
+    renderOverlays();
+  }
+
+  function shifted(c, d) {
+    // the whole line moved by d, stopping where an end meets the clamp
+    const lo = MIN_CUT - Math.min(c[0], c[1]), hi = MAX_CUT - Math.max(c[0], c[1]);
+    const dd = d > 0 ? Math.min(d, Math.max(0, hi)) : Math.max(d, Math.min(0, lo));
+    return [c[0] + dd, c[1] + dd];
+  }
+
+  function rotated(c, deg, t) {
+    // the line turned clockwise by deg about its point at height t (0 top, 1 bottom);
+    // null if an end would pass the clamp
+    const v = VIEW[cur], k = v.width / v.height;
+    const a = Math.atan((c[1] - c[0]) * k) - deg * Math.PI / 180;
+    const d = Math.tan(a) / k, p = c[0] + t * (c[1] - c[0]);
+    const n = [p - t * d, p + (1 - t) * d];
+    return inRange(n) ? n : null;
+  }
+
+  function vertical() {
+    const c = state[cur].cut, m = (c[0] + c[1]) / 2;
+    setCut([m, m]);
+  }
+
+  function cutKey(e) {
+    // Ctrl+Left/Right move the line, Ctrl+Up/Down turn it (clockwise / counter-clockwise)
+    // about its midpoint; Shift takes bigger steps. True if the key was one of these.
+    if (!e.ctrlKey || e.altKey || e.metaKey) return false;
+    const c = state[cur].cut, big = e.shiftKey;
+    switch (e.key) {
+      case "ArrowLeft": setCut(shifted(c, -(big ? NUDGE_BIG : NUDGE))); return true;
+      case "ArrowRight": setCut(shifted(c, big ? NUDGE_BIG : NUDGE)); return true;
+      case "ArrowUp": case "ArrowDown": {
+        const n = rotated(c, (e.key === "ArrowUp" ? 1 : -1) * (big ? TURN_BIG : TURN), 0.5);
+        if (n) setCut(n);
+        return true;
+      }
+      default: return false;
+    }
+  }
+
+  function toggleKeys() {
+    const box = $("keys");
+    box.hidden = !box.hidden;
+    $("keys-toggle").setAttribute("aria-expanded", String(!box.hidden));
+  }
+
   function visible(i) {
     if (filter === "flagged") return flagged(i);
     if (filter === "changed") return changed(i);
@@ -491,13 +548,17 @@
   }
 
   document.addEventListener("keydown", (e) => {
-    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || typing(e.target)) return;
+    if (e.defaultPrevented || typing(e.target)) return;
+    if (cutKey(e)) { e.preventDefault(); return; }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.target && e.target.tagName === "BUTTON" && (e.key === "Enter" || e.key === " ")) return;
     switch (e.key) {
       case "s": case "S": decide("split"); break;
       case "k": case "K": decide("keep"); break;
       case "Enter": decide(splittable(cur) ? state[cur].action : "keep"); break;
       case "r": case "R": resetCut(); break;
+      case "v": case "V": vertical(); break;
+      case "?": toggleKeys(); break;
       case "ArrowLeft": step(-1); break;
       case "ArrowRight": step(1); break;
       default: return;
@@ -509,6 +570,7 @@
   $("act-keep").addEventListener("click", () => decide("keep"));
   $("act-accept").addEventListener("click", () => decide(splittable(cur) ? state[cur].action : "keep"));
   $("act-reset").addEventListener("click", resetCut);
+  $("keys-toggle").addEventListener("click", toggleKeys);
   $("prev").addEventListener("click", () => step(-1));
   $("next").addEventListener("click", () => step(1));
   $("save").addEventListener("click", save);

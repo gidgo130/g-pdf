@@ -5,6 +5,7 @@ restore and load decisions, then run the split with the saved file.
 Skipped unless Playwright and its Chromium are installed (CI installs them on Linux)."""
 
 import json
+import math
 import shutil
 
 import pytest
@@ -12,6 +13,7 @@ import pytest
 pytest.importorskip("numpy")
 pytest.importorskip("PIL")
 sync_api = pytest.importorskip("playwright.sync_api")
+import pymupdf  # noqa: E402
 
 from gpdf import cli  # noqa: E402
 from gpdf.pipeline import split  # noqa: E402
@@ -180,4 +182,91 @@ def test_kept_spread_shows_kept_whole_not_single(browser, sheet):
     page.keyboard.press("k")                                   # p. 6: called single, kept
     assert badges(page, 5) == ["reviewed", "changed", "kept whole"]
     assert badges(page, 6) == ["reviewed", "single"]
+    assert page.errors == []
+
+
+# cut controls, all on p. 5 (flagged, split by the detector, so the saved file has its cut)
+def cut5(page):
+    return state(page)["pages"][4]["cut"]
+
+
+def slant(cut, size):
+    w, h = size
+    return math.degrees(math.atan((cut[1] - cut[0]) * w / h))
+
+
+@pytest.fixture
+def size5(sheet):
+    with pymupdf.open(sheet[0]) as doc:
+        r = doc[4].rect
+    return r.width, r.height
+
+
+def test_ctrl_arrows_move_the_cut_and_plain_arrows_navigate(browser, sheet, tmp_path):
+    src, outdir, html = sheet
+    page = open_sheet(browser, html, NO_PICKER)
+    c0 = cut5(page)
+    page.keyboard.press("Control+ArrowRight")
+    assert cut5(page) == pytest.approx([c0[0] + 0.001, c0[1] + 0.001], abs=1e-6)
+    page.keyboard.press("Control+Shift+ArrowRight")
+    assert cut5(page) == pytest.approx([c0[0] + 0.011, c0[1] + 0.011], abs=1e-6)
+    page.keyboard.press("Control+ArrowLeft")
+    assert cut5(page) == pytest.approx([c0[0] + 0.010, c0[1] + 0.010], abs=1e-6)
+    assert f"{c0[0] + 0.010:.3f} / {c0[1] + 0.010:.3f}" in page.inner_text("#facts")
+    assert page.evaluate("gpdfSheet.current()") == 5 and page.evaluate("window.scrollY") == 0
+    page.keyboard.press("ArrowRight")
+    assert page.evaluate("gpdfSheet.current()") == 6
+    page.keyboard.press("ArrowLeft")
+    page.keyboard.press("Enter")                               # p. 5: split as shown
+
+    path = save(page, tmp_path / "d.json")                     # still a valid decisions file
+    rep = split.split_document(src, outdir / "mini_split.pdf", decisions=Decisions.load(path))
+    assert rep.pages[4].action == SPLIT
+    assert rep.pages[4].cut == pytest.approx([c0[0] + 0.010, c0[1] + 0.010], abs=1e-6)
+    assert page.errors == []
+
+
+def test_ctrl_up_down_turn_about_the_midpoint_and_v_straightens(browser, sheet, size5):
+    page = open_sheet(browser, sheet[2])
+    c0 = cut5(page)
+    page.keyboard.press("Control+ArrowUp")                     # clockwise: slant decreases
+    c1 = cut5(page)
+    assert slant(c1, size5) == pytest.approx(slant(c0, size5) - 0.1, abs=1e-3)
+    assert sum(c1) / 2 == pytest.approx(sum(c0) / 2, abs=1e-6)
+    page.keyboard.press("Control+Shift+ArrowDown")
+    c2 = cut5(page)
+    assert slant(c2, size5) == pytest.approx(slant(c0, size5) + 0.9, abs=1e-3)
+    assert sum(c2) / 2 == pytest.approx(sum(c0) / 2, abs=1e-6)
+    page.keyboard.press("v")
+    m = sum(c0) / 2
+    assert cut5(page) == pytest.approx([m, m], abs=1e-6)
+    assert "+0.00 deg" in page.inner_text("#facts")
+    page.focus("#command")                                     # typing in a field: ignored
+    page.keyboard.press("Control+ArrowRight")
+    assert cut5(page) == pytest.approx([m, m], abs=1e-6)
+    page.locator("#command").blur()
+    assert not page.locator("#keys").is_visible()
+    page.keyboard.press("?")
+    assert page.locator("#keys").is_visible()
+    page.keyboard.press("?")
+    assert not page.locator("#keys").is_visible()
+    assert page.errors == []
+
+
+def test_moves_stop_at_the_clamp_without_bending_the_line(browser, sheet, size5):
+    page = open_sheet(browser, sheet[2])
+    page.keyboard.press("Control+ArrowUp")                     # give it some slant
+    c0 = cut5(page)
+    for _ in range(80):
+        page.keyboard.press("Control+Shift+ArrowRight")
+    c = cut5(page)
+    assert max(c) == pytest.approx(0.95, abs=1e-6)
+    assert c[1] - c[0] == pytest.approx(c0[1] - c0[0], abs=1e-6)
+    page.keyboard.press("r")
+    for _ in range(120):                                       # turn until an end meets it
+        page.keyboard.press("Control+Shift+ArrowUp")
+    c = cut5(page)
+    assert max(c) <= 0.95 and min(c) >= 0.05 and abs(slant(c, size5)) > 30
+    page.keyboard.press("Control+Shift+ArrowUp")               # one more step is refused
+    assert cut5(page) == c
     assert page.errors == []

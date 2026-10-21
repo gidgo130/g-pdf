@@ -81,7 +81,20 @@
         <button type="button" id="next">Next <kbd>&rarr;</kbd></button>
       </div>
       <p class="muted small">Drag the round handles to move the cut; Shift-drag moves the whole
-        line. The dashed line is the detector's cut.</p>
+        line. Ctrl+arrows move and turn it, V makes it vertical. The dashed line is the
+        detector's cut.
+        <button type="button" id="keys-toggle" class="link" aria-expanded="false"
+          aria-controls="keys"><kbd>?</kbd> keys</button></p>
+      <table id="keys" class="small" hidden>
+        <tr><td><kbd>S</kbd> / <kbd>K</kbd></td><td>split / keep whole, then next</td></tr>
+        <tr><td><kbd>Enter</kbd></td><td>accept as shown</td></tr>
+        <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>previous / next page</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>move the cut 0.1% of the width (Shift: 1%)</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>&uarr;</kbd> <kbd>&darr;</kbd></td><td>turn it 0.1&deg; clockwise / counter-clockwise (Shift: 1&deg;)</td></tr>
+        <tr><td><kbd>V</kbd></td><td>vertical through its middle</td></tr>
+        <tr><td><kbd>R</kbd></td><td>reset to the detector's cut</td></tr>
+        <tr><td><kbd>?</kbd></td><td>show / hide this list</td></tr>
+      </table>
     </aside>
   </section>
 
