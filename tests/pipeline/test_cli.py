@@ -4,6 +4,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -192,3 +193,67 @@ def test_missing_prep_extra_gives_install_hint(tmp_path):
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 1
     assert 'pip install "g-pdf[prep]"' in r.stderr
+
+
+def sheet_decisions(path):
+    text = path.read_text("utf-8")
+    (block,) = re.findall(r'<script type="application/json" id="gpdf-data">(.*?)</script>',
+                          text, re.S)
+    return json.loads(block)
+
+
+def fingerprint(*paths):
+    return [(sha(p), os.stat(p).st_mtime_ns) for p in paths]
+
+
+def test_sheet_only_writes_only_the_sheet_showing_the_saved_review(src, dry, capsys):
+    outdir, dec = dry
+    dec_path = outdir / "mini_split.decisions.json"
+    rep_path = outdir / "mini_split.report.json"
+    sheet = outdir / "mini_split.review.html"
+    prefilled = dec_path.read_text("utf-8")
+    pages = dec["pages"]                                       # a saved review
+    pages[1].update(action="keep")
+    pages[4].update(reviewed=True, cut=[0.48, 0.5])
+    pages[6].update(action="split", cut=[0.3, 0.32], reviewed=True)
+    dec_path.write_text(json.dumps(dec, indent=1), "utf-8")
+    before = fingerprint(dec_path, rep_path)
+    sheet.unlink()
+    capsys.readouterr()
+
+    assert run(src, outdir, "--sheet-only", "--decisions", str(dec_path)) == 0
+    assert fingerprint(dec_path, rep_path) == before
+    assert sorted(os.listdir(outdir)) == ["mini_split.decisions.json", "mini_split.report.json",
+                                          "mini_split.review.html"]
+    data = sheet_decisions(sheet)
+    assert data["decisions"] == dec                            # incl. detector and stamp
+    assert data["source_mtime_ns_text"] == str(dec["source_mtime_ns"])
+    out = capsys.readouterr().out
+    assert "showing:" in out and "2 / 3 flagged reviewed" in out and "sheet:" in out
+
+    assert run(src, outdir, "--sheet-only") == 0               # no file: the detector's guess
+    assert fingerprint(dec_path, rep_path) == before
+    assert sheet_decisions(sheet)["decisions"] == json.loads(prefilled)
+
+
+def test_sheet_only_refuses_stale_or_bad_decisions_and_dry_run(src, dry, tmp_path, capsys):
+    outdir, dec = dry
+    dec_path = outdir / "mini_split.decisions.json"
+    sheet = outdir / "mini_split.review.html"
+    before = fingerprint(dec_path, sheet)
+    st = os.stat(src)
+    os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+    assert run(src, outdir, "--sheet-only", "--decisions", str(dec_path)) == 1
+    assert "source changed" in capsys.readouterr().err
+    dec["pages"].pop()
+    short = tmp_path / "short.json"
+    short.write_text(json.dumps(dec), "utf-8")
+    assert run(src, outdir, "--sheet-only", "--decisions", str(short), "--force") == 1
+    assert "decisions file has 6 pages, the source has 7" in capsys.readouterr().err
+    assert fingerprint(dec_path, sheet) == before              # nothing written
+    for other in ("--dry-run", "--no-sheet", "--accept-flagged"):
+        with pytest.raises(SystemExit) as e:
+            run(src, outdir, "--sheet-only", other)
+        assert e.value.code == 1
+        assert f"--sheet-only cannot be used with {other}" in capsys.readouterr().err
+    assert fingerprint(dec_path, sheet) == before

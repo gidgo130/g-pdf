@@ -4,6 +4,8 @@
     gpdf-cli split book.pdf -o OUTDIR --dry-run     # detect; write report, decisions file
                                                     # and the review sheet (.review.html)
     gpdf-cli split book.pdf -o OUTDIR --decisions OUTDIR/book_split.decisions.json
+    gpdf-cli split book.pdf -o OUTDIR --sheet-only [--decisions FILE]
+                                                    # rewrite only the review sheet
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
 reviewed (or spreads could not be split); 1 error.
@@ -47,6 +49,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "<name>_split.review.html (open it in a browser)")
     s.add_argument("--no-sheet", action="store_true",
                    help="dry run: don't write the review sheet")
+    s.add_argument("--sheet-only", action="store_true",
+                   help="detect and write only the review sheet <name>_split.review.html, "
+                        "never the report or decisions file; with --decisions the sheet "
+                        "opens showing that file's review")
     s.add_argument("--decisions", metavar="FILE", type=Path,
                    help="apply a reviewed decisions file")
     s.add_argument("--accept-flagged", action="store_true",
@@ -66,7 +72,13 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(errors="replace")
         except (AttributeError, ValueError):
             pass
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.sheet_only:
+        for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
+                         ("--report", args.report), ("--accept-flagged", args.accept_flagged)):
+            if on:
+                parser.error(f"--sheet-only cannot be used with {flag}")
     try:
         from gpdf.pipeline import split
         from gpdf.pipeline.report import DecisionsError
@@ -109,6 +121,8 @@ def _split(args, split) -> int:
     out = args.outdir / f"{stem}_split.pdf"
     if args.dry_run:
         return _dry_run(args, split, src, stem)
+    if args.sheet_only:
+        return _sheet_only(args, split, src, stem)
     report = split.split_document(src, out, decisions=args.decisions,
                                   accept_flagged=args.accept_flagged, force=args.force,
                                   progress=_progress("pages"))
@@ -150,6 +164,35 @@ def _dry_run(args, split, src, stem) -> int:
         print("review: set \"action\" (split/keep), optionally \"cut\", and \"reviewed\": true; "
               "then run again with --decisions")
         return EXIT_OK
+    _write_sheet(args, split, src, stem, decisions)
+    print("review: open the sheet in a browser, review the flagged pages and Save decisions; "
+          "then run again with --decisions")
+    return EXIT_OK
+
+
+def _sheet_only(args, split, src, stem) -> int:
+    """Detect and write only the review sheet. With --decisions it shows that file's
+    actions, cuts and reviewed flags (checked as for a real run); the detector's verdicts
+    stay fresh, so "changed" still compares against the detector."""
+    from gpdf.pipeline.report import Decisions
+
+    saved = Decisions.load(args.decisions) if args.decisions else None
+    decisions, report = split.dry_run(src, progress=_progress("detecting"))
+    if saved:
+        saved = split.load_decisions(saved, src, len(decisions.pages), args.force)
+        for d, s in zip(decisions.pages, saved.pages):
+            d.action, d.cut, d.reviewed = s.action, s.cut, s.reviewed
+    print(f"{src.name}: {report.pages_in} pages, {len(report.flagged)} flagged "
+          f"({report.seconds:.1f} s)")
+    if saved:
+        reviewed = sum(d.reviewed for d in decisions.pages if d.detected.flagged)
+        print(f"showing:   {args.decisions} ({reviewed} / {len(report.flagged)} flagged "
+              "reviewed; the file is not changed)")
+    _write_sheet(args, split, src, stem, decisions)
+    return EXIT_OK
+
+
+def _write_sheet(args, split, src, stem, decisions):
     sheet = args.outdir / f"{stem}_split.review.html"
     _check_writable(split, src, sheet, force=True)        # holds no state: always replaced
     import pymupdf
@@ -160,9 +203,6 @@ def _dry_run(args, split, src, stem) -> int:
     with pymupdf.open(src) as doc:
         size = review.write_review_sheet(doc, decisions, sheet, stem, _progress("sheet"))
     print(f"sheet:     {sheet} ({size / 1e6:.1f} MB, {time.perf_counter() - t0:.1f} s)")
-    print("review: open the sheet in a browser, review the flagged pages and Save decisions; "
-          "then run again with --decisions")
-    return EXIT_OK
 
 
 def _print_run(report, src, out):

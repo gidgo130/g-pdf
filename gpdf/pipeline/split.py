@@ -102,12 +102,14 @@ def dry_run(src, progress=None) -> tuple[Decisions, SplitReport]:
                                   seconds=round(time.perf_counter() - t0, 2))
 
 
-def _load_decisions(decisions, src, doc, force):
+def load_decisions(decisions, src, pages, force) -> Decisions:
+    """``decisions`` (path or Decisions), checked against ``src`` and its page count; a
+    stale source stamp is refused unless ``force``."""
     if not isinstance(decisions, Decisions):
         decisions = Decisions.load(decisions)
-    if len(decisions.pages) != len(doc):
+    if len(decisions.pages) != pages:
         raise DecisionsError(f"decisions file has {len(decisions.pages)} pages, "
-                             f"the source has {len(doc)}")
+                             f"the source has {pages}")
     if (decisions.source_size, decisions.source_mtime_ns) != stamp(src) and not force:
         raise DecisionsError("the source changed since the decisions file was made (size or "
                              "modification time differ): run --dry-run again, or pass --force")
@@ -168,7 +170,7 @@ def split_document(src, out, decisions=None, accept_flagged=False, force=False,
         if decisions is None:
             decisions = make_decisions(src, doc, analyze(doc, progress))
         else:
-            decisions = _load_decisions(decisions, src, doc, force)
+            decisions = load_decisions(decisions, src, len(doc), force)
         report = _build(doc, src, out, decisions, accept_flagged, progress)
     finally:
         doc.close()
