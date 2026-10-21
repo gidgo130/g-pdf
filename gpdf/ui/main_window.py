@@ -275,15 +275,19 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, APP_NAME, "\n\n".join(errors))
 
     def open_path(self, path: str | Path) -> DocumentTab:
-        """Open a PDF in a new tab here, or focus it if it's already open anywhere."""
+        """Open a PDF in a new tab here; if it's already open, select it here,
+        moving its tab over first when it lives in another window."""
         resolved = Path(path).expanduser().resolve()
         for window in MainWindow.windows():
             for i in range(window.tabs.count()):
                 tab = window.tabs.widget(i)
                 if isinstance(tab, DocumentTab) and tab.path.resolve() == resolved:
-                    window.tabs.setCurrentIndex(i)
-                    window.raise_()
-                    window.activateWindow()
+                    if window is self:
+                        self.tabs.setCurrentIndex(i)
+                        self.raise_()
+                        self.activateWindow()
+                    else:
+                        self.move_tab_here(tab)  # selects, raises and activates
                     return tab
 
         tab = DocumentTab(PdfDocument(resolved))  # may raise PdfOpenError

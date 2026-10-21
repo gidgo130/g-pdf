@@ -66,14 +66,48 @@ def test_open_adds_tab_and_updates_chrome(qapp, make_pdf):
     assert win._a_zoom_in.isEnabled()
 
 
-def test_opening_an_already_open_file_focuses_it_even_across_windows(qapp, make_pdf):
+def test_opening_a_file_open_in_another_window_moves_it_here(qapp, make_pdf):
+    a, b = make_pdf("a.pdf"), make_pdf("b.pdf")
+    first, second = MainWindow(), MainWindow()
+    tab = first.open_path(a)
+    first.open_path(b)
+    again = second.open_path(a)
+    assert again is tab
+    assert names(second) == ["a.pdf"]
+    assert second.tabs.currentWidget() is tab
+    assert names(first) == ["b.pdf"]
+
+
+def test_moving_the_only_tab_closes_the_other_window(qapp, make_pdf):
+    path = make_pdf("a.pdf")
+    first, second = MainWindow(), MainWindow()
+    first.open_path(path)
+    second.open_path(path)
+    settle(qapp)
+    assert MainWindow.windows() == [second]
+
+
+def test_edits_survive_being_moved_by_open(qapp, make_pdf, monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Discard
+    )
     path = make_pdf("a.pdf")
     first, second = MainWindow(), MainWindow()
     tab = first.open_path(path)
-    again = second.open_path(path)
-    assert again is tab
-    assert second.tabs.count() == 0
-    assert first.tabs.count() == 1
+    tab.document.rotate_pages([0], 90)
+    second.open_path(path)
+    assert tab.window() is second
+    assert tab.document.can_undo
+    assert tab.document.is_dirty
+    second.close()  # while the Discard patch is active; fixture teardown runs after it
+
+
+def test_opening_a_file_open_in_this_window_adds_no_tab(qapp, make_pdf):
+    path = make_pdf("a.pdf")
+    win = MainWindow()
+    tab = win.open_path(path)
+    assert win.open_path(path) is tab
+    assert win.tabs.count() == 1
 
 
 def test_failed_open_warns_and_adds_nothing(qapp, tmp_path, monkeypatch):

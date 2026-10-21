@@ -26,8 +26,9 @@ by hand on Windows before a release. Use three or four small PDFs.
 
 8. Drag a `.pdf` from Explorer onto the tab strip, the page area, and the empty
    start screen. Each opens a tab. A non-PDF is ignored.
-9. Open the same file twice (also from a second window). The existing tab is
-   focused; no duplicate appears.
+9. Open the same file twice. In the same window the existing tab is selected; from a
+   second window the tab moves into that window (with its edits and undo history),
+   and the first window closes if it was left empty. No duplicate appears.
 10. Open a corrupt or password-protected PDF. A clear message appears and no tab
     is added.
 

@@ -20,14 +20,15 @@ Work in progress. Findings are verified on Windows only where the
 | # | Sev. | Where | Finding | Status | Windows |
 |---|---|---|---|---|---|
 | 1 | Data loss | `core/document.py` `_replace_page` (232-241); `commands.py` `DeleteCommand.undo` | OCR, undo/redo of any text/image edit, a failed edit, and undo of a page delete all swap in a new page object. PyMuPDF then turns bookmarks to that page into dead entries (page −1), and deletes inbound links and the page's own outbound links. Not restored by redo; permanent on save. REVIEW_NOTES understated it ("links restored", "inbound links break"). | Reproduced in sandbox (1.28.2 and 2.0); fix in area A | No |
-| 2 | Data loss | `core/document.py` `__init__` | A truncated/damaged PDF opens silently in MuPDF's repaired form (`is_repaired`): test file kept page 1, pages 2–4 came up blank. Save would overwrite the original with the damaged version. Needs a warning and Save → Save As. | Reproduced in sandbox | No |
+| 2 | Data loss | `core/document.py` `__init__` | A truncated/damaged PDF opens silently in MuPDF's repaired form (`is_repaired`): test file kept page 1, pages 2–4 came up blank. Save would overwrite the original with the damaged version. Needs a warning and Save → Save As. | Reproduced in sandbox; confirmed on Windows (manual test 10) | Yes |
 | 3 | Wrong result / size | `core/ocr.py` 66-70 | OCR renders 300 dpi RGB and replaces the page: 5.6× (RGB) / 3× (gray) on a synthetic 600 dpi gray page; also halves 600 dpi scans, bakes annotations into the image, drops /Rotate, and triggers #1. | Confirmed by code + synthetic probe | No |
 | 4 | UX / failure | `core/history.py` + `EditPageCommand.do` | If a mutate fails, the page is restored via `_replace_page` (so #1 applies) but nothing is recorded in history, so the document reads "clean" though it changed. | Code reading | No |
 | 5 | Deps | `pyproject.toml` | Unbounded `PyMuPDF>=1.24.3` installed 2.0, which bundles onnxruntime + numpy + networkx (~130 MB) and ML layout models, imported on `import pymupdf` (0.15 s → ~0.9 s). | Pinned `<2` (f33e8be) | Yes |
 | 6 | Packaging | `pyproject.toml` | `PySide6` meta-package also installs WebEngine + Pdf (~130 MB unused). `PySide6-Essentials` + `PySide6-Addons` (TTS) would do. | Open | n/a |
 | 7 | Test | `tests/test_tabs.py` 339 | Path-string comparison failed on Windows (see run 2). | Fixed via code | Yes |
 | 8 | UX | `ui/detachable_tabs.py` `DetachableTabWidget.dropEvent` | Dropping a dragged tab on its own window's page area moved it to the end instead of detaching (browsers detach). Owner chose: detach. | Fixed + test | Yes |
-| 10 | UX | `ui/detachable_tabs.py` `start_tab_drag` | Esc during a tab drag detaches instead of cancelling: `QDrag.exec` returns IgnoreAction for both. | Planned | Yes (seen) |
+| 10 | UX | `ui/detachable_tabs.py` `start_tab_drag` | Esc during a tab drag detaches instead of cancelling: `QDrag.exec` returns IgnoreAction for both. | Fixed: cancel if the primary button or Esc is still held when the drag ends (`drag_was_cancelled`, Win32 `GetAsyncKeyState`) + 2 tests | Yes |
+| 11 | UX | `ui/main_window.py` `open_path` | Opening a file already open in another window focuses it there; owner wants the tab moved to the window where it was dropped/opened. | Fixed + 4 tests | Yes |
 | 9 | UX | `ui/page_panel.py` | Thumbnails are white pages on a white panel with no border; only faint text visible, large empty cells. | Open (area C) | Yes (seen) |
 
 ## Handoff check (Step 1)
@@ -54,10 +55,10 @@ Files: `private/manual/` (synthetic, gitignored).
 | 4 | Reorder within strip | Pass | |
 | 5 | Drag out the only tab | Pass | |
 | 6 | Drop on menu/status bar | Pass | |
-| 7 | Esc mid-drag (known: detaches) | Fail (known) | Detaches; owner wants Esc = cancel (#10) |
-| 8 | Drop .pdf from Explorer (strip, page, start screen; non-PDF ignored) | | |
-| 9 | Same file twice | | |
-| 10 | Corrupt / password PDF | | |
+| 7 | Esc mid-drag | Pass | After #10; real drops still detach (also checked on Linux/X11) |
+| 8 | Drop .pdf from Explorer (strip, page, start screen; non-PDF ignored) | Pass | |
+| 9 | Same file twice | Pass | Moves the tab to the window it was dropped/opened in (#11) |
+| 10 | Corrupt / password PDF | Pass | Garbage, password and non-PDF refused with a message; truncated file opens silently with blank pages (#2) |
 | 11 | Zoom keys and Ctrl+wheel | | |
 | 12 | Resize on fit-width | | |
 | 13 | Scroll 150-page PDF | | |
