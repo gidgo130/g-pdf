@@ -257,3 +257,26 @@ def test_sheet_only_refuses_stale_or_bad_decisions_and_dry_run(src, dry, tmp_pat
         assert e.value.code == 1
         assert f"--sheet-only cannot be used with {other}" in capsys.readouterr().err
     assert fingerprint(dec_path, sheet) == before
+
+
+def test_forced_dry_run_backs_up_a_reviewed_decisions_file(src, dry, capsys):
+    outdir, dec = dry
+    dec_path = outdir / "mini_split.decisions.json"
+    prefilled = dec_path.read_bytes()
+    capsys.readouterr()
+    assert run(src, outdir, "--dry-run", "--force") == 0       # not reviewed: no backup
+    assert not list(outdir.glob("*.bak.json")) and "backup:" not in capsys.readouterr().out
+
+    dec["pages"][4]["reviewed"] = True                         # one reviewed flag is enough
+    dec_path.write_text(json.dumps(dec, indent=1), "utf-8")
+    reviewed = dec_path.read_bytes()
+    assert run(src, outdir, "--dry-run", "--force") == 0
+    (backup,) = outdir.glob("*.bak.json")
+    assert re.fullmatch(r"mini_split\.decisions\.\d{8}-\d{6}\.bak\.json", backup.name)
+    assert backup.read_bytes() == reviewed
+    assert f"backup:    {backup}" in capsys.readouterr().out
+    assert dec_path.read_bytes() == prefilled                  # replaced by the fresh guess
+
+    dec_path.write_text("{not json", "utf-8")                  # unreadable: kept as well
+    assert run(src, outdir, "--dry-run", "--force") == 0
+    assert len(list(outdir.glob("*.bak.json"))) == 2

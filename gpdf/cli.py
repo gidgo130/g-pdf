@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -147,6 +148,10 @@ def _dry_run(args, split, src, stem) -> int:
     _check_writable(split, src, dec_path, args.force)
     _check_writable(split, src, report_path, force=True)
     decisions, report = split.dry_run(src, progress=_progress("detecting"))
+    if dec_path.exists():                                 # only with --force
+        backup = _backup_review(dec_path, decisions)
+        if backup:
+            print(f"backup:    {backup} (the decisions file held a review)")
     decisions.save(dec_path)
     report.save(report_path)
     spreads = report.spreads
@@ -168,6 +173,29 @@ def _dry_run(args, split, src, stem) -> int:
     print("review: open the sheet in a browser, review the flagged pages and Save decisions; "
           "then run again with --decisions")
     return EXIT_OK
+
+
+def _backup_review(path, fresh):
+    """Copy the decisions file at ``path`` to <name>.<YYYYmmdd-HHMMSS>.bak.json if it holds a
+    review: any action, cut or reviewed flag differs from ``fresh`` (or it does not load).
+    Returns the copy's path, or None."""
+    from gpdf.pipeline.report import Decisions, DecisionsError
+
+    try:
+        old = Decisions.load(path)
+        same = len(old.pages) == len(fresh.pages) and all(
+            (a.action, a.cut, a.reviewed) == (b.action, b.cut, b.reviewed)
+            for a, b in zip(old.pages, fresh.pages))
+    except DecisionsError:
+        same = False
+    if same:
+        return None
+    base, when = path.name.removesuffix(".json"), time.strftime("%Y%m%d-%H%M%S")
+    backup, k = path.with_name(f"{base}.{when}.bak.json"), 2
+    while backup.exists():
+        backup, k = path.with_name(f"{base}.{when}-{k}.bak.json"), k + 1
+    shutil.copy2(path, backup)
+    return backup
 
 
 def _sheet_only(args, split, src, stem) -> int:
