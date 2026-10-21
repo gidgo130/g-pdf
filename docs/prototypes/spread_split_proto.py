@@ -10,7 +10,7 @@
 #   Robust straight-line fit through per-strip points (max 3 deg). Score each option by text marks the
 #   cut crosses (shadow band masked for the seam option), prefer seam, then confidence factors.
 # Calibrated on the private corpus (read-only): Schwartz 388 pp (1-bit CCITT, dithered shadow), Burger
-# 97 pp (96 dpi JPEG, soft shadow), Unruh 166 pp (JBIG2, /Rotate 90, crop box). Flagged (< 0.65):
+# 97 pp (96 dpi JPEG, soft shadow), Unruh 166 pp (JBIG2, /Rotate 90, crop box, deskewed placement). Flagged (< 0.65):
 # v3 (after an independent Fable review that found 5 wrong unflagged cuts on Schwartz plates/back
 # matter): gutters far from the book median are re-detected near it or flagged; valley slant capped.
 # Flagged now: Schwartz 14/388, Burger 9/97, Unruh 5/166. Held-out fake spreads made from real
@@ -18,7 +18,8 @@
 # Thresholds below are still first guesses: keep them as named constants.
 #
 # Physical split (see bottom): 1-bit -> CCITT G4 halves (Pillow); JPEG -> re-encode with the source's
-# quantisation tables; mapping page -> pixels must go through image matrix x page rotation x crop box.
+# quantisation tables; mapping page -> pixels goes through image matrix x page.rotation_matrix (the
+# image matrix is already relative to the crop box: do NOT subtract the crop box again).
 from dataclasses import dataclass, field
 import io
 import numpy as np, pymupdf
@@ -254,7 +255,10 @@ def upright_pixels(page):
     # disp is already in DISPLAY coordinates of page.rect (get_image_info's transform is relative to the
     # crop box; do NOT subtract the crop box again; checked on Unruh). The image may overhang the page
     # (crop it to page.rect) or fall short of it (Unruh p20 starts 20 pt inside: pad with white).
-    # Unruh's image matrix also carries a ~0.11 deg rotation; ignoring it shifts content <= ~0.5 mm.
+    # CORRECTION (2026-10-21): Unruh's producer deskewed each scan by rotating the image on the page
+    # (residual 0-1.57 deg, > 0.5 deg on 22 pages; coverage down to 0.934). Ignoring that rotation is
+    # WRONG: halves would show the tilt and a cut can drift ~5 mm. The build keeps each half's original
+    # placement (image matrix) instead of resampling; see notes/PROMPT_1A_FIX.md.
     return np.ascontiguousarray(a), disp
 
 def g4_xobject(doc, im1):
