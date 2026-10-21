@@ -26,7 +26,8 @@ Work in progress. Findings are verified on Windows only where the
 | 5 | Deps | `pyproject.toml` | Unbounded `PyMuPDF>=1.24.3` installed 2.0, which bundles onnxruntime + numpy + networkx (~130 MB) and ML layout models, imported on `import pymupdf` (0.15 s → ~0.9 s). | Pinned `<2` (f33e8be) | Yes |
 | 6 | Packaging | `pyproject.toml` | `PySide6` meta-package also installs WebEngine + Pdf (~130 MB unused). `PySide6-Essentials` + `PySide6-Addons` (TTS) would do. | Open | n/a |
 | 7 | Test | `tests/test_tabs.py` 339 | Path-string comparison failed on Windows (see run 2). | Fixed via code | Yes |
-| 8 | UX | `ui/detachable_tabs.py` `DetachableTabWidget.dropEvent` | Dropping a dragged tab on its own window's page area moved it to the end instead of detaching (browsers detach). Owner chose: detach. | Fixed + test | Pending retest |
+| 8 | UX | `ui/detachable_tabs.py` `DetachableTabWidget.dropEvent` | Dropping a dragged tab on its own window's page area moved it to the end instead of detaching (browsers detach). Owner chose: detach. | Fixed + test | Yes |
+| 10 | UX | `ui/detachable_tabs.py` `start_tab_drag` | Esc during a tab drag detaches instead of cancelling: `QDrag.exec` returns IgnoreAction for both. | Planned | Yes (seen) |
 | 9 | UX | `ui/page_panel.py` | Thumbnails are white pages on a white panel with no border; only faint text visible, large empty cells. | Open (area C) | Yes (seen) |
 
 ## Handoff check (Step 1)
@@ -47,13 +48,13 @@ Files: `private/manual/` (synthetic, gitignored).
 
 | # | Test | Result | Notes |
 |---|---|---|---|
-| 1 | Tab detach to desktop | Pass | Over its own page area it moved the tab to the end; changed to detach (#8), retest |
-| 2 | Re-dock onto tab strip | | |
-| 3 | Drop tab on page area | | |
-| 4 | Reorder within strip | | |
-| 5 | Drag out the only tab | | |
-| 6 | Drop on menu/status bar | | |
-| 7 | Esc mid-drag (known: detaches) | | |
+| 1 | Tab detach to desktop | Pass | Also detaches over its own page area after #8 |
+| 2 | Re-dock onto tab strip | Pass | |
+| 3 | Drop tab on page area | Pass | |
+| 4 | Reorder within strip | Pass | |
+| 5 | Drag out the only tab | Pass | |
+| 6 | Drop on menu/status bar | Pass | |
+| 7 | Esc mid-drag (known: detaches) | Fail (known) | Detaches; owner wants Esc = cancel (#10) |
 | 8 | Drop .pdf from Explorer (strip, page, start screen; non-PDF ignored) | | |
 | 9 | Same file twice | | |
 | 10 | Corrupt / password PDF | | |
