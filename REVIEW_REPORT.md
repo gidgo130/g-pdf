@@ -32,7 +32,7 @@ Work in progress. Findings are verified on Windows only where the
 | 12 | UX / feature | `ui/pdf_view.py` | Middle-button navigation: click (press+release without moving) toggles browser-style autoscroll; press-and-drag pans. | Planned (after area A) | n/a |
 | 13 | Broken feature | `ui/page_panel.py` `PagePanel.__init__` | `setAcceptDrops(True)` on a `QListView` is not enough: drops arrive on its viewport, which never accepted them. Real thumbnail drags (reorder, cross-window copy) and PDF file drops on the panel never reached `dropEvent`. Tests missed it because they called `dropEvent` directly. Verified with a simulated X11 mouse drag: after `viewport().setAcceptDrops(True)` reorder and drop work. | Fixed + 2 tests (events sent to the viewport) | Pending retest |
 | 14 | Wrong result | `ui/page_panel.py` `_row_for_pos`, `paintEvent` | Insertion row and marker assumed a horizontal grid (left/right half, vertical line). In the normal one-column sidebar a drop on the lower half of a page inserted *before* it. | Fixed: orientation taken from the layout (`_row_is_horizontal`: a neighbour on the same line means grid, else use y and a horizontal marker) + 3 tests | Pending retest |
-| 9 | UX | `ui/page_panel.py` | Thumbnails are white pages on a white panel with no border; only faint text visible, large empty cells. | Open (area C) | Yes (seen) |
+| 9 | UX | `ui/page_panel.py` | Thumbnails are white pages on a white panel with no border; only faint text visible, large empty cells. | Fixed: custom item delegate in `page_panel.py` (grey page border, Highlight tint + 2 px Highlight border on selection, light grey panel) | Pending retest |
 
 ## Handoff check (Step 1)
 - HANDOFF.md: "repo is public" was stale at the time (now public); no local git
@@ -81,3 +81,6 @@ Files: `private/manual/` (synthetic, gitignored).
 | 27 | Properties / remove personal info / undo | | |
 | 28 | OCR (Tesseract) | | |
 | 29 | Signed PDF save warning | | |
+
+## Notes by area
+- Area F: page drag/drop tests called `dropEvent` directly and passed while real drops were impossible (#13).

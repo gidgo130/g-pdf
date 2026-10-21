@@ -15,8 +15,8 @@ from collections import OrderedDict
 from PySide6.QtCore import (
     QAbstractListModel, QByteArray, QMimeData, QModelIndex, QPoint, QRect, QSize, Qt, Signal,
 )
-from PySide6.QtGui import QColor, QDrag, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QAbstractItemView, QListView
+from PySide6.QtGui import QColor, QDrag, QPainter, QPalette, QPen, QPixmap
+from PySide6.QtWidgets import QAbstractItemView, QListView, QStyle, QStyledItemDelegate
 
 from gpdf.core.document import PdfDocument, PdfEditError
 from gpdf.ui.detachable_tabs import dropped_pdf_paths
@@ -24,6 +24,8 @@ from gpdf.ui.detachable_tabs import dropped_pdf_paths
 PAGES_MIME = "application/x-gpdf-pages"
 THUMB_SIDE = 140
 THUMB_CACHE_ITEMS = 400
+PANEL_BACKGROUND = QColor(222, 222, 226)
+PAGE_BORDER = QColor(140, 140, 146)
 
 _registry: dict[int, tuple[PdfDocument, list[int]]] = {}
 _tokens = itertools.count(1)
@@ -95,6 +97,39 @@ class PageModel(QAbstractListModel):
         return pm
 
 
+class ThumbnailDelegate(QStyledItemDelegate):
+    """Draws a bordered thumbnail with its number; selected items get a Highlight tint and border."""
+
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(THUMB_SIDE + 24, THUMB_SIDE + 40)
+
+    def paint(self, painter: QPainter, option, index) -> None:
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        cell = option.rect.adjusted(3, 3, -3, -3)
+        highlight = option.palette.color(QPalette.ColorRole.Highlight)
+        if option.state & QStyle.StateFlag.State_Selected:
+            fill = QColor(highlight)
+            fill.setAlpha(110)
+            painter.setPen(QPen(highlight, 2))
+            painter.setBrush(fill)
+            painter.drawRoundedRect(cell.adjusted(1, 1, -1, -1), 4, 4)
+        pm = index.data(Qt.ItemDataRole.DecorationRole)
+        if isinstance(pm, QPixmap) and not pm.isNull():
+            size = pm.deviceIndependentSize().toSize()
+            target = QRect(
+                cell.left() + (cell.width() - size.width()) // 2, cell.top() + 8,
+                size.width(), size.height())
+            painter.drawPixmap(target, pm)
+            painter.setPen(QPen(PAGE_BORDER, 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(target.adjusted(-1, -1, 0, 0))
+        painter.setPen(option.palette.color(QPalette.ColorRole.Text))
+        label = QRect(cell.left(), cell.bottom() - 22, cell.width(), 20)
+        painter.drawText(label, Qt.AlignmentFlag.AlignCenter, str(index.data(Qt.ItemDataRole.DisplayRole)))
+        painter.restore()
+
+
 class PagePanel(QListView):
     """Thumbnails of one document's pages."""
 
@@ -106,6 +141,10 @@ class PagePanel(QListView):
         self._doc: PdfDocument | None = None
         self._model = PageModel(self)
         self.setModel(self._model)
+        self.setItemDelegate(ThumbnailDelegate(self))
+        palette = self.palette()
+        palette.setColor(QPalette.ColorRole.Base, PANEL_BACKGROUND)
+        self.setPalette(palette)
         self.setViewMode(QListView.ViewMode.IconMode)
         self.setFlow(QListView.Flow.LeftToRight)
         self.setWrapping(True)
