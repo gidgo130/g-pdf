@@ -435,7 +435,7 @@
     if (flagged(i) && !s.reviewed) badge(meta, "amber", "flagged");
     if (flagged(i) && s.reviewed) badge(meta, "green", "reviewed");
     if (changed(i)) badge(meta, "blue", "changed");
-    if (s.action !== "split") badge(meta, "grey", "single");
+    if (s.action !== "split") badge(meta, "grey", DEC.pages[i].detected.is_spread ? "kept whole" : "single");
   }
 
   function renderAll() {

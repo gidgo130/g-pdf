@@ -166,3 +166,18 @@ def test_load_decisions_checks_the_stamp(browser, sheet, tmp_path):
     assert after["source_mtime_ns"] == dec["source_mtime_ns"]
     assert page.locator("#progress").inner_text() == "Flagged reviewed: 1 / 3"
     assert page.errors == []
+
+
+def badges(page, pno):
+    return page.locator("#tiles .tile").nth(pno - 1).locator(".badge").all_inner_texts()
+
+
+def test_kept_spread_shows_kept_whole_not_single(browser, sheet):
+    page = open_sheet(browser, sheet[2])
+    assert "single" not in badges(page, 5)                     # spread guess, split
+    page.keyboard.press("k")                                   # p. 5: a spread kept whole
+    assert page.evaluate("gpdfSheet.current()") == 6
+    page.keyboard.press("k")                                   # p. 6: called single, kept
+    assert badges(page, 5) == ["reviewed", "changed", "kept whole"]
+    assert badges(page, 6) == ["reviewed", "single"]
+    assert page.errors == []
