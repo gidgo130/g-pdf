@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import uuid
 
-from PySide6.QtCore import QEvent, QMimeData, QPoint, Qt, Signal
+from PySide6.QtCore import QDir, QEvent, QMimeData, QPoint, Qt, Signal
 from PySide6.QtGui import QCursor, QDrag, QMouseEvent, QPixmap
 from PySide6.QtWidgets import QTabBar, QTabWidget, QWidget
 
@@ -68,7 +68,8 @@ def dropped_pdf_paths(mime: QMimeData) -> list[str]:
     """Local .pdf file paths carried by a file drag from the desktop."""
     if not mime.hasUrls():
         return []
-    paths = [u.toLocalFile() for u in mime.urls() if u.isLocalFile()]
+    # toLocalFile() gives forward slashes; use the OS's own form (C:\a\b.pdf).
+    paths = [QDir.toNativeSeparators(u.toLocalFile()) for u in mime.urls() if u.isLocalFile()]
     return [p for p in paths if p.lower().endswith(".pdf")]
 
 
