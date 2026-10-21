@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import pytest
-from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt
-from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, Qt
+from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QMouseEvent
 from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox
 
+from gpdf.core.document import PdfDocument
 from gpdf.ui import page_panel
 from gpdf.ui.main_window import MainWindow
+from gpdf.ui.page_panel import PagePanel
 from gpdf.ui.pdf_view import TOOL_ADD_TEXT, TOOL_EDIT_TEXT
 
 
@@ -95,7 +97,7 @@ def test_panel_drop_reorders(win, qapp):
     tab.panel.select_pages([0])
     mime, token = page_panel._make_mime(tab.document, [0])
     row_pos = tab.panel.visualRect(tab.panel.model().index(3)).center()
-    right = QPoint(tab.panel.visualRect(tab.panel.model().index(3)).right() - 2, row_pos.y())
+    right = QPoint(row_pos.x(), tab.panel.visualRect(tab.panel.model().index(3)).bottom() - 2)
     ev = QDropEvent(QPointF(right), Qt.DropAction.MoveAction, mime,
                     Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
     tab.panel.dropEvent(ev)
@@ -114,7 +116,7 @@ def test_drag_events_on_viewport_reach_panel_and_reorder(win, qapp):
     panel = tab.panel
     mime, token = page_panel._make_mime(tab.document, [0])  # keep a reference to mime
     r = panel.visualRect(panel.model().index(3))
-    pos = QPointF(r.right() - 2, r.center().y())
+    pos = QPointF(r.center().x(), r.bottom() - 2)
     act, btn, mod = Qt.DropAction.MoveAction, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
     try:
         enter = QDragEnterEvent(pos.toPoint(), act, mime, btn, mod)
@@ -133,7 +135,7 @@ def test_panel_drop_between_documents_copies(win, qapp, make_pdf):
     settle(qapp)
     mime, token = page_panel._make_mime(tab.document, [4])
     end_item = other.panel.visualRect(other.panel.model().index(1))
-    pos = QPointF(end_item.right() - 2, end_item.center().y())
+    pos = QPointF(end_item.center().x(), end_item.bottom() - 2)
     other.panel.dropEvent(QDropEvent(pos, Qt.DropAction.CopyAction, mime,
                                      Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
     assert other.document.page_count == 3 and tab.document.page_count == 5
@@ -281,3 +283,58 @@ def test_properties_dialog_values(win, qapp):
     assert clear and changed["author"] == "" and changed["producer"] == "" and changed["creator"] == ""
     assert friendly_date("D:20240102030405Z") == "02 Jan 2024, 03:04"
     assert friendly_date("") == "Unknown"
+
+
+def _panel(qapp, make_pdf, width, pages=6):
+    doc = PdfDocument(make_pdf("p.pdf", sizes=[(600, 800)] * pages))
+    panel = PagePanel()
+    panel.set_document(doc)
+    panel.resize(width, 600)
+    panel.show()
+    settle(qapp)
+    return panel, doc
+
+
+def _row_at(panel, row, fx, fy):
+    r = panel.visualRect(panel.model().index(row))
+    return QPoint(r.left() + int(r.width() * fx), r.top() + int(r.height() * fy))
+
+
+def test_single_column_drop_follows_y(qapp, make_pdf):
+    panel, doc = _panel(qapp, make_pdf, 230)
+    assert not panel._row_is_horizontal(2)
+    assert panel._row_for_pos(_row_at(panel, 2, 0.9, 0.25)) == 2  # upper half: before
+    assert panel._row_for_pos(_row_at(panel, 2, 0.1, 0.75)) == 3  # lower half: after
+    assert panel._row_for_pos(_row_at(panel, 5, 0.1, 0.75)) == 6  # end
+    panel.close()
+    doc.close()
+
+
+def test_wide_panel_drop_still_follows_x(qapp, make_pdf):
+    panel, doc = _panel(qapp, make_pdf, 600)
+    assert panel._row_is_horizontal(1)
+    assert panel._row_for_pos(_row_at(panel, 1, 0.25, 0.9)) == 1  # left half: before
+    assert panel._row_for_pos(_row_at(panel, 1, 0.75, 0.1)) == 2  # right half: after
+    panel.close()
+    doc.close()
+
+
+def test_press_on_unselected_thumbnail_and_drag_starts_drag(qapp, make_pdf, monkeypatch):
+    panel, doc = _panel(qapp, make_pdf, 230)
+    panel.select_pages([0])
+    started = []
+    monkeypatch.setattr(panel, "_start_drag", lambda: started.append(panel.selected_pages()))
+    target = _row_at(panel, 3, 0.5, 0.4)
+    vp = panel.viewport()
+    L, none = Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
+
+    def send(kind, pos, button, buttons):
+        QApplication.sendEvent(vp, QMouseEvent(
+            kind, QPointF(pos), QPointF(vp.mapToGlobal(pos)), button, buttons, none))
+
+    send(QEvent.Type.MouseButtonPress, target, L, L)
+    send(QEvent.Type.MouseMove, target + QPoint(0, 30), Qt.MouseButton.NoButton, L)
+    assert started == [[3]]
+    send(QEvent.Type.MouseButtonRelease, target + QPoint(0, 30), L, Qt.MouseButton.NoButton)
+    panel.close()
+    doc.close()

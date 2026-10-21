@@ -193,16 +193,17 @@ class PagePanel(QListView):
         n = self._model.rowCount()
         if n == 0:
             return
-        if self._drop_row >= n:
-            r = self.visualRect(self._model.index(n - 1))
-            x = r.right()
-            r2 = r
-        else:
-            r2 = self.visualRect(self._model.index(self._drop_row))
-            x = r2.left()
+        at_end = self._drop_row >= n
+        row = n - 1 if at_end else self._drop_row
+        r = self.visualRect(self._model.index(row))
         painter = QPainter(self.viewport())
         painter.setPen(QPen(QColor(30, 110, 230), 3))
-        painter.drawLine(x, r2.top() + 4, x, r2.bottom() - 4)
+        if self._row_is_horizontal(row):
+            x = r.right() if at_end else r.left()
+            painter.drawLine(x, r.top() + 4, x, r.bottom() - 4)
+        else:
+            y = r.bottom() if at_end else r.top()
+            painter.drawLine(r.left() + 4, y, r.right() - 4, y)
         painter.end()
 
     # -- starting a drag ----------------------------------------------------------------
@@ -253,8 +254,7 @@ class PagePanel(QListView):
         n = self._model.rowCount()
         idx = self.indexAt(pos)
         if idx.isValid():
-            r = self.visualRect(idx)
-            return idx.row() + (1 if pos.x() > r.center().x() else 0)
+            return idx.row() + self._after(idx.row(), self.visualRect(idx).center(), pos)
         # Between/after items: nearest by visual centre. O(n); fine for normal docs.
         best, best_d = n, None
         for row in range(n):
@@ -262,8 +262,24 @@ class PagePanel(QListView):
             d = (c.x() - pos.x()) ** 2 + (c.y() - pos.y()) ** 2 * 4
             if best_d is None or d < best_d:
                 best_d = d
-                best = row + (1 if pos.x() > c.x() else 0)
+                best = row + self._after(row, c, pos)
         return best
+
+    def _row_is_horizontal(self, row: int) -> bool:
+        """True if ``row`` shares a line with a neighbour (grid), False in a single column."""
+        n = self._model.rowCount()
+        top = self.visualRect(self._model.index(row)).top()
+        for other in (row + 1, row - 1):
+            if 0 <= other < n and self.visualRect(self._model.index(other)).top() == top:
+                return True
+        if n == 1:  # no neighbour to compare: a wide panel would lay a second page beside it
+            return self.viewport().width() >= 2 * self.gridSize().width()
+        return False
+
+    def _after(self, row: int, centre: QPoint, pos: QPoint) -> int:
+        """1 if ``pos`` is past ``centre`` along the layout direction of ``row``, else 0."""
+        past = pos.x() > centre.x() if self._row_is_horizontal(row) else pos.y() > centre.y()
+        return 1 if past else 0
 
     def _accepts(self, mime: QMimeData) -> bool:
         return _read_mime(mime) is not None or bool(dropped_pdf_paths(mime))
