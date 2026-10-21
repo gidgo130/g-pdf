@@ -65,6 +65,128 @@ def annot_xrefs(raw: pymupdf.Document, page_xref: int) -> list[int]:
     return [int(n) for n in re.findall(r"(\d+) 0 R", value)]
 
 
+# -- save-time cleanup (#18) ----------------------------------------------------
+# Deleted pages stay in the open document (undo relinks the same objects), so
+# Save cleans a scratch copy instead: page objects that fell out of the page
+# tree are blanked, and their form widgets are pruned from /AcroForm.
+
+
+def _get_key(raw: pymupdf.Document, xref: int, key: str) -> tuple[str, str]:
+    """``xref_get_key``, but ("null", "null") for an xref entry that can't be
+    loaded (damaged files have them; MuPDF raises)."""
+    try:
+        return raw.xref_get_key(xref, key)
+    except Exception:
+        return ("null", "null")
+
+
+def _ref_array(raw: pymupdf.Document, xref: int, key: str) -> list[int]:
+    """The xrefs in an array of references (/Kids, /Fields ...), direct or
+    indirect; [] if there is none. ``key`` may be a path ("AcroForm/Fields")."""
+    kind, value = _get_key(raw, xref, key)
+    if kind == "xref":  # indirect array: "n 0 R"
+        value = raw.xref_object(int(value.split()[0]), compressed=True)
+    elif kind != "array":
+        return []
+    return [int(n) for n in re.findall(r"(\d+) 0 R", value)]
+
+
+def _set_ref_array(raw: pymupdf.Document, xref: int, key: str, refs: list[int]) -> None:
+    """Write ``refs`` where ``_ref_array(raw, xref, key)`` read them from."""
+    text = "[" + " ".join(f"{x} 0 R" for x in refs) + "]"
+    kind, value = raw.xref_get_key(xref, key)
+    if kind == "xref":
+        raw.update_object(int(value.split()[0]), text)
+    else:
+        raw.xref_set_key(xref, key, text)
+
+
+def _fields_holder(raw: pymupdf.Document) -> tuple[int, str] | None:
+    """(xref, key) of the /AcroForm /Fields array; /AcroForm may be inline in
+    the catalog or indirect."""
+    cat = raw.pdf_catalog()
+    kind, value = raw.xref_get_key(cat, "AcroForm")
+    if kind == "xref":
+        return int(value.split()[0]), "Fields"
+    if kind == "dict":
+        return cat, "AcroForm/Fields"
+    return None
+
+
+def _stray_pages(raw: pymupdf.Document) -> set[int]:
+    """/Type /Page objects that are not in the page tree."""
+    tree = {raw.page_xref(i) for i in range(raw.page_count)}
+    return {
+        x for x in range(1, raw.xref_length())
+        if x not in tree and _get_key(raw, x, "Type") == ("name", "/Page")
+    }
+
+
+def _unplaced_widgets(raw: pymupdf.Document) -> set[int]:
+    """Widget annotations in the field tree that no tree page's /Annots holds."""
+    holder = _fields_holder(raw)
+    if holder is None:
+        return set()
+    widgets: set[int] = set()
+    seen: set[int] = set()
+    stack = _ref_array(raw, *holder)
+    while stack:
+        x = stack.pop()
+        if x in seen:
+            continue
+        seen.add(x)
+        if _get_key(raw, x, "Subtype") == ("name", "/Widget"):
+            widgets.add(x)
+        stack.extend(_ref_array(raw, x, "Kids"))
+    if not widgets:
+        return set()
+    for i in range(raw.page_count):
+        widgets.difference_update(annot_xrefs(raw, raw.page_xref(i)))
+    return widgets
+
+
+def _prune_fields(raw: pymupdf.Document, dead: set[int]) -> None:
+    """Remove the ``dead`` widgets from the field tree, then every field whose
+    /Kids that left empty. Fields that never had kids (data-only) stay."""
+    seen: set[int] = set()
+
+    def prune(xref: int, key: str) -> list[int]:
+        refs = _ref_array(raw, xref, key)
+        keep = []
+        for x in refs:
+            if x in dead:
+                continue
+            if x not in seen:
+                seen.add(x)
+                if _ref_array(raw, x, "Kids") and not prune(x, "Kids"):
+                    continue
+            keep.append(x)
+        if keep != refs:
+            _set_ref_array(raw, xref, key, keep)
+        return keep
+
+    holder = _fields_holder(raw)
+    if holder is not None:
+        prune(*holder)
+
+
+def _scrubbed_bytes(
+    raw: pymupdf.Document, dead_pages: set[int], dead_widgets: set[int]
+) -> bytes:
+    """``raw`` saved with ``dead_pages`` blanked and ``dead_widgets`` pruned,
+    done on a scratch copy so ``raw`` (and with it undo) is untouched.
+    ``tobytes(garbage=0)`` keeps object numbers, so the xrefs still match."""
+    scratch = pymupdf.open(stream=raw.tobytes(garbage=0), filetype="pdf")
+    try:
+        for x in dead_pages:
+            scratch.update_object(x, "null")
+        if dead_widgets:
+            _prune_fields(scratch, dead_widgets)
+        return scratch.tobytes(garbage=1, deflate=True)
+    finally:
+        scratch.close()
+
+
 def _ranges(indices: Sequence[int]) -> list[tuple[int, int]]:
     """Collapse sorted unique indices into inclusive (from, to) runs."""
     runs: list[tuple[int, int]] = []
@@ -115,6 +237,10 @@ class PdfDocument(QObject):
         self._page_sizes: tuple[tuple[float, float], ...] = ()
         self._signed = self._detect_signatures()
         self._recompute_sizes()
+        # Objects the file already kept outside the page tree / off every page
+        # (e.g. form templates) are the file's business: Save never cleans them.
+        self._orphans_at_open = _stray_pages(doc)
+        self._unplaced_widgets_at_open = _unplaced_widgets(doc)
 
     # -- basic info ---------------------------------------------------------
 
@@ -431,9 +557,16 @@ class PdfDocument(QObject):
         self.save_as(self.path)
 
     def save_as(self, path: str | Path) -> None:
-        """Write the document, replacing the target atomically."""
+        """Write the document, replacing the target atomically. Pages deleted
+        (or left over by edits) and their form fields are not written."""
         target = Path(path)
-        data = self.raw.tobytes(garbage=1, deflate=True)
+        raw = self.raw
+        dead_pages = _stray_pages(raw) - self._orphans_at_open
+        dead_widgets = _unplaced_widgets(raw) - self._unplaced_widgets_at_open
+        if dead_pages or dead_widgets:
+            data = _scrubbed_bytes(raw, dead_pages, dead_widgets)
+        else:
+            data = raw.tobytes(garbage=1, deflate=True)
         _atomic_write(target, data)
         self.path = target
         self._history.mark_clean()

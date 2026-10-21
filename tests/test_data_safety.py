@@ -18,8 +18,9 @@ from pathlib import Path
 import pymupdf
 import pytest
 
+from gpdf.core import document as document_mod
 from gpdf.core import textedit
-from gpdf.core.document import PdfDocument, PdfEditError
+from gpdf.core.document import PdfDocument, PdfEditError, _ref_array, _stray_pages
 from gpdf.core.history import Command, History
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -800,3 +801,251 @@ def test_replace_span_keeps_link_over_text(qapp, tmp_path):
         assert _link_state(reopened[0]) == before
     finally:
         reopened.close()
+
+
+# -- J. deleted pages leave nothing behind in the saved file (#18) ------------------
+
+
+def _form_pdf(path: Path, hidden: bool = False) -> Path:
+    """2 pages: text field "name" = "Gideon" on page 1, "ssn" = "123-45-6789"
+    on page 2; with ``hidden``, also a data-only field (no widget) in /Fields."""
+    doc = pymupdf.open()
+    for i in range(2):
+        doc.new_page().insert_text((72, 72), f"Page {i + 1}", fontsize=24)
+    for pno, name, value in ((0, "name", "Gideon"), (1, "ssn", "123-45-6789")):
+        widget = pymupdf.Widget()
+        widget.field_type = pymupdf.PDF_WIDGET_TYPE_TEXT
+        widget.field_name = name
+        widget.field_value = value
+        widget.rect = pymupdf.Rect(72, 200, 272, 224)
+        doc[pno].add_widget(widget)
+    if hidden:
+        x = doc.get_new_xref()
+        doc.update_object(x, "<</FT/Tx/T(hidden)/V(keep)>>")
+        cat = doc.pdf_catalog()
+        fields = _ref_array(doc, cat, "AcroForm/Fields") + [x]
+        doc.xref_set_key(
+            cat, "AcroForm/Fields", "[" + " ".join(f"{f} 0 R" for f in fields) + "]"
+        )
+    return _save_pdf(doc, path)
+
+
+def _fields(raw: pymupdf.Document) -> list[int]:
+    """Top-level entries of /AcroForm/Fields."""
+    holder = document_mod._fields_holder(raw)
+    assert holder is not None
+    return _ref_array(raw, *holder)
+
+
+def _field_names(raw: pymupdf.Document) -> list[str]:
+    return [raw.xref_get_key(x, "T")[1] for x in _fields(raw)]
+
+
+def _widgets(raw: pymupdf.Document, index: int) -> list[tuple[str, str]]:
+    return [(w.field_name, w.field_value) for w in raw[index].widgets()]
+
+
+def test_scratch_copy_keeps_object_numbers(qapp, tmp_path):
+    doc = PdfDocument(_toc_links_pdf(tmp_path / "nav.pdf"))
+    try:
+        textedit.add_text(doc, 0, 72, 150, "added")  # leaves a temporary page
+        doc.delete_pages([2])
+        raw = doc.raw
+        scratch = pymupdf.open(stream=raw.tobytes(garbage=0), filetype="pdf")
+        try:
+            assert scratch.xref_length() == raw.xref_length()
+            for x in range(1, raw.xref_length()):
+                assert scratch.xref_object(x, compressed=True) == raw.xref_object(
+                    x, compressed=True
+                ), x
+        finally:
+            scratch.close()
+    finally:
+        doc.close()
+
+
+def test_deleted_page_not_saved_and_undo_restores_it(qapp, tmp_path):
+    doc = PdfDocument(_toc_links_pdf(tmp_path / "nav.pdf"))
+    try:
+        contents = doc.raw[2].get_contents()
+        doc.delete_pages([2])  # the named destination "sec3" still points at it
+        out = tmp_path / "deleted.pdf"
+        doc.save_as(out)
+        reopened = pymupdf.open(out)
+        try:
+            assert reopened.page_count == 2
+            assert _stray_pages(reopened) == set()
+            for c in contents:
+                assert c >= reopened.xref_length() or not reopened.xref_is_stream(c)
+        finally:
+            reopened.close()
+        assert doc.undo()
+        assert doc.page_count == 3
+        _assert_nav(doc, tmp_path / "out.pdf", "delete, save, undo")
+    finally:
+        doc.close()
+
+
+def test_deleted_page_form_field_not_saved(qapp, tmp_path):
+    doc = PdfDocument(_form_pdf(tmp_path / "form.pdf"))
+    try:
+        doc.delete_pages([1])
+        out = tmp_path / "deleted.pdf"
+        doc.save_as(out)
+        reopened = pymupdf.open(out)
+        try:
+            assert b"123-45-6789" not in reopened.tobytes(expand=255)
+            assert _widgets(reopened, 0) == [("name", "Gideon")]
+            assert _field_names(reopened) == ["name"]
+        finally:
+            reopened.close()
+        assert doc.undo()
+        assert _widgets(doc.raw, 1) == [("ssn", "123-45-6789")]
+        out = tmp_path / "undone.pdf"
+        doc.save_as(out)
+        reopened = pymupdf.open(out)
+        try:
+            assert _widgets(reopened, 1) == [("ssn", "123-45-6789")]
+            assert sorted(_field_names(reopened)) == ["name", "ssn"]
+        finally:
+            reopened.close()
+    finally:
+        doc.close()
+
+
+def test_radio_group_keeps_button_on_kept_page(qapp, tmp_path):
+    """One radio group, a button on each page; indirect /AcroForm and /Kids."""
+    src = tmp_path / "radio.pdf"
+    doc = pymupdf.open()
+    for i in range(2):
+        doc.new_page().insert_text((72, 72), f"Page {i + 1}", fontsize=24)
+    group, kids, af = doc.get_new_xref(), doc.get_new_xref(), doc.get_new_xref()
+    buttons = []
+    for i in range(2):
+        x = doc.get_new_xref()
+        doc.update_object(
+            x, f"<</Type/Annot/Subtype/Widget/Parent {group} 0 R/P {doc[i].xref} 0 R"
+            "/Rect[72 200 92 220]/AS/Off>>",
+        )
+        doc.xref_set_key(doc[i].xref, "Annots", f"[{x} 0 R]")
+        buttons.append(x)
+    doc.update_object(kids, f"[{buttons[0]} 0 R {buttons[1]} 0 R]")
+    doc.update_object(group, f"<</FT/Btn/Ff 49152/T(choice)/V/Off/Kids {kids} 0 R>>")
+    doc.update_object(af, f"<</Fields[{group} 0 R]>>")
+    doc.xref_set_key(doc.pdf_catalog(), "AcroForm", f"{af} 0 R")
+    _save_pdf(doc, src)
+
+    pdf = PdfDocument(src)
+    try:
+        pdf.delete_pages([1])
+        out = tmp_path / "out.pdf"
+        pdf.save_as(out)
+    finally:
+        pdf.close()
+    reopened = pymupdf.open(out)
+    try:
+        assert reopened.xref_get_key(reopened.pdf_catalog(), "AcroForm")[0] == "xref"
+        assert _field_names(reopened) == ["choice"]
+        (group,) = _fields(reopened)
+        (button,) = _ref_array(reopened, group, "Kids")
+        assert reopened.xref_get_key(button, "P")[1] == f"{reopened[0].xref} 0 R"
+    finally:
+        reopened.close()
+
+
+def test_data_only_field_survives_delete(qapp, tmp_path):
+    doc = PdfDocument(_form_pdf(tmp_path / "form.pdf", hidden=True))
+    try:
+        doc.delete_pages([1])
+        out = tmp_path / "out.pdf"
+        doc.save_as(out)
+    finally:
+        doc.close()
+    reopened = pymupdf.open(out)
+    try:
+        assert _field_names(reopened) == ["name", "hidden"]
+        assert reopened.xref_get_key(_fields(reopened)[1], "V")[1] == "keep"
+        assert b"123-45-6789" not in reopened.tobytes(expand=255)
+    finally:
+        reopened.close()
+
+
+def test_ocr_replaced_page_drops_field_until_undo(qapp, tmp_path):
+    doc = PdfDocument(_form_pdf(tmp_path / "form.pdf"))
+    blank = pymupdf.open()
+    blank.new_page().insert_text((72, 72), "Page 2", fontsize=24)
+    after = blank.tobytes()
+    blank.close()
+    try:
+        doc.replace_page_bytes(1, "OCR page", after)
+        out = tmp_path / "ocr.pdf"
+        doc.save_as(out)
+        reopened = pymupdf.open(out)
+        try:
+            assert b"123-45-6789" not in reopened.tobytes(expand=255)
+            assert _field_names(reopened) == ["name"]
+        finally:
+            reopened.close()
+        assert doc.undo()
+        out = tmp_path / "undone.pdf"
+        doc.save_as(out)
+        reopened = pymupdf.open(out)
+        try:
+            assert _widgets(reopened, 1) == [("ssn", "123-45-6789")]
+            assert sorted(_field_names(reopened)) == ["name", "ssn"]
+        finally:
+            reopened.close()
+    finally:
+        doc.close()
+
+
+def test_page_outside_tree_at_open_is_kept(qapp, tmp_path):
+    """A file that already keeps a page object outside the page tree (here:
+    only a named destination points at it) keeps it through our saves."""
+    src = _toc_links_pdf(tmp_path / "nav.pdf")
+    raw = pymupdf.open(src)
+    raw.delete_pages([2])  # PyMuPDF's delete leaves the object behind
+    stray = tmp_path / "stray.pdf"
+    raw.save(str(stray), garbage=1)
+    raw.close()
+
+    doc = PdfDocument(stray)
+    try:
+        (orphan,) = doc._orphans_at_open
+        doc.rotate_pages([0], 90)
+        out = tmp_path / "rotated.pdf"
+        doc.save_as(out)
+        reopened = pymupdf.open(out)
+        try:
+            assert _stray_pages(reopened) == {orphan}
+        finally:
+            reopened.close()
+        doc.delete_pages([1])  # now Save does clean, but not the old orphan
+        out = tmp_path / "deleted.pdf"
+        doc.save_as(out)
+        reopened = pymupdf.open(out)
+        try:
+            assert len(_stray_pages(doc.raw)) == 2
+            assert _stray_pages(reopened) == {orphan}
+        finally:
+            reopened.close()
+    finally:
+        doc.close()
+
+
+def test_save_without_dead_objects_skips_scratch_copy(qapp, tmp_path, monkeypatch):
+    doc = PdfDocument(_form_pdf(tmp_path / "form.pdf"))
+    try:
+        doc.rotate_pages([0], 90)
+        opened = []
+        real_open = pymupdf.open
+
+        def spy(*args, **kwargs):
+            opened.append((args, kwargs))
+            return real_open(*args, **kwargs)
+
+        monkeypatch.setattr(document_mod.pymupdf, "open", spy)
+        doc.save_as(tmp_path / "out.pdf")
+        assert opened == []
+    finally:
+        doc.close()
