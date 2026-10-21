@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Private test material and outputs: never commit real documents
+private/
+out/
+*.pdf
+!tests/fixtures/**/*.pdf
+*_pages.txt
+.gpdf-*.tmp
+tessdata/
+*.traineddata
+
+# Personal working notes (kept in the claude.ai G-PDF Project instead)
+HANDOFF.md
+REVIEW_PROMPT.md
