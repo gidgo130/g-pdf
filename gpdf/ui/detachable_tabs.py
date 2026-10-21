@@ -17,16 +17,18 @@ How it works
 
 This module only does gestures and signalling. Actually moving a tab between
 windows lives in ``MainWindow`` so it can be unit-tested without a mouse.
-Known limitation: pressing Esc during the drag can't be told apart from
-dropping outside a window, so it also detaches.
+Esc cancels the drag. Qt reports the same result for Esc and for a drop outside
+every window, so we check whether the primary button (or Esc) is still held
+when the drag ends: a real drop means the button was just released.
 """
 
 from __future__ import annotations
 
+import sys
 import uuid
 
 from PySide6.QtCore import QDir, QEvent, QMimeData, QPoint, Qt, Signal
-from PySide6.QtGui import QCursor, QDrag, QMouseEvent, QPixmap
+from PySide6.QtGui import QCursor, QDrag, QGuiApplication, QMouseEvent, QPixmap
 from PySide6.QtWidgets import QTabBar, QTabWidget, QWidget
 
 MIME_TYPE = "application/x-gpdf-tab"
@@ -49,6 +51,28 @@ def discard_drag(token: str) -> None:
 
 def drag_is_pending(token: str) -> bool:
     return token in _pending
+
+
+def drag_was_cancelled() -> bool:
+    """True if the drag that just ended was cancelled with Esc, not dropped.
+
+    Esc ends a drag while the primary button is still down; a drop means it was
+    just released. Any failure falls back to False (treat it as a drop).
+    """
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            swapped = user32.GetSystemMetrics(23)  # SM_SWAPBUTTON
+            button = 0x02 if swapped else 0x01  # VK_RBUTTON / VK_LBUTTON
+            return bool(
+                user32.GetAsyncKeyState(button) & 0x8000
+                or user32.GetAsyncKeyState(0x1B) & 0x8000  # VK_ESCAPE
+            )
+        return bool(QGuiApplication.mouseButtons() & Qt.MouseButton.LeftButton)
+    except Exception:
+        return False
 
 
 def make_tab_mime(token: str) -> QMimeData:
@@ -145,8 +169,10 @@ class DetachableTabBar(QTabBar):
 
         drag.exec(Qt.DropAction.MoveAction)
 
-        if drag_is_pending(token):  # dropped outside every tab area
+        if drag_is_pending(token):  # nobody took it: Esc, or dropped outside
             discard_drag(token)
+            if drag_was_cancelled():
+                return
             self.detach_requested.emit(tab, QCursor.pos())
 
     # -- accepting drops ----------------------------------------------------

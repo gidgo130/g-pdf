@@ -20,8 +20,7 @@ by hand on Windows before a release. Use three or four small PDFs.
    no empty window is left behind.
 6. Drag a tab onto the **menu bar or status bar** of another g-pdf window. It
    detaches into a new window (those areas don't accept tabs).
-7. Press **Esc** mid-drag. *Known limitation:* it detaches rather than
-   cancelling.
+7. Press **Esc** mid-drag: the drag is cancelled and the tab stays where it was.
 
 ## Files
 

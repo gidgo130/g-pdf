@@ -283,6 +283,42 @@ def test_leaving_the_bar_starts_a_tab_drag_but_moving_inside_does_not(
     assert dragged == [t1]
 
 
+def _ignored_drag(monkeypatch, cancelled):
+    monkeypatch.setattr(dt.QDrag, "exec", lambda self, *a, **k: Qt.DropAction.IgnoreAction)
+    monkeypatch.setattr(dt, "drag_was_cancelled", lambda: cancelled)
+
+
+def test_cancelled_drag_leaves_the_tab_where_it_was(qapp, make_pdf, monkeypatch):
+    win = MainWindow()
+    t1 = win.open_path(make_pdf("1.pdf"))
+    win.open_path(make_pdf("2.pdf"))
+    _ignored_drag(monkeypatch, cancelled=True)
+
+    token_before = set(dt._pending)
+    win.tabs.tabBar().start_tab_drag(t1)
+    settle(qapp)
+
+    assert len(MainWindow.windows()) == 1
+    assert names(win) == ["1.pdf", "2.pdf"]
+    assert set(dt._pending) == token_before
+
+
+def test_uncancelled_ignored_drag_detaches_the_tab(qapp, make_pdf, monkeypatch):
+    win = MainWindow()
+    t1 = win.open_path(make_pdf("1.pdf"))
+    win.open_path(make_pdf("2.pdf"))
+    _ignored_drag(monkeypatch, cancelled=False)
+
+    win.tabs.tabBar().start_tab_drag(t1)
+    settle(qapp)
+
+    assert len(MainWindow.windows()) == 2
+    new = t1.window()
+    assert isinstance(new, MainWindow) and new is not win
+    assert names(new) == ["1.pdf"]
+    assert names(win) == ["2.pdf"]
+
+
 def test_dropping_a_dragged_tab_on_another_windows_bar_moves_it(qapp, make_pdf):
     a, b = MainWindow(), MainWindow()
     t1 = a.open_path(make_pdf("1.pdf"))
