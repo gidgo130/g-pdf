@@ -62,8 +62,8 @@ TRIAL_WORST, TRIAL_SPREAD = 4, 4
 TRIAL_GAIN_RATIO, TRIAL_GAIN_POINTS = 0.6, 1.0
 TRIAL_MIN_PAGES = 4
 OCR_MISSING_WORDS, OCR_MISSING_SUSPECT = 20, 8.0     # an ink page holds text
-TRIAL_NOTE = ("Tesseract prefers dictionary words, so this score may flatter re-OCR "
-              "(an audit against ground truth is still to come)")
+TRIAL_NOTE = ("suspect % is roughly half the word error rate; the audit against ground "
+              "truth found it does not flatter re-OCR (Tesseract's errors are non-words)")
 
 KEEP_TEXT, OCR_MISSING, REBUILD, EXCLUDE, REVIEW = (
     "keep_text", "ocr_missing", "rebuild_layer", "exclude", "review")

@@ -192,8 +192,13 @@ A file is identified by its contents, so later runs keep your decisions when
 a file moves, and flag them for re-confirming when a file changes.
 
 - **Text quality** is the share of suspect lowercase words: unknown to the
-  word lists, mixed case like `opouyIy`, or a digit inside a word like
-  `Jap6n`. Each page is graded good (< 3%), fair, or poor (>= 8%).
+  word lists, mixed case like `opouyIy`, or a digit in a word like `Jap6n`
+  or `e1`. Each page is graded good (< 3%), fair, or poor (>= 8%). Checked
+  against ground truth, suspect % is roughly half the word error rate; it
+  does not see real-word substitutions, dropped accents or letter-spaced
+  words. Two rates are shown apart: unknown capitalised and short foreign
+  words (names, or Tesseract reading an ornament), and words missing an
+  accent (`tambien`).
 - **Working files.** With `--derived`, a source's `<name>_split_ocr.pdf`
   (or `_ocr.pdf`, `_split.pdf`) is measured instead of the source. The
   source's own layer is kept for comparison.
@@ -204,8 +209,9 @@ a file moves, and flag them for re-confirming when a file changes.
   `rebuild_layer`, `exclude` (duplicate, other language) or `review`, with
   its reasons. For a scan with a weak text layer, Tesseract re-reads up to 8
   pages as a trial, and `rebuild_layer` is suggested only if that is clearly
-  better. Tesseract prefers dictionary words, so this comparison may favour
-  re-OCR. Pages with ink but no text are tried too: text or picture.
+  better (by suspect % plus the capitalised/foreign rate, on both sides; the
+  audit found this does not favour re-OCR). Pages with ink but no text are
+  tried too: text or picture.
   `--no-trial` skips the trial.
 
 Open the sheet in a browser. Check each file, change the action or add a

@@ -5,12 +5,22 @@ A word is known when the wordfreq "large" list of the page language has it at zi
 or another language of LANGS has it at zipf >= 2.5 (the lists hold web typos such as
 "tbis", and the corpus quotes real German and French). Only lowercase-initial words count
 toward the rate: capitalised words are mostly names. Suspect words are unknown lowercase
-words, case-chaos words ("opouyIy") and words with a digit between letters ("Jap6n").
-No accent folding: period spelling ("fué", "á", "dió") is in the lists.
+words, case-chaos words ("opouyIy"), words with a digit between letters ("Jap6n") and
+misread words with digits at the edge ("e1", "10s"). No accent folding: period spelling
+("fué", "á", "dió") is in the lists.
 
-Known limitations: a word misread into another real word is not caught ("mitologia" for
-"mitología" is in the es list at 2.19), and Tesseract prefers dictionary words, so this
-score may flatter a re-OCR. Bump SCORE_VERSION whenever scoring changes: the catalogue
+Two rates are kept apart from suspect %: cap_unknown_pct (capitalised unknown words and
+short words at home in another language: names, and Tesseract's reading of ornaments; the
+rebuild trial and the ink-page test add it to suspect %) and missing_accent_pct
+(informational: "tambien", "corazon" are in the lists as web spellings).
+
+What it measures (audit of 2026-10-21, 295 page texts against ground truth): suspect %
+tracks the word error rate across quality levels (Spearman 0.57, Pearson 0.77) and is
+roughly half of it (about 1.9 WER points per suspect point); within one quality level, and
+below about 2%, it cannot rank pages. It did not flatter re-OCR: Tesseract's errors are
+non-words, which it sees. It does not catch real-word substitutions ("mitologia" for
+"mitología" is in the es list at 2.19), accent drops (except as missing_accent_pct) or
+words lost to letter-spacing. Bump SCORE_VERSION whenever scoring changes: the catalogue
 re-measures files scored with another version.
 """
 
