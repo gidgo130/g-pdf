@@ -24,6 +24,8 @@ HYPHENS = "-‐‑"
 HEAD_SIMILAR = 0.8          # running heads: OCR variants ("Bibliografia" / "Bibliografìa")
 JOIN_MARGIN = 1.0           # zipf: a dictionary join beats its parts by this much
 COMPOUND_ZIPF = 2.0         # zipf: a line-end hyphen pair rarer than this joined stays
+COMPOUND_PART = 4           # letters: the shortest half of a compound kept hyphenated
+COMMON_PART = 2.5           # zipf: halves this common keep a rare joined form apart
 GAP_JUMP = 2.0              # letter gaps vs word gaps: the smallest ratio that splits them
 GAP_FLOOR = 0.1             # pt: gaps below this count as this (overlapping glyphs)
 SYMBOL_LINE_MAX = 6         # characters: a symbol-only line (pencil marks)
@@ -141,14 +143,18 @@ def _z(word: str, lang: str | None) -> float:
 
 def keep_compound(a: str, b: str, lang: str | None) -> bool:
     """A hyphen at a line end belongs to a compound (luso-|hispánico, Avant-|garde): both
-    halves are known and the joined form is not, or is rare (below COMPOUND_ZIPF: the lists
-    hold "avantgarde" at 1.4). Otherwise the hyphen only split the word (menos-|precio:
-    quality.join_hyphens, with the rarity check added)."""
-    if not (quality.known(a, lang) and quality.known(b, lang)):
+    halves are words of >= COMPOUND_PART letters, known, and the joined form is not
+    (quality.join_hyphens), or is rare (below COMPOUND_ZIPF: the lists hold "avantgarde" at
+    1.4) while both halves are common (>= COMMON_PART zipf). Otherwise the hyphen only split
+    the word: menos-|precio, and names and fragments that the lists happen to hold
+    (Hui-|dobro, Jar-|nés, re-|cobrados, neo-|criollo)."""
+    if min(len(a), len(b)) < COMPOUND_PART or not (quality.known(a, lang)
+                                                   and quality.known(b, lang)):
         return False
     if quality.join_hyphens(f"{a}-\n{b}", lang) == f"{a}-{b}":
         return True
-    return _z(a + b, lang) < COMPOUND_ZIPF
+    return (_z(a + b, lang) < COMPOUND_ZIPF
+            and min(_z(a, lang), _z(b, lang)) >= COMMON_PART)
 
 
 # ---------------------------------------------------------------------------- line joins

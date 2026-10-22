@@ -55,6 +55,16 @@ def test_join_lines(a, b, text, how):
     assert c.join_lines(a, b, "es") == (text, how)
 
 
+@pytest.mark.parametrize("a, b, lang, joined", [
+    ("Hui-", "dobro’s poetry", "en", "Huidobro’s poetry"),     # names the lists split up
+    ("Jar-", "nés", "es", "Jarnés"), ("re-", "cobrados", "es", "recobrados"),
+    ("neo-", "criollo", "es", "neocriollo"), ("Liza-", "so", "es", "Lizaso"),
+    ("teórico-", "críticas", "es", "teórico-críticas"), ("Avant-", "garde", "en", "Avant-garde"),
+])
+def test_compounds_need_two_solid_halves(a, b, lang, joined):
+    assert c.join_lines(a, b, lang)[0] == joined
+
+
 def test_join_lines_without_the_dictionary():
     assert c.join_lines("nuestros ma-", "nantiales", "es", nodict=True)[0] == "nuestros manantiales"
     assert c.join_lines("diálogo luso-", "hispánico", "es", nodict=True)[0] == "diálogo lusohispánico"
