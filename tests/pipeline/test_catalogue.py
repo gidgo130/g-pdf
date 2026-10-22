@@ -5,6 +5,7 @@ the owner's decisions file (read, never written), and that the survey is read-on
 import hashlib
 import json
 import os
+import re
 import shutil
 import time
 
@@ -306,7 +307,7 @@ def test_survey_is_read_only(layout, monkeypatch):
     assert survey_cli(layout, "A", "B") == 0
     assert survey_cli(layout, "A", "B", extra=("--remeasure",)) == 0
     assert snapshot(*roots, skip=layout["cat"]) == before
-    assert sorted(os.listdir(layout["cat"])) == ["cache", catalogue.CATALOGUE]
+    assert sorted(os.listdir(layout["cat"])) == ["cache", catalogue.CATALOGUE, catalogue.SHEET]
     assert os.listdir(temp) == []
 
     def broken(*a, **k):
@@ -317,3 +318,72 @@ def test_survey_is_read_only(layout, monkeypatch):
     assert snapshot(*roots, skip=layout["cat"]) == before
     assert os.listdir(temp) == []
     assert not [f for f in os.listdir(layout["cat"]) if f.endswith(".tmp")]
+
+
+# ---------------------------------------------------------------------------- the sheet
+DATA_RE = re.compile(r'<script type="application/json" id="gpdf-data">(.*?)</script>', re.S)
+
+
+def sheet_data(text):
+    (block,) = DATA_RE.findall(text)
+    return block, json.loads(block)
+
+
+def test_sheet_has_every_entry_and_is_self_contained(layout, capsys):
+    import base64
+    import io
+
+    from PIL import Image
+
+    assert survey_cli(layout, "A") == 0
+    obra = by_rel(load(layout))["obra.pdf"]
+    nasty = "see https://example.org/x and http://y </script><script>alert(1)</script>"
+    write_decisions(layout, {obra["id"]: {"action": "keep_text", "notes": nasty,
+                                          "confirmed": True, "suggestion_action": "keep_text"}})
+    assert survey_cli(layout, "A") == 0
+    assert "sheet:" in capsys.readouterr().out
+    text = (layout["cat"] / catalogue.SHEET).read_text("utf-8")
+    assert "http://" not in text and "https://" not in text
+    assert not re.search(r"""(src|href)\s*=\s*["']?//""", text, re.I)
+    assert "@import" not in text and text.count("</script>") == 2
+    block, data = sheet_data(text)
+    assert "</" not in block
+    cat = load(layout)
+    assert {e["id"] for e in data["entries"]} == set(cat["files"])
+    assert data["decisions"]["files"][obra["id"]]["notes"] == nasty
+    views = {e["rel"].replace("\\", "/"): e for e in data["entries"]}
+    assert views["obra.pdf"]["decision_status"]["status"] == catalogue.CONFIRMED
+    assert views["obra.txt"]["decision_status"]["status"] == catalogue.PENDING
+    assert len(views["obra.pdf"]["rows"]) == 5 and views["obra.txt"]["images"] == []
+    ims = views["obra.pdf"]["images"]
+    assert [im["page"] for im in ims] == [1, 2, 3] and all(im["text"] for im in ims)
+    for im in ims:
+        head, b64 = im["src"].split(",", 1)
+        assert head == "data:image/jpeg;base64"
+        pic = Image.open(io.BytesIO(base64.b64decode(b64)))
+        assert pic.size == (im["w"], im["h"]) == (round(420 * 60 / 72), round(600 * 60 / 72))
+    assert data["folder"] == str(layout["cat"])
+
+
+def test_sheet_only_rewrites_just_the_sheet(layout, capsys):
+    assert survey_cli(layout, "A") == 0
+    cat_bytes = (layout["cat"] / catalogue.CATALOGUE).read_bytes()
+    obra = by_rel(load(layout))["obra.pdf"]
+    _, dec_bytes = write_decisions(layout, {obra["id"]: {"action": "exclude", "reason": "off_topic",
+                                                         "confirmed": True,
+                                                         "suggestion_action": "keep_text"}})
+    sheet = layout["cat"] / catalogue.SHEET
+    sheet.write_text("old", "utf-8")
+    capsys.readouterr()
+    assert cli.main(["survey", "--sheet-only", "--catalogue", str(layout["cat"])]) == 0
+    out = capsys.readouterr().out
+    assert "sheet:" in out and "showing:   1 decision(s)" in out
+    _, data = sheet_data(sheet.read_text("utf-8"))
+    view = next(e for e in data["entries"] if e["id"] == obra["id"])
+    assert view["decision_status"]["decision"]["action"] == "exclude"
+    assert (layout["cat"] / catalogue.CATALOGUE).read_bytes() == cat_bytes
+    assert (layout["cat"] / catalogue.DECISIONS).read_bytes() == dec_bytes
+    with pytest.raises(SystemExit):
+        cli.main(["survey", str(layout["A"]), "--sheet-only", "--catalogue", str(layout["cat"])])
+    assert cli.main(["survey", "--sheet-only", "--catalogue", str(layout["tmp"] / "none")]) == 1
+    assert "run the survey first" in capsys.readouterr().err

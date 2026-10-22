@@ -241,3 +241,112 @@ def decision_status(entry, decisions, files) -> tuple[str, dict | None, str]:
             return RECONFIRM, dec[prev], "file changed since the decision"
         prev = files.get(prev, {}).get("previous_id")
     return PENDING, None, "no decision"
+
+
+# ---------------------------------------------------------------------------- review sheet
+THUMB_DPI, THUMB_QUALITY = 60, 60
+MAX_INK_SHOWN = 12
+CLASS_CODES = {"good": 0, "fair": 1, "poor": 2, "unscored": 3}
+ROW_FIELDS = ("page", "lang", "words", "lower", "pct", "cls", "merged", "spaced", "digit",
+              "chaos", "junk_pct")
+
+
+def _template(name: str) -> str:
+    from importlib import resources
+
+    return resources.files("gpdf.pipeline").joinpath("catalogue_sheet", name).read_text("utf-8")
+
+
+def _jpeg(page) -> dict:
+    import base64
+
+    import pymupdf
+
+    pix = page.get_pixmap(dpi=THUMB_DPI, colorspace=pymupdf.csGRAY)
+    data = base64.b64encode(pix.tobytes("jpg", jpg_quality=THUMB_QUALITY)).decode("ascii")
+    return {"src": "data:image/jpeg;base64," + data, "w": pix.width, "h": pix.height}
+
+
+def _images(e) -> list[dict]:
+    """60 dpi renders of the worst scored pages and the ink pages without text, with the
+    start of their extracted text and of the trial's text."""
+    import pymupdf
+
+    m = e.get("measured") or {}
+    if e.get("status") != PRESENT or m.get("kind") != "pdf":
+        return []
+    trial = {p["page"]: p for p in (e.get("trial") or {}).get("pages", [])}
+    shown = [(s["page"], "worst", s.get("text", "")) for s in m.get("samples", [])]
+    shown += [(p, "no text, ink", "") for p in m["no_text"]["ink"][:MAX_INK_SHOWN]]
+    wf = e.get("working_file")
+    out = []
+    try:
+        with pymupdf.open(wf["path"] if wf else e["path"]) as doc:
+            for page, label, text in shown:
+                if 1 <= page <= len(doc):
+                    t = trial.get(page) or {}
+                    out.append({"page": page, "label": label, "text": text,
+                                "trial_text": t.get("text"), **_jpeg(doc[page - 1])})
+    except Exception:  # noqa: BLE001 - a file that vanished or broke: no pictures
+        return out
+    return out
+
+
+def _view(e, decisions, files) -> dict:
+    status, d, why = decision_status(e, decisions, files)
+    m = e.get("measured")
+    view = {k: e.get(k) for k in ("id", "path", "root", "rel", "kind", "status", "size",
+                                  "mtime", "first_seen", "last_seen", "previous_id",
+                                  "replaced_by", "error", "working_file", "duplicates",
+                                  "suggestion")}
+    if m:
+        view["measured"] = {k: v for k, v in m.items() if k not in ("page_scores", "samples")}
+        view["rows"] = [[r.get(f) if f != "cls" else CLASS_CODES.get(r["cls"], 3)
+                         for f in ROW_FIELDS] for r in m["page_scores"]]
+    else:
+        view["measured"], view["rows"] = None, []
+    sl = e.get("source_layer")
+    view["source_layer"] = {k: sl[k] for k in ("score", "language") if k in sl} if sl else None
+    t = e.get("trial")
+    view["trial"] = ({k: v for k, v in t.items()} if t else None)
+    view["decision_status"] = {"status": status, "why": why, "decision": d}
+    view["images"] = _images(e)
+    return view
+
+
+def sheet_data(cat, decisions, folder) -> dict:
+    files = cat["files"]
+    order = sorted(files, key=lambda k: (files[k]["root"].lower(), files[k]["rel"].lower()))
+    return {
+        "folder": str(folder),
+        "decisions_name": DECISIONS,
+        "generated": now(),
+        "score_version": cat.get("score_version"),
+        "roots": cat.get("roots", []),
+        "row_fields": list(ROW_FIELDS),
+        "classes": list(CLASS_CODES),
+        "decisions": decisions,
+        "entries": [_view(files[k], decisions, files) for k in order],
+    }
+
+
+def render_html(data: dict) -> str:
+    """The sheet: template with CSS, JS and the data inlined. ``</`` and ``://`` are
+    escaped in the JSON (no string in it can end the script element or read as a link)."""
+    import html
+
+    blob = (json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+            .replace("</", "<\\/").replace("://", "\\u003a//"))
+    page = _template("sheet.html")
+    for token, value in (("{{title}}", html.escape("Catalogue review")),
+                         ("{{css}}", _template("sheet.css")),
+                         ("{{js}}", _template("sheet.js"))):
+        page = page.replace(token, value)
+    return page.replace("{{data}}", blob)          # last: the data may contain anything
+
+
+def write_sheet(cat, decisions, folder) -> tuple[Path, int]:
+    """Write DIR/catalogue.review.html (always replaced); returns (path, bytes)."""
+    path = Path(folder) / SHEET
+    write_text(path, render_html(sheet_data(cat, decisions, Path(folder))))
+    return path, path.stat().st_size

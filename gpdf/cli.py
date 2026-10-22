@@ -9,6 +9,7 @@
     gpdf-cli ocr book.pdf -o OUTDIR --lang spa      # invisible text over the scans
     gpdf-cli survey ROOT [ROOT ...] --catalogue DIR [--derived DIR]
                                                     # read-only catalogue + suggestions
+    gpdf-cli survey --sheet-only --catalogue DIR    # rewrite only its review sheet
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
 reviewed (or spreads could not be split), OCR failed on some pages, or the survey could
@@ -97,6 +98,9 @@ def build_parser() -> argparse.ArgumentParser:
                                    "--derived folder is changed; nothing is applied.")
     v.add_argument("roots", metavar="ROOT", nargs="*", type=Path,
                    help="folders to walk (recursively)")
+    v.add_argument("--sheet-only", action="store_true",
+                   help="rewrite only the review sheet from DIR/catalogue.json and the "
+                        "decisions file (no ROOT)")
     v.add_argument("--catalogue", metavar="DIR", type=Path, required=True,
                    help="catalogue folder (created if missing; keep "
                         "catalogue.decisions.json here)")
@@ -217,7 +221,13 @@ def _print_ocr(report, ocr, out, report_path):
 def _survey_main(args, parser) -> int:
     if args.jobs is not None and args.jobs < 1:
         parser.error("--jobs must be at least 1")
-    if not args.roots:
+    if args.sheet_only:
+        for flag, on in (("ROOT", args.roots), ("--derived", args.derived),
+                         ("--no-trial", args.no_trial), ("--remeasure", args.remeasure),
+                         ("--jobs", args.jobs), ("--tesseract", args.tesseract)):
+            if on:
+                parser.error(f"--sheet-only cannot be used with {flag}")
+    elif not args.roots:
         parser.error("give at least one ROOT folder")
     try:
         from gpdf.pipeline import catalogue, survey
@@ -226,6 +236,8 @@ def _survey_main(args, parser) -> int:
             print(f"gpdf-cli: {PREP_HINT}", file=sys.stderr)
             return EXIT_ERROR
         raise
+    if args.sheet_only:
+        return _survey_sheet_only(args, catalogue)
     try:
         res = survey.run(args.roots, args.catalogue, args.derived, trial=not args.no_trial,
                          remeasure=args.remeasure, jobs=args.jobs,
@@ -238,6 +250,27 @@ def _survey_main(args, parser) -> int:
         return EXIT_ERROR
     _print_survey(res, survey, catalogue)
     return res.exit_code
+
+
+def _survey_sheet_only(args, catalogue) -> int:
+    folder = args.catalogue
+    try:
+        if not (folder / catalogue.CATALOGUE).is_file():
+            raise catalogue.CatalogueError(f"no {catalogue.CATALOGUE} in {folder}: run the "
+                                           "survey first")
+        cat = catalogue.load(folder)
+        decisions = catalogue.load_decisions(folder)
+        t0 = time.perf_counter()
+        path, size = catalogue.write_sheet(cat, decisions, folder)
+    except (catalogue.CatalogueError, OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    shown = len(decisions["files"])
+    print(f"sheet:     {path} ({size / 1e6:.1f} MB, {len(cat['files'])} files, "
+          f"{time.perf_counter() - t0:.1f} s)")
+    print(f"showing:   {shown} decision(s) from {folder / catalogue.DECISIONS}"
+          if (folder / catalogue.DECISIONS).exists() else "showing:   no decisions file yet")
+    return EXIT_OK
 
 
 def _short(text, n):
@@ -308,7 +341,10 @@ def _print_survey(res, survey, catalogue):
         print(f"  warning: {w}")
     print(f"time:      {res.seconds:.1f} s")
     for path in res.written:
-        print(f"wrote:     {path}")
+        if path.name == catalogue.SHEET:
+            print(f"sheet:     {path} ({res.sheet_bytes / 1e6:.1f} MB): open it in a browser")
+        else:
+            print(f"wrote:     {path}")
     dec = res.folder / catalogue.DECISIONS
     if dec.exists():
         print(f"decisions: {dec} (read; the survey never writes it)")

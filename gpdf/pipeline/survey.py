@@ -557,6 +557,7 @@ class SurveyResult:
     trial_failed: int = 0
     trial_note: str = ""
     trial_reused: int = 0              # entries whose earlier trial still holds
+    sheet_bytes: int = 0
     seconds: float = 0.0
     counts: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
@@ -724,6 +725,8 @@ def run(roots, folder, derived=(), trial=True, remeasure=False, jobs=None,
     cat.update({"schema": catalogue.SCHEMA, "tool_version": __version__,
                 "score_version": quality.SCORE_VERSION, "updated": when})
     result.written.append(catalogue.save(folder, cat))
+    sheet, result.sheet_bytes = catalogue.write_sheet(cat, decisions, folder)
+    result.written.append(sheet)
     result.seconds = round(time.perf_counter() - t0, 1)
     return result
 

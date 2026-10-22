@@ -1,0 +1,70 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- g-pdf catalogue review sheet. Self-contained: no network. Written by gpdf-cli survey. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<style>
+{{css}}
+</style>
+</head>
+<body>
+<header id="top">
+  <div class="row">
+    <strong>Catalogue review</strong>
+    <span id="progress" class="pill"></span>
+    <span class="filters" role="group" aria-label="Show">
+      <button type="button" data-filter="all">All</button>
+      <button type="button" data-filter="pending">Pending</button>
+      <button type="button" data-filter="reconfirm">Needs re-confirm</button>
+      <button type="button" data-filter="rebuild">Suggested rebuild</button>
+      <button type="button" data-filter="excluded">Excluded</button>
+      <button type="button" data-filter="missing">Missing</button>
+    </span>
+    <label class="small">Sort
+      <select id="sort">
+        <option value="root">root, name</option>
+        <option value="name">name</option>
+        <option value="suspect">suspect % (worst first)</option>
+      </select>
+    </label>
+    <span class="spacer"></span>
+    <button type="button" id="confirm-shown">Confirm all shown</button>
+    <button type="button" id="save" class="primary">Save decisions</button>
+    <button type="button" id="load">Load decisions...</button>
+    <input type="file" id="load-input" accept=".json,application/json" hidden>
+  </div>
+  <div class="row small muted" id="where"></div>
+  <div id="restore" class="banner" hidden>
+    <span id="restore-text"></span>
+    <button type="button" id="restore-yes">Restore</button>
+    <button type="button" id="restore-no">Discard</button>
+  </div>
+  <div id="msg" role="status" aria-live="polite"></div>
+</header>
+
+<main>
+  <table id="files">
+    <thead>
+      <tr>
+        <th>Root</th><th>File</th><th>Kind</th><th class="num">Pages</th><th class="num">Text %</th>
+        <th>Scan</th><th>Language</th><th class="num">Suspect % med / wtd</th>
+        <th class="num">Fair / poor</th><th>Working file</th><th>Group</th><th>Suggestion</th>
+        <th>Decision</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p class="muted small">Click a row to see its pages, samples, trial and duplicates, and to
+    edit and confirm the decision. Nothing is applied by this sheet: it only saves
+    <code>catalogue.decisions.json</code>.</p>
+</main>
+
+<script type="application/json" id="gpdf-data">{{data}}</script>
+<script>
+{{js}}
+</script>
+</body>
+</html>
