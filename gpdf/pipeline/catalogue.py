@@ -248,7 +248,7 @@ THUMB_DPI, THUMB_QUALITY = 60, 60
 MAX_INK_SHOWN = 12
 CLASS_CODES = {"good": 0, "fair": 1, "poor": 2, "unscored": 3}
 ROW_FIELDS = ("page", "lang", "words", "lower", "pct", "cls", "merged", "spaced", "digit",
-              "chaos", "junk_pct", "cap_unknown_pct")
+              "chaos", "junk_pct", "cap_unknown_pct", "missing_accent_pct")
 
 
 def _template(name: str) -> str:

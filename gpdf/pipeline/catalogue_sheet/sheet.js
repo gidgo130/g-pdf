@@ -325,6 +325,7 @@
       [e.measured ? pct(s.median) + " / " + pct(s.weighted) : "", null, "num"],
       [e.measured ? (s.fair || 0) + " / " + (s.poor || 0) : "", null, "num"],
       [e.measured ? pct(s.cap_unknown_pct) : "", null, "num"],
+      [e.measured ? pct(s.missing_accent_pct) : "", null, "num"],
       [wf, e.working_file ? e.working_file.path : null],
       [group],
     ];
@@ -375,7 +376,7 @@
       body.appendChild(tr);
       if (opened.has(e.id)) {
         const dtr = el("tr", { class: "detail" });
-        const td = el("td", { colspan: "14" });
+        const td = el("td", { colspan: "15" });
         td.appendChild(detail(e));
         dtr.appendChild(td);
         body.appendChild(dtr);
@@ -404,7 +405,8 @@
     return "p. " + o.page + " · " + (o.lang || "?") + " · " + o.words + " words (" + o.lower +
       " lowercase) · suspect " + pct(o.pct) + "% (" + o.cls + ") · merged " + o.merged +
       ", letter-spaced " + o.spaced + ", digit " + o.digit + ", case chaos " + o.chaos +
-      " · junk " + pct(o.junk_pct) + "% · cap-unknown " + pct(o.cap_unknown_pct) + "%";
+      " · junk " + pct(o.junk_pct) + "% · cap-unknown " + pct(o.cap_unknown_pct) + "% · missing accent " +
+      pct(o.missing_accent_pct) + "%";
   }
 
   function strip(e, box) {

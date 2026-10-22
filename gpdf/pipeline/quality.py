@@ -41,6 +41,8 @@ MIN_SCORED = 30            # lowercase words for a page to be scored
 FAIR, POOR, POOR_JUNK = 3.0, 8.0, 2.0       # suspect %, suspect %, junk %
 SHORT = 3                  # letters: a short word (cap_unknown_pct)
 SHORT_FOREIGN_GAP = 2.0    # zipf: how much more often another language has a short word
+MISSING_ACCENT_ZIPF = 1.0  # an accented form this much more frequent: an accent dropped
+_ACCENTED = {"a": "á", "e": "é", "i": "í", "o": "ó", "u": "úü", "n": "ñ"}
 GOOD, FAIR_CLASS, POOR_CLASS, UNSCORED = "good", "fair", "poor", "unscored"
 
 FUNCTION_WORDS = {
@@ -258,6 +260,7 @@ class PageScore:
     caps: int = 0              # capitalised words (not in the rate)
     caps_unknown: int = 0
     cap_junk: int = 0          # capitalised unknown + short foreign words (cap_unknown_pct)
+    accent: int = 0            # words missing an accent (missing_accent_pct)
 
     @property
     def junk_pct(self) -> float:
@@ -268,11 +271,29 @@ class PageScore:
         """cap_junk per 100 lowercase words: a rate of its own, never in suspect %."""
         return round(100 * self.cap_junk / self.lower, 2) if self.pct is not None else None
 
+    @property
+    def missing_accent_pct(self) -> float | None:
+        """Words missing an accent per 100 lowercase words (informational)."""
+        return round(100 * self.accent / self.lower, 2) if self.pct is not None else None
+
     def row(self) -> dict:
         d = asdict(self)
         d["junk_pct"] = round(self.junk_pct, 2)
         d["cap_unknown_pct"] = self.cap_unknown_pct
+        d["missing_accent_pct"] = self.missing_accent_pct
         return d
+
+
+@lru_cache(maxsize=1 << 18)
+def missing_accent(word: str, lang: str | None) -> bool:
+    """A lowercase word without accents whose accented form (one vowel or ñ) is
+    >= MISSING_ACCENT_ZIPF more frequent in the page language: "tambien", "corazon".
+    The word lists hold such web spellings, so they count as known."""
+    if lang not in _INDEX or not (word.isascii() and word.isalpha() and word.islower()):
+        return False
+    best = max((zipf(word[:i] + a + word[i + 1:], lang)
+                for i, c in enumerate(word) for a in _ACCENTED.get(c, "")), default=0.0)
+    return best - zipf(word, lang) >= MISSING_ACCENT_ZIPF
 
 
 def short_foreign(word: str, lang: str | None) -> bool:
@@ -300,6 +321,7 @@ def score_prepared(text: str, lang: str | None, page: int = 1, spaced: int = 0) 
         if digit or chaos:
             s.suspect += 1
         elif lower:
+            s.accent += missing_accent(word, lang)
             if not known(word, lang):
                 s.suspect += 1
                 s.merged += merged(word, lang)
@@ -392,5 +414,7 @@ def summarise(pages: list[PageScore]) -> dict:
                      "repeated": rate(sum(p.repeated for p in pages))},
         "junk_pct": round(100 * sum(p.junk for p in pages) / chars, 3) if chars else 0.0,
         "cap_unknown_pct": round(100 * sum(p.cap_junk for p in scored) / lower, 2)
+        if lower else None,
+        "missing_accent_pct": round(100 * sum(p.accent for p in scored) / lower, 2)
         if lower else None,
     }

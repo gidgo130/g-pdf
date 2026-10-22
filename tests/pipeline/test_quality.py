@@ -126,6 +126,19 @@ def test_cap_unknown_is_a_rate_of_its_own():
     assert q.short_foreign("the", "es") and not q.short_foreign("the", "en")
 
 
+def test_missing_accent_rate():
+    e = extra("tambien su corazon habia sido")
+    assert e["suspect"] == 0                       # the lists hold these web spellings
+    s = q.score_text(ES + " tambien su corazon", "es")
+    assert s.accent == 2 and s.missing_accent_pct == round(200 / s.lower, 2)
+    assert s.row()["missing_accent_pct"] == s.missing_accent_pct
+    assert q.summarise([s])["missing_accent_pct"] == s.missing_accent_pct
+    for word in ("fué", "á", "dió", "mas", "aun", "esta", "solo", "el", "como", "casa"):
+        assert not q.missing_accent(word, "es"), word      # period spelling and real words
+    assert q.score_text(ES, "es").accent == 0
+    assert q.score_text(ES + " fué á dió", "es").accent == 0
+
+
 def test_period_orthography_is_known():
     assert extra("fué á dió")["suspect"] == 0
 

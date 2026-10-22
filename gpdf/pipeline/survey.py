@@ -71,7 +71,7 @@ ACTIONS = (KEEP_TEXT, OCR_MISSING, REBUILD, EXCLUDE, REVIEW)
 DUPLICATE, OTHER_LANGUAGE, OFF_TOPIC, OTHER = "duplicate", "other_language", "off_topic", "other"
 WORK_LANGS = ("es", "en")
 PAGE_FIELDS = ("page", "lang", "words", "lower", "suspect", "pct", "cls", "merged", "spaced",
-               "digit", "chaos", "junk_pct", "cap_unknown_pct")
+               "digit", "chaos", "junk_pct", "cap_unknown_pct", "missing_accent_pct")
 
 
 class MeasureError(Exception):
