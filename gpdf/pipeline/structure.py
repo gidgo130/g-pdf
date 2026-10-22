@@ -131,6 +131,7 @@ class ContentsEntry:
     comma: bool = False           # written "Title, N" (a text listed under a section)
     inline: bool = False          # one item of an inline list ("Acto I, 5.—Acto II, 35")
     bullet: bool = False          # written "- Title N" (a leaf under header lines)
+    by_phrase: bool = False       # the author came from "..., por Author" (a prologue)
 
 
 _INDEX_HEAD = re.compile(r"^\W*(í|i)ndice( general)?\W*$|^\W*(sumario|contents|index|"
@@ -458,10 +459,14 @@ def _group(raw: list[str], headers: set[str], with_numbers: bool) -> list[Conten
             pending = pending[1:]
         if pending:
             title = joined()
+            by_phrase = False
             if title and author is None:
-                title, author = _by_author(title)
+                t2, a2 = _by_author(title)
+                if a2:
+                    title, author, by_phrase = t2, a2, True
             if title:
-                out.append(ContentsEntry(title, author, num, 0, line=pending_at, comma=comma))
+                out.append(ContentsEntry(title, author, num, 0, line=pending_at, comma=comma,
+                                         by_phrase=by_phrase))
         pending = []
 
     i = 0
@@ -604,7 +609,8 @@ def _group(raw: list[str], headers: set[str], with_numbers: bool) -> list[Conten
             out.append(ContentsEntry(t, author, num, 0, line=i, comma=True))
         else:
             title, author = _by_author(title)
-            out.append(ContentsEntry(title, author, num, 0, line=i, comma=comma))
+            out.append(ContentsEntry(title, author, num, 0, line=i, comma=comma,
+                                     by_phrase=author is not None))
         i += 1
     if pending:
         flush()
@@ -746,6 +752,7 @@ class Claim:
     label: str | None = None         # for contents claims: the printed page as written
     run_last: int | None = None      # for head claims: the last page of the head's run
     rel: int | None = None           # for contents claims: the level relative to the page
+    by_phrase: bool = False          # for contents claims: the author from "..., por X"
 
 
 @dataclass

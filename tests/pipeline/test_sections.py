@@ -349,3 +349,35 @@ def test_editor_introduction_before_the_first_text_is_its_own_criticism_section(
     assert "editor" in " ".join(intro.evidence)
     held = {seq: sid for seq, sid in leaves(s).items()}          # the container holds no
     assert chile.id not in held.values()                           # units of its own
+
+
+def test_texts_matched_to_an_authored_index_entry_are_primary_wherever_they_sit():
+    """A text listed as "Author: “Title”, N" is primary even at level 2 inside a part named
+    for critical texts; a piece listed as "..., por Author" is a prologue: criticism."""
+    units = [unit(0, 1, "Las vanguardias de prueba", "heading"), unit(0, 1, "EDITORA PRUEBA"),
+             unit(0, 2, "La parábola de las vanguardias", "heading"), unit(0, 2, "ALFREDO BOSI"),
+             unit(0, 2, "Yo vi el mundo comenzaba en Recife."),
+             unit(0, 3, "TEXTOS CRÍTICOS", "heading"),
+             unit(0, 3, "El sector crítico reúne ensayos de la época."),
+             unit(0, 4, "NATURALEZA Y ARTE", "heading"), unit(0, 4, "JOAQUÍN TORRES-GARCÍA"),
+             unit(0, 4, "El arte constructivo parte de la naturaleza."),
+             unit(0, 5, "QUERER CONSTRUIR", "heading"), unit(0, 5, "Construir es querer."),
+             unit(0, 6, "Sigue el texto.")]
+    rows = rows_for(7, kinds={7: "index"})
+    apparatus = [{"entry": "e" * 64, "page": 7, "label": "7", "kind": "index", "columns": 1,
+                  "lines": ["ÍNDICE", "La parábola de las vanguardias, por Alfredo Bosi 2",
+                            "TEXTOS CRÍTICOS",
+                            "Joaquín Torres-García: “Naturaleza y arte”, 4; “Querer construir”, 5"]}]
+    e = entry(units, rows, apparatus, [], stem="textos2",
+              meta={"title": "Las vanguardias de prueba", "author": "Editora Prueba"})
+    s = sc.detect(e)
+    check_invariants(s, e.units)
+    assert s.kind == "texts"
+    by_title = {x.title: x for x in s.sections}
+    bosi = by_title["La parábola de las vanguardias"]
+    assert (bosi.role, bosi.author) == ("criticism", "Alfredo Bosi")
+    part = by_title["TEXTOS CRÍTICOS"]
+    assert part.level == 1 and part.role == "criticism"
+    for t in ("Naturaleza y arte", "Querer construir"):
+        x = by_title[t]
+        assert (x.role, x.author, x.parent) == ("primary", "Joaquín Torres-García", part.id), t

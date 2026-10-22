@@ -506,6 +506,7 @@ def _contents_claims(e: Entry, lm: st.LabelMap, on: dict, grouping: set, stats: 
                                 f"{en.label or ''} -> p{en.page}"],
                       key=str(page_no), label=en.label)
             c.rel = en.level
+            c.by_phrase = en.by_phrase
             claims.append(c)
         for h in pending:
             claims.append(Claim(h.title, prev_page, "header", level=1 if role_of_title(h.title)[1]
@@ -690,6 +691,7 @@ class _Group:
     sub: bool = False                                 # a role heading alone
     seq_level: int | None = None
     authored: bool = False
+    by_phrase: bool = False                           # the author from "..., por X"
     page: int = 0
     run_last: int | None = None
     plates: bool = False
@@ -731,6 +733,7 @@ def _merge(g: _Group, units: list, not_authors: set) -> _Group:
             if g.rel_level is None:
                 g.rel_level, g.rel = c.level, c.rel
             g.authored = g.authored or bool(c.author)
+            g.by_phrase = g.by_phrase or c.by_phrase
         elif c.source == "bookmark":
             strength += 1 if c.confidence == HIGH else 0.5
         elif c.source == "head":
@@ -773,6 +776,7 @@ def _absorb(into: _Group, g: _Group) -> None:
     into.evidence += [x for x in g.evidence if x not in into.evidence]
     into.author = into.author or g.author
     into.authored = into.authored or g.authored
+    into.by_phrase = into.by_phrase or g.by_phrase
     if into.rel_level is None:
         into.rel_level, into.rel = g.rel_level, g.rel
     into.seq_level = into.seq_level or g.seq_level
@@ -930,7 +934,7 @@ def detect(e: Entry, decisions: dict | None = None) -> Structure:
     # 4. the book's kind and default role
     authored = [g for g in merged if g.authored]
     content_groups = [g for g in merged if "contents" in g.sources and not g.part_like]
-    if any(role_of_title(g.title)[0] == CRITICISM and g.part_like for g in merged):
+    if any(g.part_like and fold(g.title).startswith("antologia critica") for g in merged):
         s.kind = "anthology"
     elif len(authored) >= 2 and content_groups and len(authored) >= TEXTS_SHARE * len(content_groups):
         s.kind = "texts"
@@ -1106,8 +1110,8 @@ def _build(merged: list[_Group], units: list, s: Structure, entry_title: str,
             if re.match(r"^(prologo|introduccion|introduction|presentacion|estudio preliminar|"
                         r"nota preliminar|epilogo|posfacio)\b", f):
                 return CRITICISM, True
-            if g.authored:
-                return (PRIMARY if texts_level in (None, level) else CRITICISM), True
+            if g.authored:                    # "Author: “Title”": a text of the period;
+                return (CRITICISM if g.by_phrase else PRIMARY), True   # "..., por X": a prologue
             if (texts_level is not None and level == texts_level
                     and (parent is None or not parent.role_fixed)
                     and enclosing.role in (PRIMARY, CRITICISM)):
