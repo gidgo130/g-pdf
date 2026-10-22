@@ -501,7 +501,8 @@ def suggest(entry: dict, dup: dict | None, names: dict[str, str]) -> dict:
 
 
 # ---------------------------------------------------------------------------- the run
-DERIVED_SUFFIXES = ("_split_ocr.pdf", "_ocr.pdf", "_split.pdf")
+DERIVED_SUFFIXES = ("_split_ocr.pdf", "_rebuilt.pdf", "_ocr.pdf", "_split.pdf")
+OCR_DONE = (ocr.OCR, "rebuilt")        # report statuses of pages this pipeline OCR'd
 KINDS = {".pdf": "pdf", ".txt": "txt"}
 HASH_CHUNK = 1 << 20
 
@@ -532,8 +533,8 @@ def walk(root, skip) -> list[Path]:
 
 
 def find_working(src, derived) -> Path | None:
-    """The derived working file of ``src``: <stem>_split_ocr.pdf, then _ocr.pdf, then
-    _split.pdf, in the first --derived folder that has one."""
+    """The derived working file of ``src``: <stem>_split_ocr.pdf, then _rebuilt.pdf
+    (gpdf-cli apply), _ocr.pdf, _split.pdf, in the first --derived folder that has one."""
     stem = Path(src).stem
     for suffix in DERIVED_SUFFIXES:
         for d in derived:
@@ -550,7 +551,7 @@ def _ocr_pages(working) -> tuple[str | None, list[int]]:
         return None, []
     try:
         data = json.loads(report.read_text("utf-8"))
-        pages = [p["page"] for p in data.get("pages", []) if p.get("status") == ocr.OCR]
+        pages = [p["page"] for p in data.get("pages", []) if p.get("status") in OCR_DONE]
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return str(report), []
     return str(report), pages
@@ -641,6 +642,19 @@ def _measure_entry(e, folder, derived, remeasure, result):
         e.pop("trial", None)
 
 
+def _mark_applied(e, applied) -> None:
+    """entry["applied"] when its working file is an output gpdf-cli apply recorded, with
+    the whole-file median suspect % of the source's layer and of the working file."""
+    rec = catalogue.applied_record(e, applied)
+    if not rec or not e.get("measured"):
+        e.pop("applied", None)
+        return
+    src = (e.get("source_layer") or {}).get("score") or {}
+    e["applied"] = {"action": rec["action"], "pages": rec.get("pages"), "time": rec["time"],
+                    "output": rec["output"], "median_before": src.get("median"),
+                    "median_after": e["measured"]["score"]["median"]}
+
+
 def _shingle_sets(files, folder, result) -> dict:
     """Shingles of every present, measured entry (from the cache; recomputed when missing
     and the file is unchanged)."""
@@ -685,6 +699,7 @@ def run(roots, folder, derived=(), trial=True, remeasure=False, jobs=None,
             raise SurveyError(f"no such --derived folder: {d}")
     cat = catalogue.load(folder)
     decisions = catalogue.load_decisions(folder)
+    applied = catalogue.load_applied(folder)
     folder.mkdir(parents=True, exist_ok=True)
     when = catalogue.now()
 
@@ -707,6 +722,7 @@ def run(roots, folder, derived=(), trial=True, remeasure=False, jobs=None,
         if progress:
             progress(i + 1, len(result.scanned), files[k]["rel"])
         _measure_entry(files[k], folder, derived, remeasure, result)
+        _mark_applied(files[k], applied)
 
     users = {}
     for k in result.scanned:

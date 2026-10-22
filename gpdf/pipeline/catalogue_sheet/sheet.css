@@ -70,6 +70,7 @@ tr.detail > td { background: var(--panel); padding: 10px 12px 14px; }
   color: #fff; font-weight: 600; white-space: nowrap;
 }
 .badge.confirmed { background: var(--good); }
+.badge.applied { background: var(--good); outline: 2px solid currentColor; }
 .badge.reconfirm { background: var(--poor); }
 .badge.pending { background: var(--unscored); }
 .badge.differs { background: var(--fair); }

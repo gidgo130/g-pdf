@@ -34,7 +34,7 @@ from gpdf.pipeline.split import same_file
 from gpdf.pipeline.survey import EXCLUDE, KEEP_TEXT, OCR_MISSING, REBUILD, sha256
 
 SCHEMA = 1
-APPLIED = "applied.json"
+APPLIED = catalogue.APPLIED_LOG
 SUFFIX = "_rebuilt"
 REBUILT, OCR, VISIBLE_KEPT, NOT_REMOVABLE, NO_WORDS, BLANK, NO_IMAGE, FAILED = (
     "rebuilt", "ocr", "visible_text_kept", "text_not_removable", "no_words", "blank",
@@ -287,7 +287,9 @@ def plan(folder, outdir, only=(), force=False) -> list[Item]:
             it.refused = f"not measured ({e.get('error') or e.get('status')})"
         else:
             status, _, why = catalogue.decision_status(e, decisions, files)
-            if status != catalogue.CONFIRMED:
+            if status == catalogue.APPLIED:
+                it.note = "already applied"
+            elif status != catalogue.CONFIRMED:
                 it.refused = f"{status}: {why}"
             elif e.get("working_file"):
                 it.refused = ("not supported yet: file already has a working file "
@@ -316,23 +318,9 @@ def plan(folder, outdir, only=(), force=False) -> list[Item]:
 
 
 # ---------------------------------------------------------------------------- applied.json
-def load_applied(folder) -> dict:
-    path = Path(folder) / APPLIED
-    if not path.exists():
-        return {"schema": SCHEMA, "applied": []}
-    try:
-        d = json.loads(path.read_text("utf-8"))
-    except (OSError, ValueError) as e:
-        raise ApplyError(f"cannot read {path}: {e}") from None
-    if not (isinstance(d, dict) and d.get("schema") == SCHEMA
-            and isinstance(d.get("applied"), list)):
-        raise ApplyError(f"{path} is not a schema-{SCHEMA} applied file")
-    return d
-
-
 def record(folder, item, out, report) -> dict:
     """Append one record for ``out`` to DIR/applied.json (temp file + replace)."""
-    data = load_applied(folder)
+    data = catalogue.load_applied(folder)
     rec = {"id": item.id, "source": item.source, "action": item.action,
            "pages": item.pages, "output": str(Path(out).resolve()),
            "output_sha256": sha256(out), "time": catalogue.now(),

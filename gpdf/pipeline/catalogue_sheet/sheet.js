@@ -77,6 +77,10 @@
     const d = state[e.id];
     if (d) {
       if (!d.confirmed) return ["pending", "not confirmed"];
+      const a = e.applied;
+      if (a && a.action === d.action) {
+        return ["applied", a.action + " applied: median suspect " + pct(a.median_before) + "% -> " + pct(a.median_after) + "%"];
+      }
       const was = d.suggestion_action, now = sugg(e).action;
       if (was && now && was !== now) return ["reconfirm", "suggestion changed (" + was + " -> " + now + ")"];
       return ["confirmed", ""];
@@ -84,7 +88,7 @@
     if (previousDecision(e)) return ["reconfirm", "file changed since the decision"];
     return ["pending", "no decision"];
   }
-  const STATUS_TEXT = { confirmed: "confirmed", reconfirm: "needs re-confirm", pending: "pending" };
+  const STATUS_TEXT = { confirmed: "confirmed", applied: "applied", reconfirm: "needs re-confirm", pending: "pending" };
 
   function samePages(a, b) { return JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b); }
 
@@ -610,7 +614,7 @@
       if (e.status === "missing") continue;
       total++;
       const st = status(e)[0];
-      if (st === "confirmed") done++;
+      if (st === "confirmed" || st === "applied") done++;
       if (st === "reconfirm") again++;
     }
     $("progress").textContent = "Confirmed " + done + " / " + total + (again ? " (" + again + " need re-confirm)" : "");

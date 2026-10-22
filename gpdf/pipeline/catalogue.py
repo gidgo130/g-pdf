@@ -7,6 +7,7 @@ Files in the catalogue folder:
   catalogue.decisions.json  owner-owned, written only by the review sheet; read, never written
   catalogue.review.html     the review sheet, always rewritten
   cache/<sha256>.npy        shingles of each measured file
+  applied.json              written only by gpdf-cli apply: a record per output it wrote
 
 A run touches only the entries under the roots it was given. A file that is gone becomes
 "missing" (never dropped); the same bytes at a new path keep their entry (moved or
@@ -26,10 +27,11 @@ from pathlib import Path
 import numpy as np
 
 SCHEMA = 1
-CATALOGUE, DECISIONS, SHEET, CACHE = (
-    "catalogue.json", "catalogue.decisions.json", "catalogue.review.html", "cache")
+CATALOGUE, DECISIONS, SHEET, CACHE, APPLIED_LOG = (
+    "catalogue.json", "catalogue.decisions.json", "catalogue.review.html", "cache",
+    "applied.json")
 PRESENT, MISSING, ERROR = "present", "missing", "error"
-CONFIRMED, RECONFIRM, PENDING = "confirmed", "needs re-confirm", "pending"
+CONFIRMED, RECONFIRM, PENDING, APPLIED = "confirmed", "needs re-confirm", "pending", "applied"
 
 
 class CatalogueError(Exception):
@@ -221,14 +223,52 @@ def load_decisions(folder) -> dict:
     return d
 
 
+def load_applied(folder) -> dict:
+    """DIR/applied.json ({"schema": 1, "applied": [records]}; empty if there is none)."""
+    path = Path(folder) / APPLIED_LOG
+    if not path.exists():
+        return {"schema": SCHEMA, "applied": []}
+    try:
+        d = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError) as e:
+        raise CatalogueError(f"cannot read {path}: {e}") from None
+    if not (isinstance(d, dict) and d.get("schema") == SCHEMA
+            and isinstance(d.get("applied"), list)):
+        raise CatalogueError(f"{path} is not a schema-{SCHEMA} applied file")
+    return d
+
+
+def applied_record(entry, applied) -> dict | None:
+    """The latest applied.json record whose output is ``entry``'s working file, with the
+    same bytes."""
+    wf = entry.get("working_file")
+    if not wf:
+        return None
+    for rec in reversed(applied.get("applied", [])):
+        if (rec.get("id") == entry["id"] and rec.get("output_sha256") == wf["sha256"]
+                and same_path(rec.get("output", ""), wf["path"])):
+            return rec
+    return None
+
+
+def _pct(v) -> str:
+    return "n/a" if v is None else f"{v:.1f}%"
+
+
 def decision_status(entry, decisions, files) -> tuple[str, dict | None, str]:
-    """(status, the decision that applies, why) for an entry: confirmed, needs re-confirm
-    (the file changed, or the suggestion changed since it was confirmed) or pending."""
+    """(status, the decision that applies, why) for an entry: confirmed, applied (the
+    entry's working file is this decision's output), needs re-confirm (the file changed,
+    or the suggestion changed since it was confirmed) or pending."""
     dec = decisions.get("files", {})
     d = dec.get(entry["id"])
     if d is not None:
         if not d.get("confirmed"):
             return PENDING, d, "not confirmed"
+        a = entry.get("applied")
+        if a and a.get("action") == d.get("action"):
+            return APPLIED, d, (f"{a['action']} applied: median suspect "
+                                f"{_pct(a.get('median_before'))} -> "
+                                f"{_pct(a.get('median_after'))}")
         was = d.get("suggestion_action")
         now_ = (entry.get("suggestion") or {}).get("action")
         if was and now_ and was != now_:
@@ -298,7 +338,7 @@ def _view(e, decisions, files) -> dict:
     view = {k: e.get(k) for k in ("id", "path", "root", "rel", "kind", "status", "size",
                                   "mtime", "first_seen", "last_seen", "previous_id",
                                   "replaced_by", "error", "working_file", "duplicates",
-                                  "suggestion")}
+                                  "suggestion", "applied")}
     if m:
         view["measured"] = {k: v for k, v in m.items() if k not in ("page_scores", "samples")}
         view["rows"] = [[r.get(f) if f != "cls" else CLASS_CODES.get(r["cls"], 3)

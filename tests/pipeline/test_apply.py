@@ -254,6 +254,37 @@ def test_applied_record(applied):
     assert rec["time"] and rec["tool_version"]
 
 
+# ---------------------------------------------------------------------------- the survey after
+def test_survey_after_apply_uses_the_rebuilt_file_and_shows_applied(applied, capsys):
+    lay, out, report = applied
+    res = survey.run([lay["root"]], lay["cat"], derived=[lay["out"]], trial=False)
+    e = next(x for x in res.catalogue["files"].values() if x["rel"] == "book.pdf")
+    assert e["working_file"]["path"] == str(out)
+    assert e["working_file"]["ocr_pages"] == [1, 2, 4, 5, 6]       # rebuilt and ocr pages
+    assert e["measured"]["score"]["weighted"] < e["source_layer"]["score"]["weighted"]
+    assert e["applied"]["action"] == "rebuild_layer"
+    assert e["applied"]["median_after"] < e["applied"]["median_before"]
+    decisions = catalogue.load_decisions(lay["cat"])
+    status, _, why = catalogue.decision_status(e, decisions, res.catalogue["files"])
+    assert status == catalogue.APPLIED and "rebuild_layer applied: median suspect" in why
+    assert e["suggestion"]["action"] != "rebuild_layer"            # the new file is good
+    capsys.readouterr()
+    assert run(lay, "--only", "book.pdf") == 0                     # nothing to do again
+    assert "rebuild_layer (already applied) 1" in capsys.readouterr().out
+    data = catalogue.sheet_data(res.catalogue, decisions, lay["cat"])
+    view = next(v for v in data["entries"] if v["rel"] == "book.pdf")
+    assert view["decision_status"]["status"] == "applied" and view["applied"]
+
+
+def test_applied_status_needs_the_same_bytes(applied):
+    lay, out, _ = applied
+    e = {"id": "x", "working_file": {"path": str(out), "sha256": "other"}}
+    rec = {"id": "x", "output": str(out), "output_sha256": "abc", "action": "rebuild_layer"}
+    assert catalogue.applied_record(e, {"applied": [rec]}) is None
+    assert catalogue.applied_record({**e, "working_file": {"path": str(out), "sha256": "abc"}},
+                                    {"applied": [rec]}) == rec
+
+
 # ---------------------------------------------------------------------------- page lists
 def test_page_list_touches_only_the_listed_pages(lay, tess):
     d = lay["decisions"]

@@ -157,3 +157,21 @@ def test_restore_unsaved_work_and_load_a_file(browser, sheet, tmp_path):
     page.click('[data-filter="all"]')
     assert page.locator("tr.entry").count() == 4
     assert page.errors == []
+
+
+def test_applied_decision_shows_applied_with_the_medians(browser, sheet):
+    lay, html, files = sheet
+    cat = load(lay)
+    pdf = files["obra.pdf"]
+    cat["files"][pdf["id"]]["applied"] = {"action": "rebuild_layer", "median_before": 6.02,
+                                          "median_after": 0.51}
+    decisions = {"schema": 1, "files": {pdf["id"]: {
+        "path": pdf["path"], "action": "rebuild_layer", "pages": "all", "confirmed": True,
+        "suggestion_action": pdf["suggestion"]["action"]}}}
+    catalogue.write_sheet(cat, decisions, lay["cat"])
+    page = open_sheet(browser, html)
+    badge = row(page, pdf).locator(".badge.applied")
+    assert badge.inner_text() == "applied"
+    assert badge.get_attribute("title") == "rebuild_layer applied: median suspect 6.0% -> 0.5%"
+    assert page.inner_text("#progress") == "Confirmed 1 / 4"
+    assert page.errors == []
