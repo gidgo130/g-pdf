@@ -14,10 +14,12 @@
                                                     # apply the confirmed decisions
     gpdf-cli export --catalogue DIR --out OUTDIR [--dry-run]
                                                     # clean, citable text per entry
+    gpdf-cli backup --to DIR [--source PATH]        # copy the review decisions to DIR
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
 reviewed (or spreads could not be split), OCR failed on some pages, the survey could
-not read a file or run a trial page, or apply or export refused a file; 1 error.
+not read a file or run a trial page, or apply or export refused a file; 1 error (for
+backup, also a copy that does not match its source).
 """
 
 from __future__ import annotations
@@ -164,6 +166,17 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--jobs", metavar="N", type=int,
                    help="files exported in parallel (default: CPU count - 1)")
     x.add_argument("--force", action="store_true", help="replace existing output files")
+    b = sub.add_parser("backup", help="copy your review decisions to a dated backup folder",
+                       description="Copy the files only you can make (*.decisions.json and "
+                                   "their *.bak.json backups) from the source tree to "
+                                   "DIR/g-pdf-backup-YYYYmmdd-HHMMSS/, keeping their paths, "
+                                   "with manifest.json. Each copy is checked against its "
+                                   "source. Nothing in the source or in earlier backups is "
+                                   "changed.")
+    b.add_argument("--to", metavar="DIR", type=Path, required=True,
+                   help="backup folder, outside the source (created if missing)")
+    b.add_argument("--source", metavar="PATH", type=Path, default=Path("private/book-prep"),
+                   help="folder holding the decisions (default: private/book-prep)")
     return p
 
 
@@ -183,6 +196,8 @@ def main(argv: list[str] | None = None) -> int:
         return _apply_main(args, parser)
     if args.command == "export":
         return _export_main(args, parser)
+    if args.command == "backup":
+        return _backup_main(args)
     if args.sheet_only:
         for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
                          ("--report", args.report), ("--accept-flagged", args.accept_flagged)):
@@ -435,6 +450,28 @@ def _export_main(args, parser) -> int:
     if errors:
         return EXIT_ERROR
     return EXIT_UNREVIEWED if refused else EXIT_OK
+
+
+def _backup_main(args) -> int:
+    from gpdf.pipeline import backup
+
+    try:
+        res = backup.run(args.source, args.to)
+    except (backup.BackupError, OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    print(f"copied {len(res.files)} file(s), {res.total / 1e3:.1f} KB:")
+    for f in res.files:
+        print(f"  {f['path']}")
+    print(f"to:        {res.dest}")
+    print(f"manifest:  {res.dest / backup.MANIFEST}")
+    for rel in res.differs:
+        print(f"gpdf-cli: error: the copy of {rel} differs from its source", file=sys.stderr)
+    if res.differs:
+        return EXIT_ERROR
+    print("checked:   every copy matches its source (sha256)")
+    print(f"restore:   copy the files back to the same relative paths under {args.source}")
+    return EXIT_OK
 
 
 def _run_exports(export, todo, out, jobs):
