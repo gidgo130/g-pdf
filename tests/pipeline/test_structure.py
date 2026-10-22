@@ -143,7 +143,9 @@ def test_label_map_resolves_printed_pages_in_sequence():
 
 
 # ---------------------------------------------------------------------------- outline
-def unit(seq, page, text, kind="prose", label=None):
+def unit(seq, page, text, kind="prose", label="auto"):
+    if label == "auto":
+        label = str(page)
     return {"entry": "e", "seq": seq, "kind": kind, "text": text, "pages": [page, page],
             "labels": [label, label], "label_inferred": False, "note": None, "lang": "es",
             "flags": []}

@@ -91,7 +91,7 @@ def name_like(text: str) -> bool:
         return False
     caps = 0
     for tok in toks:
-        if tok in _PARTICLES or tok.lower() in _PARTICLES or tok == ".":
+        if tok in _PARTICLES or tok == ".":          # lowercase: "Dos" is a surname
             continue
         core = tok.strip("'’\"“”()")
         if not core:
@@ -713,6 +713,7 @@ class Claim:
     confidence: str = MEDIUM
     original_page: int | None = None
     key: str = ""                    # for head claims: the head's canonical key
+    label: str | None = None         # for contents claims: the printed page as written
 
 
 @dataclass
@@ -725,7 +726,8 @@ class OutlineResult:
 
     @property
     def kept(self) -> list[Claim]:
-        return sorted(self.confirmed + self.unconfirmed, key=lambda c: c.page)
+        return sorted(self.confirmed + [c for c, _ in self.reanchored] + self.unconfirmed,
+                      key=lambda c: c.page)
 
 
 def outline_is_junk(toc: list, page_count: int) -> bool:
@@ -780,9 +782,20 @@ def units_on(units: list[dict]) -> dict[int, list[dict]]:
     return out
 
 
+def match_score(title: str, text: str) -> float:
+    """1.0: the same title (fuzzy) or the text opens with it; 0.5: the title's words are
+    in the text and the text's in the title; 0: no match. Numerals must agree."""
+    if not same_numerals(title, text):
+        return 0.0
+    if ratio(title, text) >= 0.8:
+        return 1.0
+    if title_match(title, text) and title_match(text, title):
+        return 0.5
+    return 0.0
+
+
 def head_matches(title: str, head: str) -> bool:
-    return (ratio(title, head) >= 0.8 or (title_match(title, head) and title_match(head, title))
-            ) and same_numerals(title, head)
+    return match_score(title, head) > 0
 
 
 def _confirm(title: str, page: int, heads: dict, on: dict) -> tuple[bool, list[str], str | None]:
@@ -807,16 +820,18 @@ def _confirm(title: str, page: int, heads: dict, on: dict) -> tuple[bool, list[s
 
 
 def _find_pages(title: str, heads: dict, on: dict, after: int) -> list[tuple[int, str]]:
-    """Pages after ``after`` where a head or a short unit matches ``title``, as (page, how),
-    the first page of each head run only."""
-    found = []
+    """Pages after ``after`` where a head or a short unit matches ``title``, as (page, how):
+    strong matches (the same title) first, then word matches; the first page of each
+    head run only."""
+    strong, weak = [], []
     prev_hit = -9
     for q in sorted(heads):
         if q <= after:
             continue
-        if any(head_matches(title, h) for h in heads[q]):
+        score = max((match_score(title, h) for h in heads[q]), default=0.0)
+        if score:
             if q > prev_hit + 2:
-                found.append((q, "head"))
+                (strong if score >= 1 else weak).append((q, "head"))
             prev_hit = q
     for q in sorted(on):
         if q <= after:
@@ -824,9 +839,19 @@ def _find_pages(title: str, heads: dict, on: dict, after: int) -> list[tuple[int
         for u in on[q]:
             if len(u["text"]) <= 120 and ratio(title, u["text"]) >= 0.85 and same_numerals(
                     title, u["text"]):
-                found.append((q, "heading unit" if u["kind"] == "heading" else "unit"))
+                strong.append((q, "heading unit" if u["kind"] == "heading" else "unit"))
                 break
-    return sorted(found)
+    return sorted(strong) + sorted(weak)
+
+
+def part_like(title: str) -> bool:
+    """A part's name: a bibliography, an index, notes, a critical anthology, plates..."""
+    f = fold(title).strip(" .:")
+    return bool(re.match(r"^(bibliograf|bibliography|works cited|obras citadas|referencias|"
+                         r"indice onomastico|index$|notas$|notes$|notas extensas|laminas|"
+                         r"ilustraciones|antologia critica|textos criticos|manifiestos$|"
+                         r"revistas$|antologias: prologos|titulos publicados|otros titulos|"
+                         r"lista de autores|imagenes)", f))
 
 
 def verify_outline(toc: list, rows: list[dict], units: list[dict],
@@ -852,9 +877,12 @@ def verify_outline(toc: list, rows: list[dict], units: list[dict],
     for pg, group in by_page.items():
         if len(group) < 2:
             continue
-        ok = [c for c in group if _confirm(c.title, pg, heads, on)[0]]
-        keep = ok[-1] if ok else group[-1]
-        for c in group:
+        plain = [c for c in group if not part_like(c.title)]   # a part keeps its page
+        if len(plain) < 2:
+            continue
+        ok = [c for c in plain if _confirm(c.title, pg, heads, on)[0]]
+        keep = ok[-1] if ok else plain[-1]
+        for c in plain:
             if c is not keep:
                 res.dropped.append((c, f"same page as «{keep.title}» (grouping)"))
                 grouped.add(id(c))
@@ -875,14 +903,12 @@ def verify_outline(toc: list, rows: list[dict], units: list[dict],
             continue
         # re-anchor: a contents entry with this title, else a head run or heading elsewhere
         target, how = None, ""
-        for e in contents:
-            if e.page and (ratio(c.title, e.title) >= 0.8 or (
-                    title_match(c.title, e.title) and title_match(e.title, c.title))) and \
-                    same_numerals(c.title, e.title):
-                target, how = e.page, f"contents {e.label}"
-                if _confirm(c.title, e.page, heads, on)[0]:
-                    how += ", heads"
-                break
+        best = max((e for e in contents if e.page), key=lambda e: match_score(c.title, e.title),
+                   default=None)
+        if best is not None and match_score(c.title, best.title) > 0:
+            target, how = best.page, f"contents {best.label}"
+            if _confirm(c.title, best.page, heads, on)[0]:
+                how += ", heads"
         if target is None:
             found = [(q, h) for q, h in _find_pages(c.title, heads, on, prev_page)]
             if found:
@@ -1029,9 +1055,14 @@ def _starts_with(title: str, text: str) -> bool:
     return len(ft) >= 8 and SequenceMatcher(None, ft, head[:len(ft)]).ratio() >= 0.85
 
 
+def _heading_score(title: str, text: str) -> float:
+    if _starts_with(title, text) and same_numerals(title, text):
+        return 1.0
+    return match_score(title, text)
+
+
 def _heading_matches(title: str, text: str) -> bool:
-    return (ratio(title, text) >= 0.8 or (title_match(title, text) and title_match(text, title))
-            or _starts_with(title, text)) and same_numerals(title, text)
+    return _heading_score(title, text) > 0
 
 
 def _author_lines_before(units: list[dict], k: int, page: int, author: str | None) -> int:
@@ -1042,7 +1073,7 @@ def _author_lines_before(units: list[dict], k: int, page: int, author: str | Non
         t = units[j - 1]["text"].strip()
         short = len(t) <= 60 and "\n" not in t and not t.endswith((".", ":", ";", ","))
         if short and (name_like(t) or (author and ratio(t, author) >= 0.8)
-                      or units[j - 1]["kind"] == "heading" and len(t.split()) <= 4):
+                      or re.match(r"^nota extensa \d+", fold(t))):
             j -= 1
         else:
             break
@@ -1059,12 +1090,15 @@ def anchor(claim: Claim, units: list[dict], on: dict[int, list[dict]],
         pos = {id(u): i for i, u in enumerate(units)}
     page = claim.page
     for pg in (page, page + 1):
-        for u in on.get(pg, []):
-            if u["kind"] == "heading" and _heading_matches(claim.title, u["text"]):
-                k = pos[id(u)]
-                j = _author_lines_before(units, k, pg, claim.author)
-                how = f"heading unit on p{pg}" + (", after the author lines" if j < k else "")
-                return j, how
+        scored = [(_heading_score(claim.title, u["text"]), -pos[id(u)], u)
+                  for u in on.get(pg, []) if u["kind"] == "heading"]
+        scored = [x for x in scored if x[0] > 0]
+        if scored:
+            _, _, u = max(scored)
+            k = pos[id(u)]
+            j = _author_lines_before(units, k, pg, claim.author)
+            how = f"heading unit on p{pg}" + (", after the author lines" if j < k else "")
+            return j, how
     for u in on.get(page, []):
         if _starts_with(claim.title, u["text"]) and same_numerals(claim.title, u["text"][:40]):
             return pos[id(u)], f"title at the start of a unit on p{page}"

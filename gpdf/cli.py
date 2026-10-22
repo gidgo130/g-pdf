@@ -14,6 +14,8 @@
                                                     # apply the confirmed decisions
     gpdf-cli export --catalogue DIR --out OUTDIR [--dry-run]
                                                     # clean, citable text per entry
+    gpdf-cli structure --text DIR --out OUTDIR      # parts, sections, authors and roles
+                                                    # of every exported entry
     gpdf-cli backup --to DIR [--source PATH]        # copy the review decisions to DIR
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
@@ -166,6 +168,22 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--jobs", metavar="N", type=int,
                    help="files exported in parallel (default: CPU count - 1)")
     x.add_argument("--force", action="store_true", help="replace existing output files")
+    t = sub.add_parser("structure", help="find each entry's parts, sections, authors and roles",
+                       description="For every entry in DIR/export.json: where each part, "
+                                   "section and text starts and ends, who wrote it and what "
+                                   "role it plays (front, editorial, primary, criticism, "
+                                   "notes, bibliography, index, back, other), from the "
+                                   "contents pages, the verified bookmarks, the running heads "
+                                   "and the headings. Writes OUTDIR/<name>.sections.json and "
+                                   "OUTDIR/structure.json. The text folder and the working "
+                                   "files are only read.")
+    t.add_argument("--text", metavar="DIR", type=Path, required=True,
+                   help="the export folder (export.json, <name>.jsonl, .pages.jsonl, "
+                        ".apparatus.jsonl)")
+    t.add_argument("--out", metavar="OUTDIR", type=Path, required=True,
+                   help="folder for the sections files (created if missing)")
+    t.add_argument("--only", metavar="TEXT", nargs="+", default=[],
+                   help="only entries whose id starts with TEXT or whose name contains it")
     b = sub.add_parser("backup", help="copy your review decisions to a dated backup folder",
                        description="Copy the files only you can make (*.decisions.json and "
                                    "their *.bak.json backups) from the source tree to "
@@ -198,6 +216,8 @@ def main(argv: list[str] | None = None) -> int:
         return _export_main(args, parser)
     if args.command == "backup":
         return _backup_main(args)
+    if args.command == "structure":
+        return _structure_main(args)
     if args.sheet_only:
         for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
                          ("--report", args.report), ("--accept-flagged", args.accept_flagged)):
@@ -472,6 +492,18 @@ def _backup_main(args) -> int:
     print("checked:   every copy matches its source (sha256)")
     print(f"restore:   copy the files back to the same relative paths under {args.source}")
     return EXIT_OK
+
+
+def _structure_main(args) -> int:
+    from gpdf.pipeline import sections
+
+    try:
+        res = sections.run(args.text, args.out, args.only)
+    except (sections.StructureError, OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    print(sections.report(res))
+    return EXIT_ERROR if res.errors else EXIT_OK
 
 
 def _run_exports(export, todo, out, jobs):
