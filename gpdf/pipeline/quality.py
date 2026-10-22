@@ -26,7 +26,7 @@ from math import ceil
 
 from wordfreq import zipf_frequency
 
-SCORE_VERSION = 1
+SCORE_VERSION = 2
 LANGS = ("es", "en", "fr", "pt", "it", "de", "ca")
 _INDEX = {lang: i for i, lang in enumerate(LANGS)}
 TESSERACT_LANGS = {"es": "spa", "en": "eng+spa", "fr": "fra", "pt": "por", "it": "ita",
@@ -57,6 +57,8 @@ _SPACED = re.compile(rf"(?<!{_L}){_L}(?: {_L}){{3,}}(?!{_L})")
 _HARD_BREAK = re.compile(rf"({_L}+)-[ \t]*\r?\n[ \t]*({_L}+)")
 _TOKEN = re.compile(r"[^\W_]+(?:['’][^\W_]+)*")              # letters and digits
 _EDGE_DIGITS = re.compile(r"^\d+|\d+$")
+_CONFUSABLE = {"0": "o", "1": "l", "4": "a", "5": "s", "6": ("o", "ó"), "8": "B"}
+FOOTNOTE_CORE = 3          # letters: a known word this long before a digit is a footnote
 _REPEATED = re.compile(rf"({_L})\1{{3,}}", re.I)
 _PUNCT = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~¡¿«»“”‘’–—…§°ºª­"
 _NOT_JUNK = re.compile(r"[\sA-Za-z0-9!-/:-@\[-`{-~¡¿«»“”‘’–—…§°ºª­"
@@ -112,11 +114,39 @@ def join_hyphens(text: str, lang: str | None) -> str:
     return _HARD_BREAK.sub(fix, text)
 
 
-def _tokens(text):
-    """(word, has a digit between letters) for each word of >= 2 characters; digits at
-    either end (footnote markers, "1920s") are dropped."""
+def digit_word(token: str, lang: str | None) -> str | None:
+    """The word a token with digits at its edge was misread from ("e1" -> "el", "10s" ->
+    "los", "a1" -> "al"): confusable digits mapped to letters give a known word that is
+    more frequent than the token (wordfreq gives digit tokens a frequency of their own).
+    None for footnote markers after a known word ("palabra1", "poema5") and years
+    ("1920s")."""
+    core = _EDGE_DIGITS.sub("", token)
+    if token[-1].isdigit() and len(core) >= FOOTNOTE_CORE and known(core, lang):
+        return None
+    words = [""]
+    for c in token:
+        words = [w + x for w in words for x in _CONFUSABLE.get(c, c)]
+    z = zipf(token, lang) if lang in _INDEX else max(zipfs(token))
+    for w in words:
+        if w.isalpha() and known(w, lang) and (
+                zipf(w, lang) if lang in _INDEX else max(zipfs(w))) > z:
+            return w
+    return None
+
+
+def _tokens(text, lang=None):
+    """(word, digit) for each word of >= 2 characters: ``digit`` when a digit sits between
+    letters, or the token has digits at its edge and is a misread word (digit_word; the
+    word yielded is then the mapped one). Other digits at either end (footnote markers,
+    "1920s") are dropped."""
     for m in _TOKEN.finditer(text):
-        core = _EDGE_DIGITS.sub("", m.group())
+        token = m.group()
+        core = _EDGE_DIGITS.sub("", token)
+        if core != token and core and not any(c.isdigit() for c in core):
+            word = digit_word(token, lang)
+            if word:
+                yield word, True
+                continue
         if len(core) >= 2 and not core[0].isdigit():
             yield core, any(c.isdigit() for c in core)
 
@@ -218,7 +248,7 @@ class PageScore:
 def score_prepared(text: str, lang: str | None, page: int = 1, spaced: int = 0) -> PageScore:
     """Score a prepared text (prepare + join_hyphens) in the page language."""
     s = PageScore(page, lang, spaced=spaced)
-    for word, digit in _tokens(text):
+    for word, digit in _tokens(text, lang):
         s.words += 1
         lower = word[0].islower()
         chaos = _case_chaos(word)

@@ -67,6 +67,21 @@ def test_inner_digit_counted_but_footnote_markers_not():
     assert e["digit"] == 2 and e["suspect"] == 2 and e["lower"] == 1     # only "de"
 
 
+def test_edge_digit_misreads_counted():
+    e = extra("dijo e1 poeta que 10s versos a1 final y 1a casa sin0 nada")
+    assert e["digit"] == 4 and e["suspect"] == 4          # e1, 10s, a1, 1a
+    assert e["lower"] == extra("dijo el poeta que los versos al final y la casa sin nada")[
+        "lower"]                                           # "sin0": "sin" + a footnote
+    assert q.digit_word("10s", "es") == "los" and q.digit_word("e1", "es") == "el"
+
+
+def test_footnote_markers_and_years_not_counted():
+    e = extra("las vanguardias1 del poema5 en los 1920s y 1930")
+    assert e["digit"] == 0 and e["suspect"] == 0
+    assert q.digit_word("vanguardias1", "es") is None     # "vanguardiasl" is not a word
+    assert q.digit_word("1920s", "es") is None
+
+
 def test_case_chaos_counted():
     e = extra("dUjxJLcjíMyix opouyIy")
     assert e["chaos"] == 2 and e["suspect"] == 2
