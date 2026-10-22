@@ -90,6 +90,11 @@ def test_footnote_markers_and_years_not_counted():
     assert q.digit_word("1920s", "es") is None
 
 
+def test_index_codes_and_ordinals_not_counted():
+    e = extra("Andrade, Raúl E38, 44; E48, 46; P8, 64; P86, 73; la 4a y la 5a parte")
+    assert e["digit"] == 0 and e["suspect"] == 0           # "PB", "aa", "sa": junk
+
+
 def test_case_chaos_counted():
     e = extra("dUjxJLcjíMyix opouyIy")
     assert e["chaos"] == 2 and e["suspect"] == 2

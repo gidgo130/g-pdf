@@ -74,6 +74,7 @@ _EDGE_DIGITS = re.compile(r"^\d+|\d+$")
 _PAGE_END_HYPHENS = ("-", "­", "‐")
 _CONFUSABLE = {"0": "o", "1": "l", "4": "a", "5": "s", "6": ("o", "ó"), "8": "B"}
 FOOTNOTE_CORE = 3          # letters: a known word this long before a digit is a footnote
+DIGIT_WORD_ZIPF = 2.0      # a misread word is this much more frequent than the token
 ONE_LETTER_WORDS = {"es": "aeouy", "en": "ai"}
 ONE_LETTER_ANY = "aeiouy"
 _REPEATED = re.compile(rf"({_L})\1{{3,}}", re.I)
@@ -153,10 +154,14 @@ def join_hyphens(text: str, lang: str | None) -> str:
 def digit_word(token: str, lang: str | None) -> str | None:
     """The word a token with digits at its edge was misread from ("e1" -> "el", "10s" ->
     "los", "a1" -> "al"): confusable digits mapped to letters give a known word that is
-    more frequent than the token (wordfreq gives digit tokens a frequency of their own).
-    None for footnote markers after a known word ("palabra1", "poema5") and years
-    ("1920s")."""
+    >= DIGIT_WORD_ZIPF more frequent than the token (wordfreq gives digit tokens a
+    frequency of their own; ordinals such as "4a", "5a" map to junk only a little more
+    frequent).
+    None for footnote markers after a known word ("palabra1", "poema5"), years ("1920s")
+    and codes with capitals ("P8", "E48": index entries)."""
     core = _EDGE_DIGITS.sub("", token)
+    if not core.islower():
+        return None
     if token[-1].isdigit() and len(core) >= FOOTNOTE_CORE and known(core, lang):
         return None
     words = [""]
@@ -165,7 +170,7 @@ def digit_word(token: str, lang: str | None) -> str | None:
     z = zipf(token, lang) if lang in _INDEX else max(zipfs(token))
     for w in words:
         if w.isalpha() and known(w, lang) and (
-                zipf(w, lang) if lang in _INDEX else max(zipfs(w))) > z:
+                zipf(w, lang) if lang in _INDEX else max(zipfs(w))) >= z + DIGIT_WORD_ZIPF:
             return w
     return None
 
