@@ -600,12 +600,28 @@ def _respace(pages, job, counts) -> None:
                         ln.marks.remove(mark)
 
 
+_ONE_DIGIT = re.compile(r"\[\^(\d)\]$")
+
+
 def _link(pages, counts) -> None:
-    """Glued digits after a word become [^n] when note n is on the page or the next one."""
+    """Glued digits after a word become [^n] when note n is on the page or the next one; a
+    marker read as two single-digit superscripts ("[^5] [^1]", Mexico p. 277) is one
+    marker when the joined number is such a note."""
     numbers = {p.index: {n.number for n in p.notes if n.number is not None} for p in pages}
     for p in pages:
         near = numbers.get(p.index, set()) | numbers.get(p.index + 1, set())
         for ln in p.lines:
+            k = 0
+            while k + 1 < len(ln.words):
+                a, b = ln.words[k], ln.words[k + 1]
+                ma, mb = _ONE_DIGIT.search(a.text), _ONE_DIGIT.fullmatch(b.text)
+                if ma and mb and int(ma.group(1) + mb.group(1)) in near:
+                    a.text = f"{a.text[:ma.start()]}[^{ma.group(1)}{mb.group(1)}]"
+                    a.x1 = max(a.x1, b.x1)
+                    del ln.words[k + 1]
+                    counts["markers"]["digits_joined"] += 1
+                    continue
+                k += 1
             for w in ln.words:
                 counts["markers"]["superscript"] += w.text.count("[^")
                 if not near and not any(c.isdigit() for c in w.text):

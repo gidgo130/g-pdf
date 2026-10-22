@@ -730,3 +730,26 @@ def test_small_type_that_fills_a_page_is_its_body(tmp_path, monkeypatch, scan_fo
     assert [r["kind"] for r in mine] == ["heading"] + ["prose"] * 5
     assert mine[0]["text"] == "Notes" and "endnotes" not in mine[0]["flags"]
     assert all("endnotes" in r["flags"] for r in mine[1:])
+
+
+def test_superscript_marker_read_as_two_digits(tmp_path):
+    # Mexico p. 277: the marker "51" came as two superscript fragments, "[^5] [^1]"
+    path = tmp_path / "fiftyone.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    s.para(words(2600, 40), last_full=True)
+    s.text(X0, s.y, "una forma poética paralítica.")
+    xe = X0 + width("una forma poética paralítica.")
+    s.text(xe, s.y - 4, "5", 6)
+    s.text(xe + width("5", 6) + 1, s.y - 4, "1", 6)
+    s.text(xe + 10, s.y, " Curiosamente, Gorostiza alaba a Novo.")
+    s.y += PITCH
+    s.para(words(2601, 30), indent=0)
+    s.y += 18
+    s.line("50 Prosa, 181.", size=8, pitch=10)
+    s.line('51 "La poesía actual de México", en Prosa, 178.', size=8, pitch=10)
+    save(doc, path)
+    records, *_ = run(path)
+    prose = " ".join(texts(records, "prose"))
+    assert "paralítica.[^51] Curiosamente" in prose
+    assert [r["note"] for r in records if r["kind"] == "note"] == [50, 51]

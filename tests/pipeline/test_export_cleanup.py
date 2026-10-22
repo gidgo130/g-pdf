@@ -188,6 +188,21 @@ def test_note_start():
     assert c.note_start("Martín Fierro, 3") is None
 
 
+def test_note_start_glued_to_the_first_word():
+    # the Mexico anthology: "2Una notable excepción", "20Mitre, p. 676.", "7H texto" (OCR
+    # for "El texto"); a year or a digit followed by lowercase is not a marker
+    assert c.note_start("2Una notable excepción: la de") == (2, "2", False)
+    assert c.note_start("14Sobre el mismo poema, véase") == (14, "14", False)
+    assert c.note_start("20Mitre, p. 676.") == (20, "20", False)
+    assert c.note_start("8Véase mi artículo") == (8, "8", False)
+    assert c.note_start("7H texto dice") == (7, "7", False)
+    assert c.note_start('47"La poesía actual", en Prosa') == (47, "47", False)
+    assert c.note_start("3¿Quién lo dijo?") == (3, "3", False)
+    assert c.note_start("1925Véase") is None
+    assert c.note_start("2a edición") is None
+    assert c.note_start("2101ivio Jiménez, p. 41.") is None
+
+
 def test_link_markers():
     text = "las vanguardias1 y luego pienso.”45 el estado26— en p.5 y 1927 pp.3 vol. 13.1"
     out, linked, left = c.link_markers(text, {1, 45})

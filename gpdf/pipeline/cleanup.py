@@ -411,7 +411,9 @@ def msplit(tokens: list[str], gaps: list[float | None], lang: str | None) -> tup
 
 
 # ---------------------------------------------------------------------------- notes, markers
-_NOTE_START = re.compile(r"^(?:(\d{1,3})\.?|(\*{1,3})|([?!¡¿$%&§])(\d{0,2}))(?=\s|[\"«“])")
+_UP = "A-ZÀ-ÖØ-Þ"
+_NOTE_START = re.compile(rf"^(?:(\d{{1,3}})\.?|(\*{{1,3}})|([?!¡¿$%&§])(\d{{0,2}}))(?=\s|[\"«“])"
+                         rf"|^(\d{{1,3}})(?=[{_UP}\"«“¿¡(])")      # glued: "2Una", "7H texto"
 _LOW = "a-zà-öø-ÿ"
 _P = re.escape(_CLOSE)
 _GLUED = re.compile(rf"(?:(?<=[{_LOW}])|(?<=[{_LOW}][{_P}])|(?<=[{_LOW}][{_P}][{_P}]))"
@@ -423,10 +425,13 @@ def note_start(text: str) -> tuple[int | None, str, bool] | None:
     """The marker a footnote starts with: (number, marker, misread). "24. B. Brecht" ->
     (24, "24.", False); "* Véase" -> (None, "*", False); "?1 El" -> (1, "?1", True): an
     OCR-misread marker whose digits are only the last ones of the number ("$8", "%": the
-    digits lost, (None, "%", True))."""
+    digits lost, (None, "%", True)). A marker of 1-3 digits glued to a capital, an opening
+    quote or "¿¡(" (the Mexico anthology: "2Una notable", "7H texto") -> (2, "2", False)."""
     m = _NOTE_START.match(text)
     if not m:
         return None
+    if m.group(5):
+        return int(m.group(5)), m.group(5), False
     if m.group(1):
         return int(m.group(1)), m.group(0), False
     if m.group(2):
