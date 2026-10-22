@@ -175,6 +175,15 @@ def test_page_classes_at_the_thresholds():
     assert page(100, 0, junk=9).cls == q.POOR_CLASS           # 9 / 409 = 2.2 %
 
 
+def test_word_broken_across_the_page_break_is_not_suspect():
+    first = ES + " la noche mis-"
+    second = "teriosa " + ES
+    s = q.score_pages([first, second])
+    assert s.pages[1].suspect == 0 and s.pages[1].words == q.score_text(ES, "es").words
+    alone = q.score_pages(["la noche", second])                  # no hyphen: counted
+    assert alone.pages[1].suspect == 1
+
+
 def test_file_summary():
     pages = [q.score_text(" ".join(["casa"] * (100 - k) + ["qzxwvb"] * k), "es", i + 1)
              for i, k in enumerate([0, 1, 2, 4, 10])] + [q.score_text("casa", "es", 6)]

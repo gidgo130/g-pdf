@@ -61,6 +61,7 @@ _SPACED = re.compile(rf"(?<!{_L}){_L}(?: {_L}){{3,}}(?!{_L})")
 _HARD_BREAK = re.compile(rf"({_L}+)-[ \t]*\r?\n[ \t]*({_L}+)")
 _TOKEN = re.compile(r"[^\W_]+(?:['’][^\W_]+)*")              # letters and digits
 _EDGE_DIGITS = re.compile(r"^\d+|\d+$")
+_PAGE_END_HYPHENS = ("-", "­", "‐")
 _CONFUSABLE = {"0": "o", "1": "l", "4": "a", "5": "s", "6": ("o", "ó"), "8": "B"}
 FOOTNOTE_CORE = 3          # letters: a known word this long before a digit is a footnote
 ONE_LETTER_WORDS = {"es": "aeouy", "en": "ai"}
@@ -308,10 +309,15 @@ def short_foreign(word: str, lang: str | None) -> bool:
     return other >= KNOWN_OTHER_ZIPF and z[i] <= other - SHORT_FOREIGN_GAP
 
 
-def score_prepared(text: str, lang: str | None, page: int = 1, spaced: int = 0) -> PageScore:
-    """Score a prepared text (prepare + join_hyphens) in the page language."""
+def score_prepared(text: str, lang: str | None, page: int = 1, spaced: int = 0,
+                   skip_first: bool = False) -> PageScore:
+    """Score a prepared text (prepare + join_hyphens) in the page language. ``skip_first``:
+    leave out the first word (the end of a word hyphenated across the page break)."""
     s = PageScore(page, lang, spaced=spaced)
-    for word, digit in _tokens(text, lang):
+    tokens = _tokens(text, lang)
+    if skip_first:
+        next(tokens, None)
+    for word, digit in tokens:
         s.words += 1
         lower = word[0].islower()
         chaos = _case_chaos(word)
@@ -361,7 +367,8 @@ class Scored:
 
 def score_pages(texts: list[str]) -> Scored:
     """Score raw page texts: languages first (per page and for the file), then each page
-    in its language."""
+    in its language. A page after one that ends in a hyphen is scored without its first
+    word (a fragment such as "teriosa")."""
     prepped, page_votes, total = [], [], Counter()
     for t in texts:
         p, spaced = prepare(t)
@@ -377,7 +384,8 @@ def score_pages(texts: list[str]) -> Scored:
             p = prepare(texts[i], lang)[0]
         p = join_hyphens(p, lang)
         out.append(p)
-        pages.append(score_prepared(p, lang, i + 1, spaced))
+        broken = i > 0 and texts[i - 1].rstrip().endswith(_PAGE_END_HYPHENS)
+        pages.append(score_prepared(p, lang, i + 1, spaced, skip_first=broken))
     return Scored(pages, out, file_lang, shares(total))
 
 
