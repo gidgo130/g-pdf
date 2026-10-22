@@ -504,10 +504,12 @@ def blocks(flows: list[Flow]) -> list[int]:
 
 def wraps(flows: list[Flow], block: list[int], hard: list[bool]) -> list[bool]:
     """Lines that continue the previous one in a ragged block (verse, a list): a line set
-    at the hanging indent (right of the block's left edge and of the line before, or where
-    the previous continuation was) whose first word would not have fitted on the previous
-    line against the block's own right edge (Girondo's long verse lines, wrapped and
-    indented). The break before such a line is soft."""
+    at the hanging indent (right of where the block's lines start and of the line before,
+    or where the previous continuation was) whose first word would not have fitted on the
+    previous line against the block's own right edge (Girondo's long verse lines, wrapped
+    and indented). The break before such a line is soft. Where the block's lines start is
+    the lower median of their starts, not the leftmost: a speaker label at the margin
+    before a speech set further in (Tempestad) does not make the speech its wrap."""
     out = [False] * len(flows)
     members = {}
     for i, b in enumerate(block):
@@ -515,7 +517,8 @@ def wraps(flows: list[Flow], block: list[int], hard: list[bool]) -> list[bool]:
     for idx in members.values():
         if len(idx) < 2 or 2 * sum(hard[i] for i in idx[:-1]) < len(idx) - 1:
             continue                                   # prose: the column decides
-        left = min(flows[i].line.vx0 for i in idx)
+        starts = sorted(flows[i].line.vx0 for i in idx)
+        left = starts[(len(starts) - 1) // 2]
         right = max(flows[i].line.x1 for i in idx)
         for a, b in zip(idx, idx[1:]):
             la, lb = flows[a].line, flows[b].line
@@ -523,7 +526,8 @@ def wraps(flows: list[Flow], block: list[int], hard: list[bool]) -> list[bool]:
             need = la.x1 + SPACE_EM * la.size + lb.words[0].width
             tol = FIT_TOL_TESS if flows[b].tesseract else FIT_TOL
             hanging = lb.vx0 > la.vx0 + em or (out[a] and abs(lb.vx0 - la.vx0) < em)
-            if hanging and lb.vx0 > left + em and need > right - tol:
+            if (hanging and lb.vx0 > left + em and need > right - tol
+                    and not cleanup.reference(lb.text)):   # "(I, II, 355 – 360)": no wrap
                 out[b] = True
     return out
 
@@ -534,7 +538,9 @@ def _signal(i: int, flows: list[Flow], block: list[int], hard: list[bool],
     indent after a hard break (the next line of the block goes back left, or this line
     stands alone), an outdent after a hard break
     outdent (a hanging indent: the next line of the block goes in again), or a speaker label
-    after a hard break. The indents compare lines of the same block only."""
+    after a hard break. The indents compare lines of the same block only. An indent after a
+    speaker label is not a signal: the label ("Miranda: …Te tuve lástima,") starts a verse
+    unit and the speech, set further in, belongs to it (Tempestad)."""
     prev, cur = flows[i - 1], flows[i]
     if _gapped(cur) or prev.line.small != cur.line.small:
         return True
@@ -544,7 +550,8 @@ def _signal(i: int, flows: list[Flow], block: list[int], hard: list[bool],
     em = INDENT_EM * cur.line.size
     d = _indent(cur) - _indent(prev)
     back = nxt is None or _indent(nxt) < _indent(cur) - em
-    if d > em and hard[i - 1] and (back or hard[i]):
+    speech = cleanup.speaker(prev.line.text) and not cleanup.speaker(cur.line.text)
+    if d > em and hard[i - 1] and (back or hard[i]) and not speech:
         return True
     if (d > em and back and not hard[i] and nxt is not None
             and prev.line.text.rstrip()[-1:] in SENTENCE_END):

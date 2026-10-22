@@ -656,6 +656,10 @@ def test_verse_after_a_speaker_label_is_not_joined(tmp_path):
     records, *_ = run(path)
     text = "\n".join(texts(records))
     assert "O aquello: cuando tú no conocías,\nSalvaje, tu propio significado," in text
+    # the label line starts the verse unit; its first verse lines are not its wrapped tail
+    # (the base-14 font renders the ellipsis as another glyph: not asserted)
+    unit = [r for r in records if r["kind"] == "verse"][0]["text"]
+    assert unit.startswith("Miranda: ") and "lástima,\nMe tomé el trabajo de hacerte hablar,\nTe" in unit
 
 
 def test_last_line_of_an_indented_paragraph_is_not_a_hanging_indent(tmp_path):
@@ -794,3 +798,35 @@ def test_per_file_tight_gap_rule_joins_without_the_word_list(tmp_path, monkeypat
     assert "como movimiento el runrunismo es la síntesis" in t
     assert "la mayor riqueza de la rima" in t
     assert counts["tight_joins"] == 1          # "com o"; the others the word list already joins
+
+
+def test_speaker_label_starts_the_verse_unit(tmp_path):
+    # Tempestad p. 114: "Próspero: Es un demonio, nacido demonio," at the margin, the rest of
+    # the speech set further in, then the act/scene reference; 264 speeches broke at the label
+    path = tmp_path / "prospero.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    s.para(words(2900, 60))
+    s.y += 14
+    label = "Próspero: Es un demonio, nacido demonio,"
+    s.line(label)
+    verse = ["Y en su naturaleza", "La educación no puede hacer mella.",
+             "O aquello: cuando tú no conocías,", "Todos, están perdidos,",
+             "Más va corroyendo el cáncer su mente."]
+    for ln in verse:
+        s.line(ln, x=X0 + 35)
+    s.line("(I, II, 355 – 360)", x=X0 + 70)
+    s.y += 14
+    s.para(words(2901, 40))
+    s.line("Ariel: Voy, voy. Sale.")
+    s.line("Próspero: Bien hecho, pajarillo")
+    s.line("Mío. Conserva aún", x=X0 + 35)
+    s.line("Tu forma invisible.", x=X0 + 35)
+    save(doc, path)
+    records, *_ = run(path)
+    kinds = [(r["kind"], r["text"]) for r in records]
+    assert ("verse", "\n".join([label] + verse)) in kinds
+    assert [k for k, t in kinds if t.startswith("(I, II, 355")] == ["prose"]   # the reference:
+    #                                                 its own unit (the dash glyph is the font's)
+    assert ("prose", "Ariel: Voy, voy. Sale.") in kinds
+    assert ("verse", "Próspero: Bien hecho, pajarillo\nMío. Conserva aún\nTu forma invisible.") in kinds

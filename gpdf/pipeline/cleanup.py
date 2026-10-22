@@ -522,7 +522,7 @@ def link_markers(text: str, numbers: set[int]) -> tuple[str, int, int]:
 
 
 # ---------------------------------------------------------------------------- line kinds
-_SPEAKER = re.compile(r"^[A-ZÁÉÍÓÚÑÜ][^\s:]{0,24}(?: [^\s:]{1,24}){0,2}"
+_SPEAKER = re.compile(r"^[A-ZÁÉÍÓÚÑÜ][^\s:.,;!?…]{1,24}(?: [^\s:.,;!?…]{1,24}){0,2}"
                       r"(?: \([^)]{0,120}\))?:(?:\s|$)")
 _ORNAMENT = re.compile(r"^[\s*·•⁂∗✱✳❋※]+$")
 _URL = re.compile(r"https?://|www\.", re.I)
@@ -532,8 +532,18 @@ _ENDS_NUMBER = re.compile(r"(?:^|[\s,;:.(\[-])\d{1,4}[.)\]]?\s*$")
 
 def speaker(text: str) -> bool:
     """A drama speaker label at the start of a line ("GALÁN:", "Miranda:", "REINA BIZANTINA
-    (moviendo los brazos):", "Una voz remota:")."""
+    (moviendo los brazos):", "Una voz remota:"). A name has >= 2 letters and no sentence
+    punctuation: not "O aquello:", "Inquisiciones, concluyendo:" inside a speech."""
     return bool(_SPEAKER.match(text))
+
+
+_REFERENCE = re.compile(r"^\(?[IVXLC]+, ?[IVXLCivxlc]+,? ?\d{1,4}(?: ?[^\w\s] ?\d{1,4})?\)?\.?$")
+
+
+def reference(text: str) -> bool:
+    """An act, scene and line reference after a drama quotation: "(I, II, 355 – 360)",
+    "(IV, I, 190)", "(I, II, 336 -338)" (Tempestad)."""
+    return bool(_REFERENCE.match(text.strip()))
 
 
 def ornament(text: str) -> bool:
