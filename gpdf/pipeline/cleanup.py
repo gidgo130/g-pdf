@@ -534,7 +534,7 @@ _SPEAKER = re.compile(r"^[A-ZÁÉÍÓÚÑÜ][^\s:.,;!?…]{1,24}(?: [^\s:.,;!?�
 _ORNAMENT = re.compile(r"^[\s*·•⁂∗✱✳❋※]+$")
 _URL = re.compile(r"https?://|www\.", re.I)
 _INDEX_HEAD = re.compile(r"^\s*(?:índice|indice|index|contents|sumario)\b", re.I)
-_ENDS_NUMBER = re.compile(r"(?:^|[\s,;:.(\[-])\d{1,4}[.)\]]?\s*$")
+_ENDS_NUMBER = re.compile(r"(?:^|[\s,;:.(\[-])\d{1,4}[)\]]?\s*$")
 
 
 def speaker(text: str) -> bool:
@@ -569,7 +569,9 @@ def index_heading(text: str) -> bool:
 
 def ends_in_number(text: str) -> bool:
     """A line that ends in a page reference: an arabic number standing alone ("Borges,
-    Jorge Luis, 12, 45", "Prólogo … 7"); never a word ending in a roman-numeral letter."""
+    Jorge Luis, 12, 45", "Prólogo … 7"); never a word ending in a roman-numeral letter,
+    nor a number followed by a period: a bibliography entry ends in its year or pages
+    ("México: Mundial, 1935.", "Madrid: Cátedra, 1983, pp. 71-90.")."""
     return bool(_ENDS_NUMBER.search(text))
 
 

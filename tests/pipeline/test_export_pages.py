@@ -524,6 +524,31 @@ def test_contents_and_two_column_index_go_to_the_apparatus(tmp_path):
     assert counts["apparatus_pages"] == 2
 
 
+def test_bibliography_entries_are_body_not_contents_or_index(tmp_path):
+    path = tmp_path / "bibliography.pdf"
+    doc = pymupdf.open()
+    toc = Sheet(doc)                                       # contents without dot leaders
+    for t, n in (("Advertencia", 31), ("Prólogo", 7), ("Bello Horizonte", 79),
+                 ("La despedida", 83), ("El Centenario", 86), ("Una revista naval", 88)):
+        toc.line(f"{t} {n}")
+    for i in range(8):
+        body(Sheet(doc), 950 + i, 60)
+    bib = Sheet(doc)                                       # works cited, mid-book
+    for k in range(5):
+        bib.line(f"Autor{k}, Nombre. Obra {k}. México: Mundial, {1930 + k}.")
+        bib.line(f"Crítico{k}, Ana. Estudio. Madrid: Cátedra, 1983, pp. {71 + k}-90.")
+    for i in range(8):
+        body(Sheet(doc), 960 + i, 60)
+    idx = Sheet(doc)                                       # a late one-column index
+    for k in range(10):
+        idx.line(f"Alonso{k}, Cecilio {1091 + k}")
+    save(doc, path)
+    records, rows, app, _, _ = run(path)
+    assert [rows[0]["kind"], rows[9]["kind"], rows[-1]["kind"]] == ["contents", "body", "index"]
+    assert "Mundial, 1930." in " ".join(texts(records))
+    assert len(app) == 2
+
+
 # ---------------------------------------------------------------------------- invariants
 def test_every_record_has_entry_pages_and_a_valid_kind(tmp_path):
     path = tmp_path / "notes.pdf"

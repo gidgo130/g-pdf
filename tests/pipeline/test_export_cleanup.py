@@ -290,6 +290,9 @@ def test_speaker_ornament_url_index():
     assert not c.ends_in_number("Silencio la tierra va a dar a luz un árbol")
     assert not c.ends_in_number("Mastican el universo que me atraviesa como un túnel")
     assert not c.ends_in_number("las palabras de 1920s")
+    assert c.ends_in_number("Advertencia 31") and c.ends_in_number("Alonso, Cecilio 1091")
+    assert not c.ends_in_number("México: Mundial, 1935.")          # bibliography entries
+    assert not c.ends_in_number("Madrid: Cátedra, 1983, pp. 71-90.")
     assert not c.index_heading("Índice de la modernidad en la poesía de la época")
 
 
