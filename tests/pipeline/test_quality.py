@@ -53,6 +53,14 @@ def test_letter_spaced_run_rejoined_and_counted():
     assert q.prepare("a y o")[1] == 0                         # three single letters: words
 
 
+def test_letter_spaced_rejoin_keeps_a_one_letter_word():
+    assert q.prepare("dijo y h e t e n d i d o mucho", "es")[0] == "dijo y hetendido mucho"
+    assert q.prepare("y a l l í estaba", "es")[0] == "y allí estaba"
+    assert q.prepare("su a l m a, el o c a s o", "es")[0] == "su alma, el ocaso"   # words
+    assert q.rejoin_spaced("p o e m a s y", "es") == "poemas y"           # trailing
+    assert extra("y a l l í")["lower"] == extra("y allí")["lower"]
+
+
 def test_line_end_hard_hyphen():
     assert q.join_hyphens("la con-\ntinuación", "es") == "la continuación"
     assert q.join_hyphens("el franco-\nalemán", "es") == "el franco-alemán"   # both known

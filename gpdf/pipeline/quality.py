@@ -59,6 +59,8 @@ _TOKEN = re.compile(r"[^\W_]+(?:['’][^\W_]+)*")              # letters and dig
 _EDGE_DIGITS = re.compile(r"^\d+|\d+$")
 _CONFUSABLE = {"0": "o", "1": "l", "4": "a", "5": "s", "6": ("o", "ó"), "8": "B"}
 FOOTNOTE_CORE = 3          # letters: a known word this long before a digit is a footnote
+ONE_LETTER_WORDS = {"es": "aeouy", "en": "ai"}
+ONE_LETTER_ANY = "aeiouy"
 _REPEATED = re.compile(rf"({_L})\1{{3,}}", re.I)
 _PUNCT = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~¡¿«»“”‘’–—…§°ºª­"
 _NOT_JUNK = re.compile(r"[\sA-Za-z0-9!-/:-@\[-`{-~¡¿«»“”‘’–—…§°ºª­"
@@ -85,10 +87,10 @@ def known(word: str, lang: str | None) -> bool:
 
 
 # ---------------------------------------------------------------------------- text prep
-def prepare(text: str) -> tuple[str, int]:
-    """NFC, soft hyphens resolved, letter-spaced runs ("h e t e n d i d o") rejoined.
-    Returns the text and the number of letter-spaced runs. Line-end hard hyphens need the
-    language: see join_hyphens."""
+def prepare(text: str, lang: str | None = None) -> tuple[str, int]:
+    """NFC, soft hyphens resolved, letter-spaced runs ("h e t e n d i d o") rejoined
+    (rejoin_spaced, in ``lang``; None: any language). Returns the text and the number of
+    letter-spaced runs. Line-end hard hyphens need the language: see join_hyphens."""
     text = unicodedata.normalize("NFC", text)
     text = _SOFT_BREAK.sub("", text)
     text = _SOFT_LETTERS.sub("", text)
@@ -98,9 +100,28 @@ def prepare(text: str) -> tuple[str, int]:
     def join(m):
         nonlocal runs
         runs += 1
-        return m.group(0).replace(" ", "")
+        return rejoin_spaced(m.group(0), lang)
 
     return _SPACED.sub(join, text), runs
+
+
+def rejoin_spaced(run: str, lang: str | None) -> str:
+    """A letter-spaced run ("y h e t e n d i d o") joined, keeping a leading or trailing
+    one-letter word apart when the rest alone is a known word ("y a l l í" -> "y allí"),
+    and a leading one when neither the whole nor the rest is known ("y hetendido")."""
+    letters = run.split(" ")
+    whole = "".join(letters)
+    if known(whole, lang):
+        return whole
+    singles = ONE_LETTER_WORDS.get(lang, ONE_LETTER_ANY)
+    lead, trail = letters[0].lower() in singles, letters[-1].lower() in singles
+    if lead and trail and known(whole[1:-1], lang):
+        return f"{letters[0]} {whole[1:-1]} {letters[-1]}"
+    if lead and known(whole[1:], lang):
+        return f"{letters[0]} {whole[1:]}"
+    if trail and known(whole[:-1], lang):
+        return f"{whole[:-1]} {letters[-1]}"
+    return f"{letters[0]} {whole[1:]}" if lead else whole
 
 
 def join_hyphens(text: str, lang: str | None) -> str:
@@ -279,7 +300,7 @@ def score_prepared(text: str, lang: str | None, page: int = 1, spaced: int = 0) 
 
 def score_text(text: str, lang: str | None, page: int = 1) -> PageScore:
     """Score one raw text (e.g. a trial OCR page) in a given language."""
-    prepared, spaced = prepare(text)
+    prepared, spaced = prepare(text, lang)
     return score_prepared(join_hyphens(prepared, lang), lang, page, spaced)
 
 
@@ -305,6 +326,8 @@ def score_pages(texts: list[str]) -> Scored:
     pages, out = [], []
     for i, ((p, spaced), v) in enumerate(zip(prepped, page_votes)):
         lang = page_language(v, file_lang)
+        if spaced:                              # rejoin the letter-spaced runs in ``lang``
+            p = prepare(texts[i], lang)[0]
         p = join_hyphens(p, lang)
         out.append(p)
         pages.append(score_prepared(p, lang, i + 1, spaced))
