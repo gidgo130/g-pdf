@@ -58,7 +58,7 @@ SHORT_LINE = 15             # characters: a Tesseract line too short to judge by
 GIANT_BOX = 5.0             # x the body size and its own size: a box no text line has
 MARGIN_WORDS = 3
 INDEX_SHARE = 0.4           # lines ending in a page number or with a dot leader
-INDEX_MIN_LINES = 5
+INDEX_MIN_LINES = 6         # numbered lines (a title page with an ISSN and a year is not)
 LATE = 0.9                  # a two-column page in the last 10% of the file: an index
 NOTE_GAP = 1.25             # x the pitch: the gap before a note block inside small type
 TXT_VERSE = 60              # characters: median line length below which a .txt is verse
@@ -423,7 +423,7 @@ def page_kinds(pages: list[Page], total: int) -> None:
             continue
         numbered = sum(cleanup.ends_in_number(t) or cleanup.has_leader(t) for t in texts)
         heading = any(cleanup.index_heading(ln.text) for ln in p.lines[:3])
-        if ((len(texts) >= INDEX_MIN_LINES and numbered >= INDEX_SHARE * len(texts))
+        if ((numbered >= INDEX_MIN_LINES and numbered >= INDEX_SHARE * len(texts))
                 or (p.two_col and p.index >= LATE * total) or heading):
             p.kind = CONTENTS if p.index < total / 2 else INDEX
     marked = [p.index for p in pages if p.head or p.label.status == FOUND]
@@ -651,6 +651,8 @@ def _records(units, pages) -> list[Record]:
                     out.append(Record(NOTE, n.text, n.pages, n.number, flags))
 
     for u in units:
+        if not u.text.strip():
+            continue
         first = u.pages[0]
         notes_until(first - 1)
         out.append(Record(u.kind, u.text.rstrip(cleanup.SOFT_HYPHEN), u.pages,
@@ -678,10 +680,10 @@ def export_pdf(job) -> tuple[list[dict], list[dict], list[dict], str, dict]:
     furniture(pages, counts)
     junk(pages, job, counts)
     page_kinds(pages, total)
-    long_cols = [tl.column(p.lines) for p in pages
-                 if p.kind == BODY and not p.two_col
-                 and sum(ln.chars > tl.LONG_LINE for ln in p.lines) >= 10]
-    file_width = statistics.median(c.width for c in long_cols if c) if any(long_cols) else None
+    long_cols = [c for p in pages if p.kind == BODY and not p.two_col
+                 and sum(ln.chars > tl.LONG_LINE for ln in p.lines) >= 10
+                 and (c := tl.column(p.lines)) and not c.ragged]    # prose pages only
+    file_width = statistics.median(c.width for c in long_cols) if long_cols else None
     pitch = statistics.median([tl.pitch([ln for ln in p.lines if not ln.small] or p.lines)
                                for p in pages if len(p.lines) > 3] or [1.2 * size])
     rules = rules_for(job["id"])

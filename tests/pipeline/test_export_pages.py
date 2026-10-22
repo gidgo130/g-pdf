@@ -584,3 +584,64 @@ def test_indent_after_a_nearly_full_line_that_ends_a_sentence(tmp_path):
     records, *_ = run(path)
     assert len(records) == 2
     assert records[1]["text"] == " ".join(w for ln in b for w in ln)
+
+
+def test_verse_with_space_indents_and_a_file_of_mostly_verse(tmp_path):
+    # Altazor: one prose page, then verse pages with long lines; indents made of spaces
+    path = tmp_path / "altazor.pdf"
+    doc = pymupdf.open()
+    body(Sheet(doc), 1700, 140)
+    long_lines = ["Y al fondo de las olas un pez escucha el paso de los hombres",
+                  "Silencio la tierra va a dar a luz un árbol",
+                  "Mastican el universo que me atraviesa como un túnel",
+                  "Un escalofrío de pájaro me sacude los hombros"]   # long, not full
+    for i in range(3):
+        s = Sheet(doc)
+        for k in range(4):
+            for ln in long_lines:
+                s.line(ln if k or i == 0 else ln.replace(" ", f" {'aeo'[i]} ", 1))  # vary
+    s = Sheet(doc)
+    stair = ["Aruaru", "         urulario", "Lalilá", "          Montesur en lasurido",
+             "          Montesol", "Lusponsedo solinario"]
+    for ln in stair:
+        s.line(ln)
+    save(doc, path)
+    records, *_ = run(path, nodict=True)
+    verse = [r for r in records if r["kind"] == "verse"]
+    assert all(ln in verse[0]["text"].split("\n") for ln in long_lines)
+    assert verse[-1]["text"].endswith("\n" + "\n".join(stair))       # spaces kept
+
+
+def test_verse_after_a_speaker_label_is_not_joined(tmp_path):
+    # Tempestad p. 31: "Miranda: ...Te tuve lástima," then verse lines set further in
+    path = tmp_path / "miranda.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    s.para(words(1800, 60))
+    s.y += 14
+    s.text(X0, s.y, "Miranda:")
+    s.line("…Te tuve lástima,", x=X0 + 100)
+    verse = ["Me tomé el trabajo de hacerte hablar,", "Te enseñaba cada hora esto",
+             "O aquello: cuando tú no conocías,", "Salvaje, tu propio significado,",
+             "Y balbuceabas como los brutos,"]
+    for ln in verse:
+        s.line(ln, x=X0 + 35)
+    save(doc, path)
+    records, *_ = run(path)
+    text = "\n".join(texts(records))
+    assert "O aquello: cuando tú no conocías,\nSalvaje, tu propio significado," in text
+
+
+def test_last_line_of_an_indented_paragraph_is_not_a_hanging_indent(tmp_path):
+    # Altazor p. 2: an indented first line, its continuation back at the margin, the next
+    # paragraph indented again
+    path = tmp_path / "outdent.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    ws = words(1900, 60)
+    a = s.para(ws[:20])
+    b = s.para(ws[20:40])
+    c = s.para(ws[40:])
+    save(doc, path)
+    records, *_ = run(path)
+    assert [len(r["text"].split()) for r in records] == [20, 20, 20]

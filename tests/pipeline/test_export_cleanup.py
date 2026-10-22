@@ -192,6 +192,10 @@ def test_speaker_ornament_url_index():
     assert c.ornament("*****") and c.ornament("* * *") and not c.ornament("*")
     assert c.url("http://www.scielo.org.mx/scielo.php?script=sci_arttext")
     assert c.index_heading("ÍNDICE") and c.index_heading("Índice general")
+    assert c.ends_in_number("Borges, Jorge Luis, 12, 45") and c.ends_in_number("Prólogo … 7")
+    assert not c.ends_in_number("Silencio la tierra va a dar a luz un árbol")
+    assert not c.ends_in_number("Mastican el universo que me atraviesa como un túnel")
+    assert not c.ends_in_number("las palabras de 1920s")
     assert not c.index_heading("Índice de la modernidad en la poesía de la época")
 
 

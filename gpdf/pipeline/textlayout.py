@@ -65,6 +65,7 @@ class Line:
     small: bool = False        # set later: smaller than the body
     heading: bool = False      # set later
     marks: list = field(default_factory=list)   # set later: per-line notes for the record
+    lead_x0: float | None = None   # where the leading spaces start
 
     @property
     def x0(self) -> float:
@@ -73,6 +74,12 @@ class Line:
     @property
     def x1(self) -> float:
         return max(w.x1 for w in self.words)
+
+    @property
+    def vx0(self) -> float:
+        """Where the line starts as set: indentation made of space characters (Altazor's
+        staircase lines) is text, not layout."""
+        return self.lead_x0 if self.lead and self.lead_x0 is not None else self.x0
 
     @property
     def y0(self) -> float:
@@ -146,7 +153,7 @@ def raw_lines(page, sup_markers=False) -> tuple[list[Line], int]:
             if abs(ln["dir"][1]) > 0.1 or ln["dir"][0] < 0:
                 turned += 1
                 continue
-            words, cur, lead = [], [], ""
+            words, cur, lead, lead_x0 = [], [], "", None
             for span in ln["spans"]:
                 for ch in span["chars"]:
                     c = ch["c"]
@@ -156,13 +163,14 @@ def raw_lines(page, sup_markers=False) -> tuple[list[Line], int]:
                             cur = []
                         elif not words:
                             lead += " "
+                            lead_x0 = ch["bbox"][0] if lead_x0 is None else lead_x0
                         continue
                     cur.append((c, ch["bbox"], {"size": span["size"], "flags": span["flags"],
                                                 "origin": ch["origin"]}))
             if cur:
                 words.append(_word(cur, sup_markers))
             if words:
-                out.append(Line(words, page.number, lead))
+                out.append(Line(words, page.number, lead, lead_x0=lead_x0))
     return out, turned
 
 
@@ -196,11 +204,11 @@ def merge_fragments(lines: list[Line]) -> list[Line]:
             h = min(o.height, ln.height) or 1.0
             if o.col == ln.col and overlap >= SAME_LINE * h and abs(o.base - ln.base) < 0.5 * h:
                 if ln.x0 < o.x0:
-                    o.lead = ln.lead
+                    o.lead, o.lead_x0 = ln.lead, ln.lead_x0
                 o.words = sorted(o.words + ln.words, key=lambda w: w.x0)
                 break
         else:
-            out.append(Line(list(ln.words), ln.page, ln.lead, ln.col))
+            out.append(Line(list(ln.words), ln.page, ln.lead, ln.col, lead_x0=ln.lead_x0))
     out.sort(key=lambda l: (l.col, l.base, l.x0))
     return out
 
@@ -337,6 +345,7 @@ def respace_line(line: Line, lang: str | None, nodict: bool, tesseract: bool) ->
 class Column:
     left: float
     right: float
+    ragged: bool = False       # few lines reach the right edge (verse): not a prose measure
 
     @property
     def width(self) -> float:
@@ -369,12 +378,13 @@ def column(lines: list[Line], fallback_width: float | None = None,
             right = min(right, x)
             break
     reach = sum(l.x1 >= right - 3 for l in long_)
-    if reach < 3 or reach < 0.3 * len(long_):
+    ragged = reach < 3 or reach < 0.3 * len(long_)
+    if ragged:
         if fallback_width:
             right = max(right, left + fallback_width)
         elif page_width:
             right = max(right, page_width - left)
-    return Column(left, right)
+    return Column(left, right, ragged)
 
 
 def pitch(lines: list[Line]) -> float:
@@ -437,7 +447,7 @@ class Flow:
 
 
 def _indent(f: Flow) -> float:
-    return f.line.x0 - f.col.left
+    return f.line.vx0 - f.col.left
 
 
 def _hard(a: Flow, b: Flow | None, nodict: bool) -> bool:
@@ -469,9 +479,10 @@ def blocks(flows: list[Flow]) -> list[int]:
 
 def wraps(flows: list[Flow], block: list[int], hard: list[bool]) -> list[bool]:
     """Lines that continue the previous one in a ragged block (verse, a list): a line set
-    at the hanging indent (right of the block's left edge) whose first word would not have
-    fitted on the previous line against the block's own right edge (Girondo's long verse
-    lines, wrapped and indented). The break before such a line is soft."""
+    at the hanging indent (right of the block's left edge and of the line before, or where
+    the previous continuation was) whose first word would not have fitted on the previous
+    line against the block's own right edge (Girondo's long verse lines, wrapped and
+    indented). The break before such a line is soft."""
     out = [False] * len(flows)
     members = {}
     for i, b in enumerate(block):
@@ -479,14 +490,15 @@ def wraps(flows: list[Flow], block: list[int], hard: list[bool]) -> list[bool]:
     for idx in members.values():
         if len(idx) < 2 or 2 * sum(hard[i] for i in idx[:-1]) < len(idx) - 1:
             continue                                   # prose: the column decides
-        left = min(flows[i].line.x0 for i in idx)
+        left = min(flows[i].line.vx0 for i in idx)
         right = max(flows[i].line.x1 for i in idx)
         for a, b in zip(idx, idx[1:]):
             la, lb = flows[a].line, flows[b].line
             em = INDENT_EM * lb.size
             need = la.x1 + SPACE_EM * la.size + lb.words[0].width
             tol = FIT_TOL_TESS if flows[b].tesseract else FIT_TOL
-            if lb.x0 > left + em and need > right - tol:
+            hanging = lb.vx0 > la.vx0 + em or (out[a] and abs(lb.vx0 - la.vx0) < em)
+            if hanging and lb.vx0 > left + em and need > right - tol:
                 out[b] = True
     return out
 
@@ -495,7 +507,7 @@ def _signal(i: int, flows: list[Flow], block: list[int], hard: list[bool],
             wrap: list[bool]) -> bool:
     """A paragraph signal before line ``i``: a vertical gap, a size change, a first-line
     indent after a hard break (the next line of the block goes back left, or this line
-    stands alone), an
+    stands alone), an outdent after a hard break
     outdent (a hanging indent: the next line of the block goes in again), or a speaker label
     after a hard break. The indents compare lines of the same block only."""
     prev, cur = flows[i - 1], flows[i]
@@ -512,8 +524,8 @@ def _signal(i: int, flows: list[Flow], block: list[int], hard: list[bool],
     if (d > em and back and not hard[i] and nxt is not None
             and prev.line.text.rstrip()[-1:] in SENTENCE_END):
         return True                  # the last line nearly full, but a sentence ended
-    if d < -em and nxt is not None and _indent(nxt) > _indent(cur) + em:
-        return True
+    if d < -em and hard[i - 1] and nxt is not None and _indent(nxt) > _indent(cur) + em:
+        return True                  # a hanging indent: the previous entry ended
     return hard[i - 1] and cleanup.speaker(cur.line.text)
 
 
@@ -535,9 +547,9 @@ def segment(flows: list[Flow], nodict: bool = False) -> tuple[list[Unit], dict]:
     """Body lines (in reading order, across pages) into units. A break is hard when the next
     line's first word would have fitted; soft breaks join into prose (hyphens resolved). A
     paragraph signal, a heading or a forced cut starts a new unit. Inside a unit, >= 3
-    hard-broken lines make verse (breaks kept; a wrapped line among them is joined, as long
-    as two thirds of the lines stand alone); otherwise each hard-broken stretch is a unit
-    of its own.
+    consecutive hard-broken lines make verse (breaks kept; a hanging-indent wrap counts as
+    part of its line); a paragraph of wrapped prose lines, and fewer such lines, are units
+    of their own.
     Returns (units, join counts)."""
     counts: dict[str, int] = {}
     if not flows:
@@ -576,14 +588,28 @@ def segment(flows: list[Flow], nodict: bool = False) -> tuple[list[Unit], dict]:
                 run.append(i)
         logical.append(run)
         small = flows[g[0]].line.small
-        singles = sum(all(wrap[i] for i in r[1:]) for r in logical)   # one verse line each
-        if len(logical) >= VERSE_MIN and 3 * singles >= 2 * len(logical):
-            text = "\n".join(_line_text(flows[r[0]], True) if len(r) == 1
-                             else _join([flows[i] for i in r], nodict, counts) for r in logical)
-            units.append(Unit("verse", [flows[i].line for i in g], text,
-                              ["quote"] if small else []))
-            continue
+        stretch = []                               # consecutive one-line (or wrapped) lines
+
+        def flush():
+            if len(stretch) >= VERSE_MIN:
+                text = "\n".join(_line_text(flows[r[0]], True) if len(r) == 1
+                                 else _join([flows[i] for i in r], nodict, counts)
+                                 for r in stretch)
+                units.append(Unit("verse", [flows[i].line for r in stretch for i in r], text,
+                                  ["quote"] if small else []))
+            else:
+                for r in stretch:
+                    units.append(Unit("quote" if small else "prose",
+                                      [flows[i].line for i in r],
+                                      _join([flows[i] for i in r], nodict, counts)))
+            stretch.clear()
+
         for r in logical:
+            if all(wrap[i] for i in r[1:]):        # a line that stands alone: verse-like
+                stretch.append(r)
+                continue
+            flush()                                # a wrapped paragraph: prose
             units.append(Unit("quote" if small else "prose", [flows[i].line for i in r],
                               _join([flows[i] for i in r], nodict, counts)))
+        flush()
     return units, counts
