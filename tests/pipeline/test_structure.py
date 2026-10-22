@@ -293,3 +293,22 @@ def test_anchor_a_claim_to_the_unit_where_the_section_starts():
     assert anchor("Acto I", 40) == (19, "title at the start of a unit on p40")
     assert anchor("Bibliografía", 606) == (2, "heading unit on p606")
     assert anchor("Nada que ver", 606) == (2, "first unit on p606 (title not found)")
+
+
+def test_a_head_coming_back_after_a_short_gap_is_the_same_section():
+    heads = {p: "LA AMORTAJADA" if p % 2 else "MARIA LUISA BOMBAL" for p in range(4, 40)}
+    for p in (18, 19, 20, 21):
+        heads.pop(p)                                      # the OCR lost four heads
+    rows = rows_with_heads(40, heads)
+    units = [unit(k, p, f"Texto {p}") for k, p in enumerate(range(1, 41), 1)]
+    bounds = st.head_boundaries(rows, units)
+    assert len(bounds) == 1 and bounds[0].page == 3 and bounds[0].run_last == 39
+    assert bounds[0].key == "author-only"                 # both heads read as names: no
+    assert bounds[0].author in ("MARIA LUISA BOMBAL", "LA AMORTAJADA")   # section on its own
+
+
+def test_junk_contents_entries_are_dropped():
+    lines = ["Índice", "y Indice", "xix … xx", "15 17 … 19", "Guatemala … 3",
+             "Ahora que me acuerdo … 7", "1 … 7", "2 … 9"]
+    got = titles(st.parse_contents(lines))
+    assert [g[0] for g in got] == ["Guatemala", "Ahora que me acuerdo", "1", "2"]

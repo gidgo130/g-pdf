@@ -286,3 +286,27 @@ def test_cli_structure_refuses_a_missing_export_and_an_out_inside_text(text_dir,
     assert cli.main(["structure", "--text", str(text_dir), "--out", str(text_dir / "s")]) == 1
     assert "inside" in capsys.readouterr().err
     assert not (text_dir / "s").exists()
+
+
+def test_contents_lines_kept_in_the_text_are_a_contents_page_not_headings():
+    units = [unit(0, 1, "Las vanguardias en el norte", "heading"), unit(0, 1, "Nombre Compilador"),
+             unit(0, 2, "Antología crítica", "heading"), unit(0, 2, "Primer ensayo del tomo"),
+             unit(0, 2, "Autora Alfa. 5"), unit(0, 2, "Segundo ensayo del tomo"),
+             unit(0, 2, "Autor Beta. 7"), unit(0, 2, "Tercer ensayo del tomo"),
+             unit(0, 2, "Autora Gamma. 9"), unit(0, 3, "Dedicatoria a los lectores."),
+             unit(0, 5, "Primer ensayo del tomo", "heading"), unit(0, 5, "Autora Alfa"),
+             unit(0, 5, "Texto."), unit(0, 7, "Segundo ensayo del tomo", "heading"),
+             unit(0, 7, "Autor Beta"), unit(0, 7, "Texto."),
+             unit(0, 9, "Tercer ensayo del tomo", "heading"), unit(0, 9, "Autora Gamma"),
+             unit(0, 9, "Texto."), unit(0, 10, "Más texto.")]
+    rows = rows_for(10)
+    e = entry(units, rows, [], [], stem="norte", meta={"title": "Las vanguardias en el norte"})
+    s = sc.detect(e)
+    check_invariants(s, e.units)
+    assert sc.inbody_contents_pages(st.units_on(units), 10) == {2}
+    assert s.contents["in_body_pages"] == [2] and s.contents["parsed"] == 3
+    essays = [(x.title, x.author, x.pdf_pages[0]) for x in s.sections if x.level == 2]
+    assert essays == [("Primer ensayo del tomo", "Autora Alfa", 5),
+                      ("Segundo ensayo del tomo", "Autor Beta", 7),
+                      ("Tercer ensayo del tomo", "Autora Gamma", 9)]
+    assert all(x.role == "criticism" for x in s.sections if x.level == 2)

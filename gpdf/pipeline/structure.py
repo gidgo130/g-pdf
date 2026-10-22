@@ -67,16 +67,25 @@ def title_match(title: str, text: str) -> bool:
     tw, hw = words(title)[:4], words(text)
     if not tw or not hw:
         return False
-    need = min(2, len(tw))
+    if len(tw) == 1 and len(words(title, 1)) > 1:      # "TITULO UNO": the short word counts
+        return fold(title) in fold(text) or ratio(title, text) >= 0.9
+    need = len(tw) if len(tw) <= 3 else 2
+    full = words(title)
+    need = min(len(tw), max(need, (len(full) + 1) // 2))   # half the title's long words
     if sum(word_in(w, hw) for w in tw) >= need:
         return True
     hw4 = hw[:4]
-    need = min(2, len(hw4))
-    return sum(word_in(w, tw) for w in hw4) >= need and len(hw) <= 6
+    if len(hw4) < 2 or len(hw) > 6:
+        return False
+    full = words(title)                            # the text is a phrase of the title
+    return all(word_in(w, full) for w in hw4)
 
 
 _PARTICLES = {"de", "del", "la", "las", "los", "y", "e", "van", "von", "da", "das", "dos",
               "do", "di", "le", "du", "der", "/", "-"}
+_NOT_NAMES = {"an", "the", "of", "and", "to", "in", "on", "for", "or", "with", "from", "at",
+              "by", "as", "into", "new", "world", "en", "con", "por", "para", "sin", "sobre",
+              "un", "una", "el", "lo"}
 _INITIAL = re.compile(r"^[A-ZÁÉÍÓÚÑÜ]\.?$")
 
 
@@ -84,7 +93,8 @@ def name_like(text: str) -> bool:
     """A person's name (or two): 2-6 tokens, each a capitalised word, an initial or a
     particle; no digits, no colon, no sentence end."""
     t = text.strip().rstrip(".").replace("[", " ").replace("]", " ")
-    if not t or ":" in t or any(c.isdigit() for c in t) or t.endswith((",", ";")):
+    if not t or ":" in t or "(" in t or "," in t or any(c.isdigit() for c in t) or \
+            t.endswith((",", ";")):
         return False
     toks = [p for tok in t.split() for p in re.split(r"(/)", tok) if p]
     if not 2 <= len(toks) <= 7:
@@ -93,6 +103,8 @@ def name_like(text: str) -> bool:
     for tok in toks:
         if tok in _PARTICLES or tok == ".":          # lowercase: "Dos" is a surname
             continue
+        if tok.lower() in _NOT_NAMES:                # "CONSTRUCTING AN AUDIENCE"
+            return False
         core = tok.strip("'’\"“”()")
         if not core:
             return False
@@ -143,8 +155,8 @@ def _strip_junk(title: str) -> str:
     t = re.sub(r"(?:…|(?:\.\s*){3,})\s*$", "", t).strip()
     toks = t.split()
     while toks and (re.fullmatch(r"[A-Z]", toks[-1]) and toks[-1] not in "IVX"
-                    or (len(toks) > 1 and re.fullmatch(r"[o0c.«»+]+|[ocnmrsae0.]{6,}",
-                                                       toks[-1]))):
+                    or (len(toks) > 1 and (re.fullmatch(r"[o0c.«»+]+", toks[-1]) or (
+                        len(toks[-1]) >= 6 and len(set(toks[-1].replace(".", ""))) <= 3)))):
         toks.pop()                                    # "E", "0...", "ooooccorcnancaa"
     t = " ".join(toks).strip(" .:,;·-–—>")
     if t.startswith("“") and "”" not in t:
@@ -169,6 +181,8 @@ def _number_at_end(line: str) -> tuple[str, str | None, bool, bool]:
         return s, None, False, False       # "ACTO I": a roman word, not a page number
     if not title.strip():
         return s, None, False, False       # the line is only a number
+    if title.count("(") > title.count(")"):
+        return s, None, False, False       # "(II, II, 171": inside a reference
     return _strip_junk(title), num, lead.strip().startswith(","), leader
 
 
@@ -279,7 +293,7 @@ def parse_contents(lines: list[str], columns: int = 1, headers: set[str] | None 
     known from bookmarks (an unnumbered line equal to one is a header, never a title
     continuation). Two-column pages (titles first, numbers after) are paired only when
     the entry and number counts match, else the page yields nothing."""
-    raw = [s.strip() for s in lines if s and s.strip()]
+    raw = [_unspace(s.strip()) for s in lines if s and s.strip()]
     for k, s in enumerate(raw[:4]):
         if _INDEX_HEAD.match(s):
             raw = raw[k + 1:]                         # the page title (and a book title
@@ -290,12 +304,27 @@ def parse_contents(lines: list[str], columns: int = 1, headers: set[str] | None 
         texts = [s for s in raw if not _NUM_ONLY.match(s)]
         entries = _group(texts, headers, with_numbers=False)
         slots = [e for e in entries if not e.header]
+        if not numbers and columns == 2:
+            return _levels(_real(entries))         # the numbers column was lost: no labels
         if len(slots) != len(numbers):
             return []
         for e, n in zip(slots, numbers):
             e.label = n
-        return _levels(entries)
-    return _levels(_group(raw, headers, with_numbers=True))
+        return _levels(_real(entries))
+    return _levels(_real(_group(raw, headers, with_numbers=True)))
+
+
+def _real(entries: list[ContentsEntry]) -> list[ContentsEntry]:
+    """Entries with a word in their title ("xix", "15 17" and "y Indice" are OCR junk);
+    numerals alone stay as sub-entries of the entry before them (Asturias)."""
+    out = []
+    for e in entries:
+        toks = [w for w in re.findall(r"[^\W\d_]{3,}", e.title) if not _roman(w)]
+        if toks and not (len(toks) == 1 and toks[0].lower() in ("y", "e", "indice")):
+            out.append(e)
+        elif e.title.strip().isdigit() and out and not e.header and len(e.title.strip()) <= 2:
+            out.append(e)
+    return out
 
 
 def _unspace(line: str) -> str:
@@ -355,7 +384,8 @@ def _by_author(title: str) -> tuple[str, str | None]:
     return title, None
 
 
-_GLUED_AUTHOR = re.compile(r"^(?P<t>.*?[a-záéíóúñü)\]”'’.])\s+(?P<a>[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ .'’-]{3,})$")
+_GLUED_AUTHOR = re.compile(r"^(?P<t>.*?[a-záéíóúñü)\]”'’.])\s+(?P<a>(?!(?:Y|E|O|DE|EN|LA|EL)\b)"
+                           r"[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ .'’-]{3,})$")
 
 
 def _lost_number(line: str) -> bool:
@@ -590,7 +620,7 @@ def _levels(entries: list[ContentsEntry]) -> list[ContentsEntry]:
     plain = [e for e in entries if not e.header and not e.comma]
     caps = [e for e in plain if e.title.isupper() and len(e.title) > 2]
     mixed = [e for e in plain if not e.title.isupper()]
-    split_case = (len(caps) >= 2 and len(mixed) >= 2
+    split_case = (len(caps) >= 2 and len(mixed) >= 2 and all(e.label for e in caps)
                   and not any(e.author for e in plain))        # not a list of texts
     header_level = 0
     last_header = False
@@ -714,6 +744,8 @@ class Claim:
     original_page: int | None = None
     key: str = ""                    # for head claims: the head's canonical key
     label: str | None = None         # for contents claims: the printed page as written
+    run_last: int | None = None      # for head claims: the last page of the head's run
+    rel: int | None = None           # for contents claims: the level relative to the page
 
 
 @dataclass
@@ -787,7 +819,7 @@ def match_score(title: str, text: str) -> float:
     in the text and the text's in the title; 0: no match. Numerals must agree."""
     if not same_numerals(title, text):
         return 0.0
-    if ratio(title, text) >= 0.8:
+    if ratio(title, text) >= 0.85:
         return 1.0
     if title_match(title, text) and title_match(text, title):
         return 0.5
@@ -804,17 +836,25 @@ def _confirm(title: str, page: int, heads: dict, on: dict) -> tuple[bool, list[s
     ev, better = [], None
     span = [q for q in range(page, page + HEAD_LOOKAHEAD + 1) if q in heads]
     head_text = " ".join(" ".join(heads[q]) for q in span)
-    if head_text and title_match(title, head_text):
+    before = " ".join(" ".join(heads[q]) for q in range(page - 4, page) if q in heads)
+    if head_text and title_match(title, head_text) and not (
+            before and title_match(title, before)):     # a run that began earlier: no
         ev.append(f"heads pp. {span[0]}-{span[-1]}" if len(span) > 1 else f"head p{span[0]}")
     texts = on.get(page, [])
+    ft = fold(title)
     for u in texts:
-        if u["kind"] == "heading" and ratio(title, u["text"]) >= 0.8:
+        fh = fold(u["text"])
+        if u["kind"] == "heading" and (ratio(title, u["text"]) >= 0.8 or (
+                len(fh) >= 5 and ft.startswith(fh) and not fh[len(fh) - 1:].isdigit())):
             ev.append(f"heading unit on p{page}")
             if not same_numerals(title, u["text"]):
                 better = u["text"].strip()          # "Canto VI" -> the heading "CANTO VII"
             break
     else:
-        if texts and title_match(title, " ".join(u["text"][:300] for u in texts[:6])):
+        tw = words(title)[:4]
+        blob = words(" ".join(u["text"][:300] for u in texts[:6]))
+        need = len(tw) if len(tw) <= 3 else 3
+        if tw and blob and sum(word_in(w, blob) for w in tw) >= need:
             ev.append(f"title words in the first units on p{page}")
     return bool(ev), ev, better
 
@@ -844,6 +884,9 @@ def _find_pages(title: str, heads: dict, on: dict, after: int) -> list[tuple[int
     return sorted(strong) + sorted(weak)
 
 
+_CONTENTS_NAME = re.compile(r"^\W*(indice|index|contents|sumario|indice general|tabla de contenido)\W*$")
+
+
 def part_like(title: str) -> bool:
     """A part's name: a bibliography, an index, notes, a critical anthology, plates..."""
     f = fold(title).strip(" .:")
@@ -867,8 +910,20 @@ def verify_outline(toc: list, rows: list[dict], units: list[dict],
         res.junk = True
         return res
     heads, on = heads_of(rows), units_on(units)
-    claims = [Claim(t[1].strip(), int(t[2]), "bookmark", level=int(t[0]), original_page=int(t[2]))
-              for t in toc if t[1] and str(t[1]).strip()]
+    kinds = {r["page"]: r.get("kind") for r in rows if "page" in r}
+    claims = []
+    for t in toc:
+        title = str(t[1] or "").strip()
+        if not title:
+            continue
+        half = title[:len(title) // 2].strip()
+        if len(title) >= 12 and half and fold(title) == fold(half + " " + half):
+            title = half                                   # "X X": a doubled title
+        c = Claim(title, int(t[2]), "bookmark", level=int(t[0]), original_page=int(t[2]))
+        if _CONTENTS_NAME.match(fold(title)):
+            res.dropped.append((c, "a contents page (apparatus)"))
+            continue
+        claims.append(c)
     # same page: the one that verifies (or the later one, a title under a grouping) stays
     by_page: dict[int, list[Claim]] = {}
     for c in claims:
@@ -887,11 +942,15 @@ def verify_outline(toc: list, rows: list[dict], units: list[dict],
                 res.dropped.append((c, f"same page as «{keep.title}» (grouping)"))
                 grouped.add(id(c))
     claims = [c for c in claims if id(c) not in grouped]
-    prev_page = 0
+    kept_pages: list[int] = []
     pending_order = []                       # (index, claim) to judge by order at the end
     for k, c in enumerate(claims):
         in_range = 1 <= c.page <= page_count
         ok, ev, better = _confirm(c.title, c.page, heads, on) if in_range else (False, [], None)
+        if ok and c.page <= 4 and kinds.get(c.page) == "front" and all(
+                e.startswith("title words") for e in ev):
+            ok = False                       # the title page names the book's parts
+        prev_page = max([q for q in kept_pages if q <= c.page] or [0])
         if ok:
             c.evidence = [f"bookmark p{c.page} confirmed by " + ", ".join(ev)]
             if better:
@@ -899,7 +958,7 @@ def verify_outline(toc: list, rows: list[dict], units: list[dict],
                 c.title = better
             c.confidence = HIGH
             res.confirmed.append(c)
-            prev_page = c.page
+            kept_pages.append(c.page)
             continue
         # re-anchor: a contents entry with this title, else a head run or heading elsewhere
         target, how = None, ""
@@ -910,20 +969,37 @@ def verify_outline(toc: list, rows: list[dict], units: list[dict],
             if _confirm(c.title, best.page, heads, on)[0]:
                 how += ", heads"
         if target is None:
-            found = [(q, h) for q, h in _find_pages(c.title, heads, on, prev_page)]
+            found = [(q, h) for q, h in _find_pages(c.title, heads, on, prev_page - 1)]
             if found:
                 target, how = found[0]
+                if how == "head":
+                    target = opening_page(target, heads, on, rows)
         if target is not None:
             old = c.page
             c.page = target
             c.evidence = [f"bookmark p{old} re-anchored to p{target} ({how})"]
             c.confidence = HIGH if "," in how else MEDIUM
             res.reanchored.append((c, old))
-            prev_page = target
+            kept_pages.append(target)
             continue
         pending_order.append((k, c))
+    # a re-anchored bookmark landing on another kept bookmark's page: the grouping goes
+    kept = res.confirmed + [c for c, _ in res.reanchored]
+    by_page = {}
+    for c in kept:
+        by_page.setdefault(c.page, []).append(c)
+    for pg, group in by_page.items():
+        plain = [c for c in group if not part_like(c.title)]
+        if len(plain) < 2:
+            continue
+        keep = max(plain, key=lambda c: (c in res.confirmed, len(c.title)))
+        for c in plain:
+            if c is not keep:
+                res.dropped.append((c, f"same page as «{keep.title}» (grouping)"))
+                if c in res.confirmed:
+                    res.confirmed.remove(c)
+                res.reanchored = [(x, o) for x, o in res.reanchored if x is not c]
     # unconfirmed bookmarks in an otherwise verified outline, in order: kept as claims
-    kept_pages = sorted(x.page for x in res.confirmed + [r for r, _ in res.reanchored])
     verified = len(claims) and (len(claims) - len(pending_order)) / len(claims) >= 0.8
     for k, c in pending_order:
         before = [x.page for x in claims[:k] if x in res.confirmed or any(
@@ -941,12 +1017,27 @@ def verify_outline(toc: list, rows: list[dict], units: list[dict],
             why = ("verifies nowhere: not on a contents page, no head or heading carries it"
                    if 1 <= c.page <= page_count else f"page {c.page} is outside the file")
             res.dropped.append((c, why))
-    del kept_pages
     return res
+
+
+def opening_page(page: int, heads: dict, on: dict, rows: list[dict]) -> int:
+    """The page a section opens on when its running head begins on ``page``: the page
+    before, when that one has units but no head and is not blank (an essay's first page),
+    up to two pages back."""
+    kinds = {r["page"]: r.get("kind") for r in rows if "page" in r}
+    q = page - 1
+    while q >= 1 and (kinds.get(q) == "blank" or not on.get(q)):
+        q -= 1
+    us = on.get(q, [])
+    divider = len(us) <= 2 and all(len(u["text"]) <= 60 and (u["text"].isupper() or part_like(u["text"])) for u in us)
+    if q >= 1 and q not in heads and page - q <= 2 and us and not divider:
+        return q
+    return page
 
 
 # ---------------------------------------------------------------------------- running heads
 RUN_GAP = 3                 # pages: a head run survives this gap (verso/recto + a blank)
+RESUME_GAP = 8              # pages: a head coming back after less is the same section
 
 
 @dataclass
@@ -1002,10 +1093,21 @@ def head_boundaries(rows: list[dict], units: list[dict]) -> list[Claim]:
     on = units_on(units)
     kinds = {r["page"]: r.get("kind") for r in rows}
     claims: list[Claim] = []
+    seen_keys: dict[str, int] = {}             # key -> last page of its earlier run
+    extent: dict[str, int] = {}                # key -> the last page over all its runs
+    fresh = []
+    for run in runs:
+        last = seen_keys.get(run.key)
+        if last is None or run.first - last >= RESUME_GAP:
+            fresh.append(run)                  # a head coming back after a short gap is
+        seen_keys[run.key] = max(run.last, last or 0)      # the same section going on
+    for run in runs:
+        extent[run.key] = max(extent.get(run.key, 0), run.last)
+    runs = fresh
     k = 0
     while k < len(runs):
         group = [runs[k]]
-        while k + 1 < len(runs) and runs[k + 1].first <= group[0].first + 1:
+        while k + 1 < len(runs) and runs[k + 1].first <= group[0].first + 2:
             k += 1
             group.append(runs[k])
         k += 1
@@ -1023,13 +1125,16 @@ def head_boundaries(rows: list[dict], units: list[dict]) -> list[Claim]:
         elif enclosing:
             title_run = enclosing
         else:
-            title_run = names[0]
+            title_run = names[0]              # an author head alone: no title in the heads
         page = min(r.first for r in group)
         covered = {q for r in runs if r not in group for q in range(r.first, r.last + 1)}
         q = page - 1
         while q >= 1 and (kinds.get(q) == "blank" or not on.get(q)):
             q -= 1
-        if q >= 1 and q not in heads_of(rows) and q not in covered and page - q <= 2:
+        us = on.get(q, [])
+        divider = len(us) <= 2 and all(len(u["text"]) <= 60 and (u["text"].isupper() or part_like(u["text"])) for u in us)
+        if (q >= 1 and q not in heads_of(rows) and q not in covered and page - q <= 2
+                and not divider):
             page = q
         ev = [f"running head «{title_run.text}» pp. {title_run.first}-{title_run.last}"]
         if enclosing:
@@ -1038,8 +1143,12 @@ def head_boundaries(rows: list[dict], units: list[dict]) -> list[Claim]:
         if names and title_run not in names:
             author = names[0].text
             ev.append(f"author head «{author}» pp. {names[0].first}-{names[0].last}")
-        claims.append(Claim(title_run.text, page, "head", author=author, evidence=ev,
-                            key=title_run.key))
+        c = Claim(title_run.text, page, "head", author=author, evidence=ev, key=title_run.key)
+        c.run_last = max(extent.get(r.key, r.last) for r in group)
+        if title_run in names and not part_like(title_run.text):
+            c.author = title_run.text
+            c.key = "author-only"
+        claims.append(c)
     return claims
 
 
