@@ -463,8 +463,11 @@ def _small(p: Page, size: float, pitch: float) -> None:
     _mark_small(lines, own if unreliable else size, pitch, p.tesseract, unreliable)
     share = sum(ln.small for ln in lines) / len(lines)
     own_pitch = tl.pitch(lines)
-    if share >= SMALL_SHARE or (p.tesseract and share >= 0.5
-                                and own_pitch < SMALL_PAGE_PITCH * pitch):
+    top = next((ln for ln in lines if ln.chars > tl.LONG_LINE), lines[0])
+    if top.small and (share >= SMALL_SHARE or (p.tesseract and share >= 0.5
+                                               and own_pitch < SMALL_PAGE_PITCH * pitch)):
+        # a page set in small type starts small; a page whose top is body type with long
+        # footnotes under it (Bürger p. 110, Schwartz p. 174) keeps its notes
         _mark_small(lines, own, own_pitch, p.tesseract, False)
 
 

@@ -736,6 +736,30 @@ def test_small_type_that_fills_a_page_is_its_body(tmp_path, monkeypatch, scan_fo
     assert all("endnotes" in r["flags"] for r in mine[1:])
 
 
+def test_page_with_long_footnotes_keeps_them(tmp_path, scan_font):
+    # Bürger p. 110, Schwartz p. 174: body type on top, footnotes over half the page (and
+    # the page's pitch is theirs): not a page set in small type, its notes stay notes
+    path = tmp_path / "longnotes.pdf"
+    doc = pymupdf.open()
+    for i in range(4):
+        s = Sheet(doc, font="cour")
+        for k in range(12):
+            s.line(" ".join(words(3200 + 10 * i + k, 7)), size=9)
+    s = Sheet(doc, font="cour")
+    for k in range(5):
+        s.line(" ".join(words(3250 + k, 7)), size=9)
+    s.y += 10
+    s.line("12 Véase el capítulo tercero, donde se discuten las polémicas.", size=7.5, pitch=10)
+    for k in range(5):
+        s.line(" ".join(words(3260 + k, 8)), size=7.5, pitch=10)
+    s.line("13 Cf. P. Bürger, Teoría de la vanguardia, p. 45.", size=7.5, pitch=10)
+    for k in range(3):
+        s.line(" ".join(words(3270 + k, 8)), size=7.5, pitch=10)
+    save(doc, path)
+    records, *_ = run(path, scan=True)
+    assert [r["note"] for r in records if r["kind"] == "note"] == [12, 13]
+
+
 def test_superscript_marker_read_as_two_digits(tmp_path):
     # Mexico p. 277: the marker "51" came as two superscript fragments, "[^5] [^1]"
     path = tmp_path / "fiftyone.pdf"
