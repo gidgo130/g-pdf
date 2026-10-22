@@ -1,0 +1,459 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""The text export on synthetic pages: running heads and page labels, footnotes and
+quotes, the fit test (prose, verse, drama, bibliography, paragraphs over a page break),
+hyphens, letter-spacing, drop caps, page junk, scan-layer artefacts, contents and index
+pages, and the plain-text entry."""
+
+import pytest
+
+pytest.importorskip("numpy")
+pytest.importorskip("wordfreq")
+import pymupdf  # noqa: E402
+
+from gpdf.pipeline import export  # noqa: E402
+from gpdf.pipeline import textlayout as tl  # noqa: E402
+
+from .exportsynth import PITCH, X0, Sheet, job, save, width, words  # noqa: E402
+
+
+def run(path, **kw):
+    """(records, page rows, apparatus, text, counts)."""
+    return export.export_pdf(job(path, **kw))
+
+
+def texts(records, kind=None):
+    return [r["text"] for r in records if kind is None or r["kind"] == kind]
+
+
+def body(sheet, seed, n=60, **kw):
+    return sheet.para(words(seed, n), **kw)
+
+
+@pytest.fixture
+def scan_font(monkeypatch):
+    """Courier stands for Tesseract's GlyphLessFont (word boxes only, a scan layer)."""
+    monkeypatch.setattr(tl, "TESSERACT_FONTS", ("Courier",))
+
+
+# ---------------------------------------------------------------------------- heads, labels
+def test_running_heads_stripped_headings_kept(tmp_path):
+    path = tmp_path / "heads.pdf"
+    doc = pymupdf.open()
+    for i in range(12):
+        s = Sheet(doc)
+        n = i + 11                                         # printed = PDF page + 10
+        if i % 2 == 0:
+            s.text(X0, 40, f"{n} | INTRODUCCIÓN", 8)       # verso: number first
+        else:
+            s.text(220, 40, f"BRASIL (REVISTAS) | {n}", 8)  # recto: number last
+        if i in (1, 9):
+            s.text(180, 62, "CANTO I", 14)                 # every 8 pages: a heading
+            s.y = 90
+        if i in (4, 5, 6):
+            s.text(X0, 62, f"Nota Extensa {i - 1}", 14)    # numbers off the sequence
+            s.y = 90
+        body(s, 100 + i, 80)
+    save(doc, path)
+    records, rows, _, _, counts = run(path)
+    assert [r["label"] for r in rows] == [str(i + 11) for i in range(12)]
+    assert all(r["label_status"] == "found" for r in rows)
+    assert [r["head"] for r in rows] == ["INTRODUCCIÓN", "BRASIL (REVISTAS)"] * 6
+    assert all(r["removed"].get("running_head") == 1 for r in rows)
+    heads = texts(records, "heading")
+    assert heads.count("CANTO I") == 2
+    assert {"Nota Extensa 3", "Nota Extensa 4", "Nota Extensa 5"} <= set(heads)
+    assert not any("INTRODUCCIÓN" in t or "BRASIL" in t for t in texts(records))
+    assert counts["heads"] == ["BRASIL (REVISTAS)", "INTRODUCCIÓN"]
+
+
+def test_bottom_page_numbers_roman_pagina_and_a_misread_label(tmp_path):
+    path = tmp_path / "numbers.pdf"
+    doc = pymupdf.open()
+    for i in range(10):
+        s = Sheet(doc)
+        body(s, 200 + i, 70)
+        label = ["i", "ii", "iii", "iv"][i] if i < 4 else str(i - 3)
+        if i == 7:
+            label = "Tn"                                   # Bürger p. 78: "77" misread
+        s.text(205, 575, label, 9)
+    save(doc, path)
+    _, rows, _, _, counts = run(path)
+    assert [r["label"] for r in rows] == ["i", "ii", "iii", "iv", "1", "2", "3", "4", "5", "6"]
+    assert rows[7]["label_status"] == "inferred"
+    assert rows[7]["dropped"] == [{"reason": "page_number_misread", "text": "Tn"}]
+    assert sum(r["label_status"] == "found" for r in rows) == 9
+
+    path = tmp_path / "pagina.pdf"
+    doc = pymupdf.open()
+    for i in range(3):
+        s = Sheet(doc)
+        body(s, 300 + i, 60)
+        s.text(300, 585, f"Página {i + 1} de 3", 8)
+    save(doc, path)
+    records, rows, _, _, _ = run(path)
+    assert [(r["label"], r["label_status"]) for r in rows] == [("1", "found"), ("2", "found"),
+                                                              ("3", "found")]
+    assert not any("Página" in t for t in texts(records))
+
+
+# ---------------------------------------------------------------------------- notes, quotes
+def _notes_doc(path, superscript=True):
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    ws = words(400, 40)
+    s.justify(ws[:12])
+    x = X0 + 15
+    s.y += 0
+    # a line with a glued marker ("vanguardias1") and a superscript one
+    line = "las vanguardias1 de la época y la crítica"
+    s.text(X0, s.y, line)
+    xe = X0 + width(line)
+    if superscript:
+        s.text(xe, s.y - 4, "2", 6)
+    s.text(xe + 4, s.y, " siguen aquí.")
+    s.y += PITCH
+    s.para(ws[12:40], indent=15)
+    # a small-type verse quote at the bottom of the body
+    s.y += 6
+    for ln in ("Forjada en la fábrica de armas", "la ciudad", "muerde con sus almenas"):
+        s.line(ln, x=120, size=8, pitch=10)
+    s.y += 18
+    s.line("1 Véase el capítulo tercero, donde se discuten las polémicas de la época.", size=8,
+           pitch=10)
+    s.line("2 Cf. P. Bürger, Teoría de la vanguardia, trad. de J. García, p. 45, y también",
+           size=8, pitch=10)
+    s.line("las páginas que siguen", size=8, pitch=10)       # note 2 goes on next page
+    s2 = Sheet(doc)
+    s2.para(words(401, 50), indent=0)
+    s2.y += 18
+    s2.line("donde se explica la recepción del libro.", size=8, pitch=10)
+    s2.line("3 Una nota nueva con su número.", size=8, pitch=10)
+    save(doc, path)
+
+
+def test_footnotes_markers_quotes_and_a_continued_note(tmp_path):
+    path = tmp_path / "notes.pdf"
+    _notes_doc(path)
+    records, _, _, _, counts = run(path)
+    notes = [r for r in records if r["kind"] == "note"]
+    assert [n["note"] for n in notes] == [1, 2, 3]
+    assert notes[1]["pages"] == [1, 2]
+    assert notes[1]["text"].endswith("y también las páginas que siguen donde se explica la "
+                                     "recepción del libro.")
+    assert notes[0]["text"].startswith("Véase el capítulo")
+    prose = " ".join(texts(records, "prose"))
+    assert "las vanguardias[^1] de la época y la crítica[^2] siguen aquí." in prose
+    assert counts["markers"]["linked"] == 1 and counts["markers"]["superscript"] >= 1
+    verse = [r for r in records if r["kind"] == "verse"]
+    assert verse and verse[0]["text"] == ("Forjada en la fábrica de armas\nla ciudad\n"
+                                          "muerde con sus almenas")
+    assert "quote" in verse[0]["flags"]
+    kinds = [r["kind"] for r in records]
+    assert kinds.index("verse") < kinds.index("note")       # notes after the page's body
+
+
+def test_superscript_ordinal_is_not_a_marker(tmp_path):
+    path = tmp_path / "ordinal.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    s.text(X0, s.y, "la 2")
+    s.text(X0 + width("la 2"), s.y - 4, "a", 6)
+    s.text(X0 + width("la 2") + 4, s.y, " edición del libro de poemas")
+    save(doc, path)
+    records, *_ = run(path)
+    assert "[^" not in " ".join(texts(records))
+
+
+def test_unmarked_small_block_is_an_editorial_note_with_the_rule(tmp_path, monkeypatch):
+    path = tmp_path / "editorial.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    body(s, 500, 80)
+    s.line("Octubre de 1909.")
+    s.y += 30
+    for ln in ("Publicado en Buenos Aires (Moen y Hno. Editores, 1909) cuando el",
+               "Modernismo estaba aún en vigencia; el prólogo anticipa ideas nuevas."):
+        s.line(ln, x=X0 + 40, size=8, pitch=10)
+    save(doc, path)
+    records, *_ = run(path)
+    assert not [r for r in records if r["kind"] == "note"]       # no rule: a quote
+    monkeypatch.setitem(export.RULES, "e" * 16, {"editorial_notes": True})
+    records, *_ = run(path, id="e" * 64)
+    notes = [r for r in records if r["kind"] == "note"]
+    assert len(notes) == 1 and notes[0]["note"] is None and "editorial" in notes[0]["flags"]
+    assert notes[0]["text"].startswith("Publicado en Buenos Aires")
+
+
+# ---------------------------------------------------------------------------- the fit test
+def test_justified_prose_reflows_and_paragraphs_split_at_indents(tmp_path):
+    path = tmp_path / "prose.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    a = s.para(words(600, 70))
+    b = s.para(words(601, 50))
+    save(doc, path)
+    records, *_ = run(path)
+    assert [r["kind"] for r in records] == ["prose", "prose"]
+    assert records[0]["text"] == " ".join(w for ln in a for w in ln)
+    assert records[1]["text"] == " ".join(w for ln in b for w in ln)
+
+
+def test_ragged_verse_keeps_its_breaks(tmp_path):
+    path = tmp_path / "verse.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    s.text(180, 60, "CANTO I", 14)
+    poem = ["El día se suicida arrojándose al mar", "Un barco vestido de luces se aleja",
+            "Y al fondo de las olas un pez escucha el paso de los hombres",
+            "Silencio la tierra va a dar a luz un árbol", "La muerte se ha dormido"]
+    for ln in poem:
+        s.line(ln)
+    s.y += PITCH
+    for ln in poem[:3]:
+        s.line(ln)
+    save(doc, path)
+    records, *_ = run(path)
+    assert [r["kind"] for r in records] == ["heading", "verse", "verse"]
+    assert records[1]["text"] == "\n".join(poem)
+    assert records[2]["text"] == "\n".join(poem[:3])
+
+
+def test_drama_one_unit_per_speech(tmp_path):
+    path = tmp_path / "drama.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    s.line("HOMBRE CÚBICO (con tono lacrimoso): No quiero.")
+    s.justify("REINA BIZANTINA: No, ocurrirá que los seres humanos en vez de pensar".split())
+    s.line("cavilarán cosas lindas...")
+    s.line("GALÁN (llevándose la mano a la oreja): Siento que llaman...")
+    s.line("Una voz remota: ¿Dónde estás, mi reina?")
+    s.line("ROCAMBOLE: ¡Maldito sea! ¿Dónde dejé mi látigo?")
+    save(doc, path)
+    records, *_ = run(path)
+    assert [r["text"][:9] for r in records] == ["HOMBRE CÚ", "REINA BIZ", "GALÁN (ll",
+                                                "Una voz r", "ROCAMBOLE"]
+    assert records[1]["text"].endswith("en vez de pensar cavilarán cosas lindas...")
+    assert all(r["kind"] == "prose" for r in records)
+
+
+def test_bibliography_hanging_indent(tmp_path):
+    path = tmp_path / "biblio.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    entries = [
+        ("Bürger, Peter. Teoría de la vanguardia. Trad. de Jorge García. Barcelona:",
+         "Península, 1987."),
+        ("Schwartz, Jorge. Las vanguardias latinoamericanas. Textos programáticos y",
+         "críticos. Madrid: Cátedra, 1991."),
+        ("Unruh, Vicky. Latin American Vanguards. The Art of Contentious Encounters.",
+         "Berkeley: University of California Press, 1994."),
+    ]
+    for first, rest in entries:
+        s.justify(first.split())
+        s.line(rest, x=X0 + 18)
+    save(doc, path)
+    records, *_ = run(path)
+    assert texts(records) == [f"{a} {b}" for a, b in entries]
+
+
+def test_paragraph_continued_over_a_page_break(tmp_path):
+    path = tmp_path / "break.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    ws = words(700, 120)
+    lines = s.para(ws[:60], last_full=True)
+    s2 = Sheet(doc)
+    rest = s2.para(ws[60:], indent=0)
+    s2.para(words(701, 30))
+    save(doc, path)
+    records, *_ = run(path)
+    assert records[0]["pages"] == [1, 2]
+    assert records[0]["text"] == " ".join(ws[:60] + [w for ln in rest for w in ln])
+    assert records[1]["pages"] == [2, 2]
+
+
+# ---------------------------------------------------------------------------- hyphens
+def test_hyphens(tmp_path):
+    path = tmp_path / "hyphens.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    # (a soft hyphen inside a line is not representable in a base-14 font: see the
+    # cleanup tests; at a line end MuPDF reads it as a hyphen, which joins the same way)
+    rows = ["Este texto trata con cuidado de la transfor-",
+            "mación social y también del diálogo luso-",
+            "hispánico en el libro, en las páginas 57-",
+            "79 del capítulo tercero de Wentzlaff-",
+            "Eggebert sobre la palabra dicha y la pala­",
+            "bra escrita en el libro, páginas 39­",
+            "69 y sobre el concepto de la insti.",
+            "tución arte en la sociedad que transfor-"]
+    for r in rows:
+        s.justify(r.split(" "), x0=X0)
+    s2 = Sheet(doc)
+    s2.line("ma la vida de todos.")
+    save(doc, path)
+    records, *_ = run(path)
+    text = records[0]["text"]
+    assert text == ("Este texto trata con cuidado de la transformación social y también del "
+                    "diálogo luso-hispánico en el libro, en las páginas 57-79 del capítulo "
+                    "tercero de Wentzlaff-Eggebert sobre la palabra dicha y la palabra escrita en "
+                    "el libro, páginas 39-69 y sobre el concepto de la institución arte en la "
+                    "sociedad que transforma la vida de todos.")
+    assert records[0]["pages"] == [1, 2]
+
+
+# ---------------------------------------------------------------------------- letter-spacing
+def test_letter_spacing_by_gaps(tmp_path):
+    path = tmp_path / "spaced.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    s.spaced("Yo h e t e n d i d o la mano".split(),
+             [6, 2, 6, 2, 2, 2, 2, 2, 2, 6, 6, 6])
+    s.y += PITCH
+    s.spaced("dijo y a l l í con voz".split(), [6, 6, 2, 2, 2, 6, 6])
+    s.y += PITCH
+    s.spaced("L o q u e G o r o s t i z a l l a m a".split(),
+             [2, 6, 2, 2, 6, 2, 2, 2, 2, 2, 2, 2, 2, 6, 2, 2, 2, 2])
+    s.y += PITCH
+    s.justify("una frase de la que se lo da a él y a ella".split(), x1=X0 + 190)
+    s.y += PITCH
+    s.spaced("es u n m ovim iento hom bres y la cósm ico".split(),
+             [8, 1.9, 8, 1.9, 2.0, 8, 1.9, 8, 8, 8, 1.8])
+    save(doc, path)
+    records, _, _, _, counts = run(path)
+    t = "\n".join(texts(records))
+    assert "Yo he tendido la mano" in t
+    assert "dijo y allí con voz" in t
+    assert "Lo que Gorostiza llama" in t
+    assert "una frase de la que se lo da a él y a ella" in t
+    assert "es un movimiento hombres y la cósmico" in t
+    assert counts["msplit"] >= 3 and counts["spacing"]["geometry"] >= 3
+
+    records, *_ = run(path, nodict=True)
+    t = "\n".join(texts(records))
+    assert "Yo he tendido la mano" in t and "dijo y allí con voz" in t    # layout only
+    assert "es un movim iento hom bres y la cósm ico" in t   # no word list (only the gaps)
+
+
+# ---------------------------------------------------------------------------- caps, junk
+def test_drop_cap_and_giant_junk(tmp_path):
+    path = tmp_path / "dropcap.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc, y=120)
+    s.text(X0, 140, "A", 40)
+    s.text(110, 30, "NE", 60)                     # giant, beside no text
+    s.justify("quella tarde, el viejo y venerado maestro, á quien solían".split(), x0=X0 + 32)
+    s.justify("llamar Próspero, por alusión al sabio mago de La Tempestad".split(), x0=X0 + 32)
+    s.justify("shakespiriana, se despedía de sus jóvenes discípulos, pasado".split(), x0=X0 + 32)
+    s.line("un año de tareas.")
+    save(doc, path)
+    records, rows, _, _, counts = run(path)
+    assert records[0]["text"].startswith("Aquella tarde, el viejo")
+    assert counts["drop_caps"] == 1
+    assert {"reason": "giant_junk", "text": "NE"} in rows[0]["dropped"]
+
+
+def test_margin_junk_on_a_scan_layer_only(tmp_path, scan_font):
+    for font, scan in (("cour", True), ("tiro", False)):
+        path = tmp_path / f"margin-{font}.pdf"
+        doc = pymupdf.open()
+        s = Sheet(doc, font=font)
+        for k in range(8):
+            if k == 3:
+                s.text(12, s.y, "oo")              # left margin: no real word
+                s.text(375, s.y, "1234")           # right margin number
+            s.line(" ".join(words(800 + k, 7)), size=9)
+        save(doc, path)
+        records, rows, *_ = run(path, scan=scan)
+        allt = " ".join(texts(records))
+        dropped = {d["text"] for d in rows[0]["dropped"] if d["reason"] == "margin_junk"}
+        if font == "cour":
+            assert dropped == {"oo", "1234"} and "oo" not in allt.split()
+        else:
+            assert not dropped and "1234" in allt
+
+
+def test_unruh_artefacts(tmp_path, scan_font):
+    path = tmp_path / "unruh.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc, font="cour")
+    s.line("_ ~ |", size=9)
+    s.line("_ Language may_be considered an actor in material culture but", size=9)
+    s.line("also-a-protagonist in the history of language when spoken ~", size=9)
+    save(doc, path)
+    records, rows, _, _, counts = run(path, scan=True, lang="en")
+    t = " ".join(texts(records))
+    assert "Language may be considered an actor" in t
+    assert "also-a-protagonist" in t and "language when spoken" in t   # (em dash: cleanup)
+    assert not t.startswith("_") and not t.endswith("~")
+    assert {"reason": "symbol_line", "text": "_ ~ |"} in rows[0]["dropped"]
+    assert any("also-a-protagonist" in r for r in counts["reported"])
+
+
+# ---------------------------------------------------------------------------- apparatus
+def test_contents_and_two_column_index_go_to_the_apparatus(tmp_path):
+    path = tmp_path / "apparatus.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    s.line("ÍNDICE", x=180)
+    for t, n in (("Prólogo", 7), ("Bello Horizonte", 79), ("La despedida de un ministro", 83),
+                 ("El Centenario de la Independencia", 86), ("Una revista naval", 88)):
+        s.line(f"{t} ........o.ooooomommmoommm.... {n}")
+    for i in range(18):
+        b = Sheet(doc)
+        body(b, 900 + i, 60)
+    idx = Sheet(doc)
+    for k in range(14):
+        idx.text(X0, 80 + k * 12, f"Autor{k}, Nombre, {k + 3}, {k + 20}", 9)
+        idx.text(230, 80 + k * 12, f"Obra{k}, Título, {k + 40}", 9)
+    save(doc, path)
+    records, rows, app, _, counts = run(path)
+    assert rows[0]["kind"] == "contents" and rows[-1]["kind"] == "index"
+    assert app[0]["lines"][1] == "Prólogo … 7"
+    assert app[-1]["columns"] == 2
+    assert app[-1]["lines"][0] == "Autor0, Nombre, 3, 20" and app[-1]["lines"][14] == \
+        "Obra0, Título, 40"
+    allt = " ".join(texts(records))
+    assert "Prólogo" not in allt and "Autor0" not in allt
+    assert counts["apparatus_pages"] == 2
+
+
+# ---------------------------------------------------------------------------- invariants
+def test_every_record_has_entry_pages_and_a_valid_kind(tmp_path):
+    path = tmp_path / "notes.pdf"
+    _notes_doc(path)
+    records, rows, _, txt, _ = run(path, id="a" * 64)
+    assert [r["seq"] for r in records] == list(range(1, len(records) + 1))
+    for r in records:
+        assert r["entry"] == "a" * 64 and r["kind"] in export.KINDS
+        assert 1 <= r["pages"][0] <= r["pages"][1] <= 2
+    firsts = [r["pages"][0] for r in records if r["kind"] != "note"]
+    assert firsts == sorted(firsts)
+    assert txt.startswith("[pdf 1]") and "[^1] Véase" in txt
+
+
+# ---------------------------------------------------------------------------- .txt
+ROOSEVELT = ("A Roosevelt\r\n[Poema - Texto completo.]\r\n\r\nRubén Darío\r\n\r\n"
+             "https://ciudadseva.com/texto/a-roosevelt/\r\n\r\n– VIII –\r\n\r\nA Roosevelt\r\n\r\n"
+             "¡Es con voz de Biblia, o verso de Walt Whitman,\r\n"
+             "que habría que llegar hasta ti, Cazador!\r\n"
+             "¡Primitivo y moderno, sencillo y complicado,\r\n\r\n"
+             "Eres soberbio y fuerte ejemplar de tu raza;\r\n"
+             "eres culto, eres hábil; te opones a Tolstoy.\r\n")
+
+
+def test_txt_entry(tmp_path):
+    path = tmp_path / "A Roosevelt.txt"
+    path.write_bytes(ROOSEVELT.encode("utf-8"))
+    records, rows, app, txt, _ = export.export_txt(job(path, kind="txt"))
+    assert [r["kind"] for r in records] == ["heading", "verse", "verse"]
+    assert records[0]["text"] == "A Roosevelt"
+    assert records[1]["text"] == ("¡Es con voz de Biblia, o verso de Walt Whitman,\n"
+                                  "que habría que llegar hasta ti, Cazador!\n"
+                                  "¡Primitivo y moderno, sencillo y complicado,")
+    assert records[1]["lines"] == [12, 14] and records[2]["lines"] == [16, 17]
+    assert sum(r["text"] == "A Roosevelt" for r in records) == 1
+    assert {d["text"] for d in rows[0]["dropped"]} >= {
+        "[Poema - Texto completo.]", "Rubén Darío", "https://ciudadseva.com/texto/a-roosevelt/",
+        "– VIII –"}
+    assert app == [] and "ciudadseva" not in txt

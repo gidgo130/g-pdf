@@ -423,7 +423,8 @@ def link_markers(text: str, numbers: set[int]) -> tuple[str, int, int]:
 
 
 # ---------------------------------------------------------------------------- line kinds
-_SPEAKER = re.compile(r"^[A-ZÁÉÍÓÚÑÜ][^\s:]{0,24}(?: [^\s:]{1,24}){0,2}(?: \([^)]{0,120}\))?:(?:\s|$)")
+_SPEAKER = re.compile(r"^[A-ZÁÉÍÓÚÑÜ][^\s:]{0,24}(?: [^\s:]{1,24}){0,2}"
+                      r"(?: \([^)]{0,120}\))?:(?:\s|$)")
 _ORNAMENT = re.compile(r"^[\s*·•⁂∗✱✳❋※]+$")
 _URL = re.compile(r"https?://|www\.", re.I)
 _INDEX_HEAD = re.compile(r"^\s*(?:índice|indice|index|contents|sumario)\b", re.I)
