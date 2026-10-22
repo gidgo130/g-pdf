@@ -10,10 +10,12 @@
     gpdf-cli survey ROOT [ROOT ...] --catalogue DIR [--derived DIR]
                                                     # read-only catalogue + suggestions
     gpdf-cli survey --sheet-only --catalogue DIR    # rewrite only its review sheet
+    gpdf-cli apply --catalogue DIR --derived OUTDIR [--dry-run]
+                                                    # apply the confirmed decisions
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
-reviewed (or spreads could not be split), OCR failed on some pages, or the survey could
-not read a file or run a trial page; 1 error.
+reviewed (or spreads could not be split), OCR failed on some pages, the survey could
+not read a file or run a trial page, or apply refused a file; 1 error.
 """
 
 from __future__ import annotations
@@ -116,6 +118,28 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--tesseract", metavar="PATH",
                    help="the tesseract executable (default: $GPDF_TESSERACT, PATH, then "
                         r"C:\Program Files\Tesseract-OCR)")
+    a = sub.add_parser("apply", help="apply the confirmed catalogue decisions (new files)",
+                       description="Act on the confirmed decisions in DIR/"
+                                   "catalogue.decisions.json: rebuild_layer and ocr_missing "
+                                   "write OUTDIR/<name>_rebuilt.pdf (Tesseract's text in "
+                                   "place of the old layer, the scan untouched); keep_text "
+                                   "and exclude write nothing. Sources, catalogue.json and "
+                                   "the decisions file are never changed; each output is "
+                                   "recorded in DIR/applied.json.")
+    a.add_argument("--catalogue", metavar="DIR", type=Path, required=True,
+                   help="catalogue folder (catalogue.json and catalogue.decisions.json)")
+    a.add_argument("--derived", metavar="OUTDIR", type=Path, required=True,
+                   help="folder for the output files (created if missing)")
+    a.add_argument("--dry-run", action="store_true",
+                   help="print what would be done per file; write nothing")
+    a.add_argument("--only", metavar="TEXT", nargs="+", default=[],
+                   help="only files whose id starts with TEXT or whose path contains it")
+    a.add_argument("--jobs", metavar="N", type=int,
+                   help="Tesseract processes in parallel (default: CPU count - 1)")
+    a.add_argument("--force", action="store_true", help="replace existing output files")
+    a.add_argument("--tesseract", metavar="PATH",
+                   help="the tesseract executable (default: $GPDF_TESSERACT, PATH, then "
+                        r"C:\Program Files\Tesseract-OCR)")
     return p
 
 
@@ -131,6 +155,8 @@ def main(argv: list[str] | None = None) -> int:
         return _ocr_main(args, parser)
     if args.command == "survey":
         return _survey_main(args, parser)
+    if args.command == "apply":
+        return _apply_main(args, parser)
     if args.sheet_only:
         for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
                          ("--report", args.report), ("--accept-flagged", args.accept_flagged)):
@@ -250,6 +276,99 @@ def _survey_main(args, parser) -> int:
         return EXIT_ERROR
     _print_survey(res, survey, catalogue)
     return res.exit_code
+
+
+def _apply_main(args, parser) -> int:
+    if args.jobs is not None and args.jobs < 1:
+        parser.error("--jobs must be at least 1")
+    try:
+        from gpdf.pipeline import apply, catalogue, ocr, tesseract
+    except ModuleNotFoundError as e:
+        if e.name in ("numpy", "PIL", "wordfreq"):
+            print(f"gpdf-cli: {PREP_HINT}", file=sys.stderr)
+            return EXIT_ERROR
+        raise
+    try:
+        items = apply.plan(args.catalogue, args.derived, args.only, args.force)
+        tess = {} if args.dry_run else apply.prepare_tesseract(items, args.tesseract)
+    except (apply.ApplyError, catalogue.CatalogueError, tesseract.TesseractError,
+            OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    t0 = time.perf_counter()
+    written, failed, errors = [], 0, 0
+    jobs = max(1, args.jobs or (os.cpu_count() or 2) - 1)
+    for it in items:
+        if not it.writes:
+            continue
+        out = args.derived / apply.output_name(it.source)
+        if args.dry_run:
+            print(f"would {it.action:<14} {_short(it.rel, 60)}: pages {_spec(it.pages)}, "
+                  f"--lang {it.langs} -> {out}")
+            continue
+        try:
+            args.derived.mkdir(parents=True, exist_ok=True)
+            report = apply.apply_file(it, out, tess[it.langs], jobs,
+                                      progress=_progress(Path(it.source).name[:30]))
+            report.save(args.derived / apply.report_name(it.source))
+            apply.record(args.catalogue, it, out, report)
+        except (apply.ApplyError, ocr.OcrError, OSError) as e:
+            print(f"error   {_short(it.rel, 60)}: {e}", file=sys.stderr)
+            errors += 1
+            continue
+        except Exception as e:  # noqa: BLE001 - one line for the user, not a traceback
+            print(f"error   {_short(it.rel, 60)}: {type(e).__name__}: {e}", file=sys.stderr)
+            errors += 1
+            continue
+        written.append(report)
+        failed += bool(report.by_status(apply.FAILED))
+        _print_applied(it, report, apply)
+    refused = [it for it in items if it.refused]
+    for it in refused:
+        print(f"refused {_short(it.rel, 60)}: {it.refused}")
+    nothing = {}
+    for it in items:
+        if it.note:
+            key = f"{it.action} ({it.note})" if it.action in apply.WRITES else it.action
+            nothing[key] = nothing.get(key, 0) + 1
+    if nothing:
+        print("nothing to write: " + ", ".join(f"{k} {n}" for k, n in nothing.items()))
+    if args.dry_run:
+        print(f"dry run: {sum(it.writes for it in items)} file(s) would be written, "
+              f"{len(refused)} refused; nothing written")
+    else:
+        pages = {}
+        for r in written:
+            for p in r.pages:
+                pages[p.status] = pages.get(p.status, 0) + 1
+        print(f"wrote {len(written)} file(s), {len(refused)} refused, {errors} error(s); "
+              "pages: " + (", ".join(f"{s} {pages[s]}" for s in apply.STATUSES if s in pages)
+                           or "none") + f" ({time.perf_counter() - t0:.1f} s)")
+        if written:
+            print(f"recorded in {args.catalogue / apply.APPLIED}")
+    if errors:
+        return EXIT_ERROR
+    return EXIT_UNREVIEWED if refused or failed else EXIT_OK
+
+
+def _spec(pages) -> str:
+    if pages in (None, "all"):
+        return "all"
+    if isinstance(pages, list):
+        return _pages(pages[:12]) + (" ..." if len(pages) > 12 else "")
+    return str(pages)
+
+
+def _print_applied(it, report, apply):
+    before, after = report.medians()
+    counts = ", ".join(f"{s} {len(report.by_status(s))}" for s in apply.STATUSES
+                       if report.by_status(s))
+    change = "n/a" if before is None else f"{before:.1f}% -> {after:.1f}%"
+    print(f"{it.action:<14} {_short(it.rel, 60)}: {len(report.pages)} pages ({counts}); "
+          f"median suspect {change}; {report.size_ratio:.2f}x size; {report.seconds:.1f} s")
+    for p in report.by_status(apply.FAILED):
+        print(f"  p. {p.page} failed: {p.error.splitlines()[-1] if p.error else ''}")
+    print(f"  -> {report.output}")
 
 
 def _survey_sheet_only(args, catalogue) -> int:
