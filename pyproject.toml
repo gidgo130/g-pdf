@@ -17,8 +17,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-# Book prep (gpdf-cli split): pixel work on scanned pages.
-prep = ["numpy>=1.26", "Pillow>=10.3"]
+# Book prep (gpdf-cli split/ocr/survey): pixel work on scanned pages; word lists for the
+# survey's text-quality score.
+prep = ["numpy>=1.26", "Pillow>=10.3", "wordfreq>=3.1,<4"]
 
 [project.scripts]
 g-pdf = "gpdf.__main__:main"

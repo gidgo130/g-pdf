@@ -75,6 +75,10 @@ file and never changes the original. It needs the `prep` extra (numpy, Pillow):
 pip install -e ".[prep]"          # from a clone; or: pip install "g-pdf[prep]"
 ```
 
+The extra also installs [wordfreq](https://github.com/rspeer/wordfreq) for the
+survey's text-quality score. Its code is Apache-2.0 and its word lists are
+CC BY-SA 4.0; together they take about 60 MB.
+
 1. **Dry run.** Nothing is split yet:
 
    ```powershell
