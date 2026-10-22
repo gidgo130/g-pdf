@@ -132,7 +132,14 @@ def test_derived_working_file_by_stem_not_listed_separately(layout):
     assert e["source_layer"]["for"] == e["id"] and e["source_layer"]["score"]["poor"] == 3
     assert e["suggestion"]["action"] == "keep_text"
     assert any("working file libro_split_ocr.pdf" in r for r in e["suggestion"]["reasons"])
-    assert any("source's own layer" in r and "3 poor" in r for r in e["suggestion"]["reasons"])
+    assert any("source's own layer" in r and "3 poor" in r and "would trigger a rebuild trial"
+               in r for r in e["suggestion"]["reasons"])
+    m = dict(e["measured"], no_text={"blank": [], "ink": [2], "empty": []})
+    s = survey.suggest(dict(e, measured=m, source_layer=dict(e["source_layer"], text_pages=0)),
+                       None, {})
+    assert s["action"] == "keep_text" and not survey.needs_trial(dict(e, measured=m))
+    assert "the source itself has no text layer" in s["reasons"]
+    assert any("already read by the OCR step" in r and "p. 2" in r for r in s["reasons"])
 
 
 def test_without_derived_the_source_is_measured(layout):

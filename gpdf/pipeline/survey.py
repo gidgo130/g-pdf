@@ -433,10 +433,16 @@ def suggest(entry: dict, dup: dict | None, names: dict[str, str]) -> dict:
     ran = bool(trial.get("ran"))
     if entry.get("working_file"):
         reasons.append(f"measured on the working file {Path(entry['working_file']['path']).name}")
-        src = (entry.get("source_layer") or {}).get("score")
-        if src:
+        sl = entry.get("source_layer") or {}
+        src = sl.get("score")
+        if src and not sl.get("text_pages"):
+            reasons.append("the source itself has no text layer")
+        elif src:
+            would = rebuild_triggers(src) if sl.get("scan") else []
             reasons.append(f"source's own layer: median suspect {_pct(src.get('median'))}, "
-                           f"{src.get('poor', 0)} poor pages")
+                           f"weighted {_pct(src.get('weighted'))}, {src.get('poor', 0)} poor "
+                           "pages" + (f" (would trigger a rebuild trial: {'; '.join(would)})"
+                                      if would else ""))
     if m["kind"] == "txt":
         reasons.append(f"plain text, median suspect {_pct(s['median'])}")
     elif not m["scan"]:
@@ -461,6 +467,13 @@ def suggest(entry: dict, dup: dict | None, names: dict[str, str]) -> dict:
             else:
                 reasons.append(v["why"] if v else "trial: no clear gain")
     ink = m["no_text"]["ink"]
+    if ink:
+        done = set((entry.get("working_file") or {}).get("ocr_pages") or ())
+        already = [p for p in ink if p in done]
+        if already:
+            reasons.append(f"{len(already)} page(s) without text were already read by the OCR "
+                           f"step (no text found): p. {_pages_text(already)}")
+        ink = [p for p in ink if p not in done]
     if ink:
         if ran and "ink_text" in trial:
             text_pages, pictures = trial["ink_text"], trial["pictures"]
@@ -744,7 +757,8 @@ def needs_trial(e) -> bool:
     if m["language"]["lang"] not in WORK_LANGS:
         return False
     rebuild = m["scan"] and m["text_pages"] and rebuild_triggers(m["score"])
-    return bool(rebuild or m["no_text"]["ink"])
+    done = set((e.get("working_file") or {}).get("ocr_pages") or ())
+    return bool(rebuild or [p for p in m["no_text"]["ink"] if p not in done])
 
 
 def trial_pages(m, skip=()) -> list[int]:
