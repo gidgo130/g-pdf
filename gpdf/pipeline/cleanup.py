@@ -281,13 +281,16 @@ def _dict_run(pieces: list[str], lang: str | None) -> list[str] | None:
 
 
 def respace(tokens: list[str], gaps: list[float | None], lang: str | None,
-            nodict: bool = False, trace: list | None = None) -> tuple[list[str], dict]:
+            nodict: bool = False, trace: list | None = None,
+            word_gap: float | None = None) -> tuple[list[str], dict]:
     """Letter-spaced runs of one line rejoined. ``gaps[i]`` is the gap (pt) between the
     visible characters of tokens i and i+1, or None (Tesseract: word boxes only).
 
     With gaps, inside a run plus one neighbouring token each side, the gaps split at their
     largest ratio jump (>= GAP_JUMP): spaces in the small cluster go, if they are also well
-    below the line's ordinary word gap (the median gap outside the runs / WORD_GAP), and
+    below the ordinary word gap (``word_gap``, the page's, measured on lines without runs;
+    else the line's median gap outside the runs; / WORD_GAP: on a line that is mostly
+    letter-spaced the line's own median is the letter gap, Mexico p. 277), and
     never after sentence punctuation; unless ``nodict``, a join of pieces that are all words
     by themselves into something that is not a word is undone (_veto). A run without a jump
     (evenly spaced: one word, or ordinary short words) and runs without gaps are joined
@@ -303,7 +306,10 @@ def respace(tokens: list[str], gaps: list[float | None], lang: str | None,
     near = {k for a, b in runs for k in range(max(a - 1, 0), min(b + 1, len(tokens)))}
     outside = [g for k, g in enumerate(gaps)
                if g is not None and k not in near and k + 1 not in near]
-    ref = statistics.median(outside) / WORD_GAP if len(outside) >= 2 else None
+    if word_gap is not None:
+        ref = word_gap / WORD_GAP
+    else:
+        ref = statistics.median(outside) / WORD_GAP if len(outside) >= 2 else None
     outcome = {}
     for a, b in runs:
         lo, hi = max(a - 1, 0), min(b + 1, len(tokens))
@@ -311,7 +317,10 @@ def respace(tokens: list[str], gaps: list[float | None], lang: str | None,
         measured = bool(span) and all(g is not None for g in span)
         cut = split_gaps(span) if measured else None
         if cut is not None and ref is not None:
-            cut = min(cut, ref)          # well below the line's ordinary word gap
+            cut = min(cut, ref)          # well below the ordinary word gap
+        elif cut is None and measured and word_gap is not None:
+            cut = ref                    # no jump (the run's word gaps shade into its letter
+                                         # gaps): the page's word gap alone decides
         if cut is not None and any(g < cut for g in span):
             for k in range(lo, hi - 1):
                 if gaps[k] < cut and not _SENTENCE_PUNCT.search(tokens[k]):

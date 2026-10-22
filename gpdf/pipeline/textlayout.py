@@ -321,13 +321,27 @@ def _regroup(words: list[Word], tokens: list[str]) -> list[Word]:
     return out
 
 
-def respace_line(line: Line, lang: str | None, nodict: bool, tesseract: bool) -> dict:
+def word_gap_em(lines: list[Line]) -> float | None:
+    """The ordinary word gap of a page, in em: the median over its lines without
+    letter-spaced runs (and with >= 2 gaps) of the line's median character gap / size.
+    None when the page has no such line."""
+    ems = []
+    for ln in lines:
+        gaps = [_gap(a, b) for a, b in zip(ln.words, ln.words[1:])]
+        if len(gaps) >= 2 and not cleanup.spaced_runs([w.text for w in ln.words]):
+            ems.append(statistics.median(gaps) / max(ln.size, 1))
+    return statistics.median(ems) if ems else None
+
+
+def respace_line(line: Line, lang: str | None, nodict: bool, tesseract: bool,
+                 word_gap: float | None = None) -> dict:
     """Letter-spaced runs and "m"-split words of one line rejoined (cleanup.respace and
     cleanup.msplit on the gaps between visible characters; no gaps on a Tesseract layer).
+    ``word_gap``: the page's ordinary word gap for this line (pt), if the page has one.
     Returns the counts."""
     texts = [w.text for w in line.words]
     gaps = [None if tesseract else _gap(a, b) for a, b in zip(line.words, line.words[1:])]
-    tokens, counts = cleanup.respace(texts, gaps, lang, nodict)
+    tokens, counts = cleanup.respace(texts, gaps, lang, nodict, word_gap=word_gap)
     counts["msplit"] = 0
     if tokens != texts:
         line.words = _regroup(line.words, tokens)

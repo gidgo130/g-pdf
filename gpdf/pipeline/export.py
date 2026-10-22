@@ -586,8 +586,10 @@ def _respace(pages, job, counts) -> None:
     for p in pages:
         if p.kind in (CONTENTS, INDEX, BLANK):
             continue
+        em = None if p.tesseract else tl.word_gap_em(p.lines)     # the page's word gap
         for ln in p.lines:
-            c = tl.respace_line(ln, p.lang, job["nodict"], p.tesseract)
+            c = tl.respace_line(ln, p.lang, job["nodict"], p.tesseract,
+                                None if em is None else em * ln.size)
             counts["spacing"].update({k: v for k, v in c.items() if k != "msplit"})
             counts["msplit"] += c["msplit"]
         for g in p.giants:

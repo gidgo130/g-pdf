@@ -753,3 +753,21 @@ def test_superscript_marker_read_as_two_digits(tmp_path):
     prose = " ".join(texts(records, "prose"))
     assert "paralítica.[^51] Curiosamente" in prose
     assert [r["note"] for r in records if r["kind"] == "note"] == [50, 51]
+
+
+def test_fully_letter_spaced_line_is_measured_against_the_page(tmp_path):
+    # Mexico p. 277: "t o m a d o s c o m o e j e m p l o s d e la s e g u n d a" (letter
+    # gaps 1.2-1.5 pt, word gaps 3.1-4.9 pt) on a page whose ordinary word gap is 2.5 pt
+    path = tmp_path / "spacedline.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    for k in range(6):
+        s.spaced(words(2700 + k, 9), [2.5] * 8, size=8, pitch=10)
+    s.spaced("t o m a d o s c o m o e j e m p l o s d e la s e g u n d a .".split(),
+             [1.4] * 6 + [4.0] + [1.4] * 3 + [3.5] + [1.3] * 7 + [3.8, 1.3, 3.1, 2.7]
+             + [1.3] * 9 + [3.4, 4.0], size=8, pitch=10)
+    for k in range(6):
+        s.spaced(words(2710 + k, 9), [2.5] * 8, size=8, pitch=10)
+    save(doc, path)
+    records, *_ = run(path)
+    assert "tomados como ejemplos de la segunda" in " ".join(texts(records))

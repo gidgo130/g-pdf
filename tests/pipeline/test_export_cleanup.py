@@ -116,6 +116,25 @@ def test_respace_needs_gaps_below_the_lines_word_gap():
     assert c.respace(toks, gaps, "es")[0] == ["1920:", "Juan", "Martín.", "Zain"]
 
 
+def test_respace_on_a_fully_spaced_line_takes_the_pages_word_gap():
+    # Mexico p. 277: when most of the line is letter-spaced, the line's own median gap IS
+    # the letter gap; the page's ordinary word gap (from lines without runs) decides
+    toks = "t o m a d o s c o m o e j e m p l o s d e la s e g u n d a .".split()
+    gaps = [1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 4.0, 1.5, 1.5, 1.5, 3.5, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2,
+            1.2, 3.8, 1.3, 3.1, 2.7, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 3.4, 4.0]
+    assert c.respace(toks, gaps, "es")[0] == toks                      # nothing to go by
+    out, counts = c.respace(toks, gaps, "es", word_gap=2.5)
+    assert out == ["tomados", "como", "ejemplos", "de", "la", "segunda."]
+    assert counts["geometry"] == 1
+    toks = "del p o e m a c o m o canto, desarrollo".split()
+    gaps = [2.2, 1.5, 1.5, 1.5, 1.5, 3.3, 1.4, 1.4, 1.4, 3.2, 3.0]
+    assert c.respace(toks, gaps, "es", word_gap=2.5)[0] == ["del", "poema", "como", "canto,",
+                                                            "desarrollo"]
+    # the page's gap keeps the guard: ordinary word gaps on the line are not joined
+    toks = "el citado), o de la consideración".split()
+    assert c.respace(toks, [3.0, 7.0, 2.9, 3.1, 3.0], "es", word_gap=3.0)[0] == toks
+
+
 def test_respace_veto_on_a_tiny_gap_between_real_words():
     toks = "ni yo ni fosa ni hoyo".split()
     gaps = [2.5, 4.0, 1.2, 5.6, 4.4]
