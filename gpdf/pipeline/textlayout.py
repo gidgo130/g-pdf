@@ -631,11 +631,20 @@ def segment(flows: list[Flow], nodict: bool = False) -> tuple[list[Unit], dict]:
 
         def flush():
             if len(stretch) >= VERSE_MIN:
-                text = "\n".join(_line_text(flows[r[0]], True) if len(r) == 1
-                                 else _join([flows[i] for i in r], nodict, counts)
-                                 for r in stretch)
-                units.append(Unit("verse", [flows[i].line for r in stretch for i in r], text,
-                                  ["quote"] if small else []))
+                parts = []                             # a verse unit ends at a page break,
+                for r in stretch:                      # so a line is cited to one page
+                    page = flows[r[0]].line.page
+                    if not parts or parts[-1][0] != page:
+                        parts.append((page, []))
+                    parts[-1][1].append(r)
+                for k, (_, runs) in enumerate(parts):
+                    text = "\n".join(_line_text(flows[r[0]], True) if len(r) == 1
+                                     else _join([flows[i] for i in r], nodict, counts)
+                                     for r in runs)
+                    flags = ((["quote"] if small else []) + (["continued"] if k else [])
+                             + (["continues"] if k < len(parts) - 1 else []))
+                    units.append(Unit("verse", [flows[i].line for r in runs for i in r],
+                                      text, flags))
             else:
                 for r in stretch:
                     units.append(Unit("quote" if small else "prose",

@@ -246,6 +246,36 @@ def test_ragged_verse_keeps_its_breaks(tmp_path):
     assert records[2]["text"] == "\n".join(poem[:3])
 
 
+def test_verse_units_end_at_page_breaks(tmp_path):
+    # Altazor canto II came out as one 180-line unit over pp. 22-25: a line could only be
+    # cited to the range; the parts carry "continues" / "continued"
+    path = tmp_path / "verse_break.pdf"
+    doc = pymupdf.open()
+    poem = ["El día se suicida arrojándose al mar", "Un barco vestido de luces se aleja",
+            "Y al fondo de las olas un pez escucha el paso de los hombres",
+            "Silencio la tierra va a dar a luz un árbol", "La muerte se ha dormido",
+            "Mastican el universo que me atraviesa como un túnel",
+            "Un escalofrío de pájaro me sacude los hombros", "Escalofrío de alas"]
+    s = Sheet(doc, y=520)
+    for ln in poem[:5]:
+        s.line(ln)
+    s = Sheet(doc)
+    for ln in poem[5:]:
+        s.line(ln)
+    s.y += PITCH
+    s.para(words(3300, 50), last_full=True)       # prose over the break stays whole
+    s = Sheet(doc)
+    s.para(words(3301, 30), indent=0)
+    save(doc, path)
+    records, *_ = run(path)
+    verse = [r for r in records if r["kind"] == "verse"]
+    assert [(r["pages"], r["flags"]) for r in verse] == [([1, 1], ["continues"]),
+                                                          ([2, 2], ["continued"])]
+    assert verse[0]["text"] == "\n".join(poem[:5]) and verse[1]["text"] == "\n".join(poem[5:])
+    prose = [r for r in records if r["kind"] == "prose"]
+    assert len(prose) == 1 and prose[0]["pages"] == [2, 3]
+
+
 def test_drama_one_unit_per_speech(tmp_path):
     path = tmp_path / "drama.pdf"
     doc = pymupdf.open()
@@ -613,7 +643,8 @@ def test_verse_with_space_indents_and_a_file_of_mostly_verse(tmp_path):
     records, *_ = run(path, nodict=True)
     verse = [r for r in records if r["kind"] == "verse"]
     assert all(ln in verse[0]["text"].split("\n") for ln in long_lines)
-    assert verse[-1]["text"].endswith("\n" + "\n".join(stair))       # spaces kept
+    assert verse[-1]["text"] == "\n".join(stair)                      # spaces kept; the
+    assert "continued" in verse[-1]["flags"]                          # page's own unit
 
 
 def test_verse_lines_ending_near_one_x_are_not_a_prose_column(tmp_path):
