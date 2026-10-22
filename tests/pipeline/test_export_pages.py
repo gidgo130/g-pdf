@@ -800,6 +800,66 @@ def test_per_file_tight_gap_rule_joins_without_the_word_list(tmp_path, monkeypat
     assert counts["tight_joins"] == 1          # "com o"; the others the word list already joins
 
 
+def test_marginalia_dropped_on_a_tesseract_layer(tmp_path, scan_font):
+    # Unruh: handwritten marginalia read by Tesseract come out as headings or short units
+    # ("b DENADTA| Bunives de Ralz GUNOCTA"); a real foreign-language heading survives
+    path = tmp_path / "marginalia.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc, font="cour")
+    s.text(X0, 40, "b DENADTA| Bunives de Ralz GUNOCTA", 13)
+    s.y = 70
+    for k in range(6):
+        s.line(" ".join(words(3000 + k, 7)), size=9)
+    s.y += 18
+    s.line("Qresho = beatralidal,", size=9)
+    s.y += 18
+    s.text(X0, s.y, "Prefácio interessantíssimo", 13)
+    s.y += 24
+    for k in range(6):
+        s.line(" ".join(words(3010 + k, 7)), size=9)
+    save(doc, path)
+    records, rows, _, _, counts = run(path, scan=True, lang="en")
+    allt = [r["text"] for r in records]
+    assert "b DENADTA| Bunives de Ralz GUNOCTA" not in allt
+    assert "Qresho = beatralidal," not in allt
+    assert "Prefácio interessantíssimo" in allt
+    dropped = [d["text"] for d in rows[0]["dropped"] if d["reason"] == "marginalia"]
+    assert dropped == ["b DENADTA| Bunives de Ralz GUNOCTA", "Qresho = beatralidal,"]
+    assert counts["marginalia"] == ["p. 1: b DENADTA| Bunives de Ralz GUNOCTA",
+                                    "p. 1: Qresho = beatralidal,"]
+    records, *_ = run(path, scan=True, lang="en", nodict=True)      # no dictionary: kept
+    assert "Qresho = beatralidal," in [r["text"] for r in records]
+    monkeypatch_font = tl.TESSERACT_FONTS
+    tl.TESSERACT_FONTS = ("GlyphLessFont",)                          # born-digital: kept
+    try:
+        records, *_ = run(path, lang="en")
+    finally:
+        tl.TESSERACT_FONTS = monkeypatch_font
+    assert "Qresho = beatralidal," in [r["text"] for r in records]
+
+
+def test_dash_tilde_mark_and_a_hyphen_never_ends_a_unit(tmp_path, scan_font):
+    # Unruh p. 237 "—~As early as 1882"; p. 278 "Tulio Halperin Don-" / "ghi in Historia"
+    # (the second line OCR'd at a size that flipped the small-type flag)
+    path = tmp_path / "hyphen.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc, font="cour")
+    for k in range(8):
+        s.line(" ".join(words(3100 + k, 7)), size=9)
+    s.line("—~As early as 1882, Ernest Renan cautioned in his address", size=9)
+    for k in range(4):
+        s.line(" ".join(words(3110 + k, 7)), size=9)
+    s.line("Skidmore and Peter H. Smith in Modern Latin America; Tulio Halperin Don-",
+           size=7.5)
+    s.line("ghi in Historia contemporánea de América Latina (280-355); and, for", size=8.2)
+    s.line("connections between major historical trends.", size=7.5)
+    save(doc, path)
+    records, *_ = run(path, scan=True, lang="en")
+    allt = " | ".join(r["text"] for r in records)
+    assert "As early as 1882" in allt and "—~" not in allt
+    assert "Tulio Halperin Donghi in Historia" in allt
+
+
 def test_speaker_label_starts_the_verse_unit(tmp_path):
     # Tempestad p. 114: "Próspero: Es un demonio, nacido demonio," at the margin, the rest of
     # the speech set further in, then the act/scene reference; 264 speeches broke at the label

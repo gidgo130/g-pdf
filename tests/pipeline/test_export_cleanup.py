@@ -294,6 +294,10 @@ def test_unruh_artefacts():
     text, counts, reported = c.artefacts("_ Language may_be considered an actor ~")
     assert text == "Language may be considered an actor"
     assert counts == {"edge_mark": 2, "underscore": 1}
+    assert c.edge_mark("—~") and c.edge_mark("~—") and not c.edge_mark("—")
+    assert c.artefacts("—~As early as 1882")[0] == "As early as 1882"
+    assert c.artefacts("~— Ernest Renan")[0] == "Ernest Renan"
+    assert c.lead_mark("—~As early") == ("As early", 1) and c.lead_mark("Renan") == ("Renan", 0)
     text, counts, reported = c.artefacts("in culture but also-a-protagonist in the history")
     assert text == "in culture but also-a-protagonist in the history"
     assert reported == ["also-a-protagonist"]

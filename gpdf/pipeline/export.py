@@ -60,6 +60,7 @@ BACK_MATTER = {"bibliography", "selected bibliography", "works cited", "index", 
 SHORT_LINE = 15             # characters: a Tesseract line too short to judge by its size
 GIANT_BOX = 5.0             # x the body size and its own size: a box no text line has
 MARGIN_WORDS = 3
+MARGINALIA_WORDS = 12       # a Tesseract unit this short with mostly unknown words: marginalia
 INDEX_SHARE = 0.4           # lines ending in a page number or with a dot leader
 INDEX_MIN_LINES = 6         # numbered lines (a title page with an ISSN and a year is not)
 LATE = 0.9                  # a two-column page in the last 10% of the file: an index
@@ -400,6 +401,12 @@ def junk(pages: list[Page], job, counts) -> None:
             if len(ln.words) > 1 and cleanup.edge_mark(ln.words[0].text):
                 p.dropped.append(("edge_mark", ln.words.pop(0).text))
                 counts["artefacts"]["edge_mark"] += 1
+            text, n = cleanup.lead_mark(ln.words[0].text)        # "—~As early": glued
+            if n:
+                p.dropped.append(("edge_mark", ln.words[0].text[:len(ln.words[0].text)
+                                                                 - len(text)]))
+                ln.words[0].text = text
+                counts["artefacts"]["edge_mark"] += n
             if len(ln.words) > 1 and cleanup.edge_mark(ln.words[-1].text):
                 p.dropped.append(("edge_mark", ln.words.pop().text))
                 counts["artefacts"]["edge_mark"] += 1
@@ -709,7 +716,8 @@ def _new_counts() -> dict:
             "spacing": Counter({"geometry": 0, "dictionary": 0, "even": 0, "undone": 0,
                                 "unchanged": 0}), "msplit": 0, "tight_joins": 0,
             "merged_seen": 0, "dropped": Counter(), "apparatus_pages": 0,
-            "low_quality_pages": 0, "drop_caps": 0, "artefacts": Counter(), "reported": []}
+            "low_quality_pages": 0, "drop_caps": 0, "artefacts": Counter(), "reported": [],
+            "marginalia": []}
 
 
 def export_pdf(job) -> tuple[list[dict], list[dict], list[dict], str, dict]:
@@ -739,10 +747,39 @@ def export_pdf(job) -> tuple[list[dict], list[dict], list[dict], str, dict]:
     _link(pages, counts)
     units, joins = tl.segment(_flows(pages, size, file_col), job["nodict"])
     counts["joins"].update(joins)
+    if not job["nodict"]:
+        units = _marginalia(units, pages, counts)
     records = _records(units, pages)
     if rules.get("endnotes"):
         _flag_endnotes(records)
     return _outputs(job, pages, records, counts, size)
+
+
+_TOKEN = re.compile(r"[^\W\d_]{2,}")
+
+
+def _marginalia(units: list, pages: list, counts: dict) -> list:
+    """Handwritten marginalia read by Tesseract (Unruh: "b DENADTA| Bunives de Ralz
+    GUNOCTA" as a heading): on a Tesseract layer a heading, or a unit of <= MARGINALIA_WORDS
+    words, with >= 2 tokens of >= 2 letters of which fewer than half are known words
+    (quality.known: the page language, or well known in another of LANGS) is dropped; the
+    page records it under "marginalia" and counts["marginalia"] lists every one for the
+    owner to scan. Never with no_dictionary_fixes."""
+    by_index = {p.index: p for p in pages}
+    kept = []
+    for u in units:
+        p = by_index[u.pages[0]]
+        words = u.text.split()
+        if p.tesseract and (u.kind == HEADING or len(words) <= MARGINALIA_WORDS):
+            toks = _TOKEN.findall(u.text)
+            known = sum(quality.known(t, p.lang) for t in toks)
+            if len(toks) >= 2 and 2 * known < len(toks):
+                text = " ".join(words)
+                p.dropped.append(("marginalia", text))
+                counts["marginalia"].append(f"p. {p.index + 1}: {text}")
+                continue
+        kept.append(u)
+    return kept
 
 
 def _flag_endnotes(records: list) -> None:

@@ -587,7 +587,8 @@ def leaders(text: str) -> str:
 
 # ---------------------------------------------------------------------------- scan artefacts
 _SYMBOLS = set("_~|-—–=.,:;'\"/\\«»“”‘’`")
-_LEAD_MARK = re.compile(r"^[_~|] +")
+_LEAD_MARK = re.compile(r"^(?:[_~|] +|—~ ?|~— ?)")
+EDGE_MARKS = ("_", "~", "|", "—~", "~—")
 _TRAIL_MARK = re.compile(r" +[_~|]$")
 _UNDERSCORE = re.compile(rf"(?<={_L})_(?={_L})")
 _REPORTED = re.compile(rf"\b{_L}+\.{_L}\b|\b{_L}+-{_L}-{_L}+\b")
@@ -600,8 +601,15 @@ def symbol_only(text: str) -> bool:
 
 
 def edge_mark(token: str) -> bool:
-    """A pencil mark read as a token at a line's edge: "_", "~", "|"."""
-    return token in ("_", "~", "|")
+    """A pencil mark read as a token at a line's edge: "_", "~", "|", "—~", "~—"."""
+    return token in EDGE_MARKS
+
+
+def lead_mark(text: str) -> tuple[str, int]:
+    """A "—~" / "~—" mark glued to the start of a line ("—~As early as 1882", Unruh p. 237)
+    taken off: (text, marks removed)."""
+    t, n = _LEAD_MARK.subn("", text)
+    return (t, n) if t else (text, 0)
 
 
 def underscores(word: str) -> tuple[str, int]:

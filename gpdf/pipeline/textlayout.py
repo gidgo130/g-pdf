@@ -475,12 +475,17 @@ def _indent(f: Flow) -> float:
     return f.line.vx0 - f.col.left
 
 
+def _hyphen_end(f: Flow) -> bool:
+    """The line ends in a hyphen after a letter (or a soft hyphen): the word goes on."""
+    text = f.line.text.rstrip()
+    return text.endswith(cleanup.SOFT_HYPHEN) or (text[-1:] in cleanup.HYPHENS
+                                                   and len(text) > 1 and text[-2].isalpha())
+
+
 def _hard(a: Flow, b: Flow | None, nodict: bool) -> bool:
-    text = a.line.text.rstrip()
     if b is None:
         return True
-    if text.endswith(cleanup.SOFT_HYPHEN) or (text[-1:] in cleanup.HYPHENS and len(text) > 1
-                                               and text[-2].isalpha()):
+    if _hyphen_end(a):
         return False
     return fits(a.line, b.line, a.col, a.tesseract)
 
@@ -597,7 +602,9 @@ def segment(flows: list[Flow], nodict: bool = False) -> tuple[list[Unit], dict]:
     for i in range(1, len(flows)):
         f, p = flows[i], flows[i - 1]
         boundary = (f.cut_before or f.line.heading or p.line.heading
-                    or _signal(i, flows, block, hard, wrap))
+                    or (_signal(i, flows, block, hard, wrap) and not _hyphen_end(p)))
+        # a line ending in a hyphen never ends a unit, whatever the signal (Unruh:
+        # "Halperin Don-" / "ghi" OCR'd at sizes that flipped the small-type flag)
         if boundary:
             groups.append(cur)
             cur = [i]
