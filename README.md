@@ -278,6 +278,32 @@ fixes** for an entry in the review sheet to turn the word lists off for it,
 for a poet's invented words. `--only TEXT` and `--pages 74-75` (with
 `--only`) are for quick checks; an existing output needs `--force`.
 
+### Backing up your review work
+
+Your review decisions can't be regenerated: the split `*_split.decisions.json`
+files, `catalogue\catalogue.decisions.json` and any `*.bak.json` backups of
+them. Everything else (PDFs, exports, caches, `catalogue.json`) the pipeline
+writes again. `backup` copies only the decision files to a dated folder,
+`g-pdf-backup-YYYYmmdd-HHMMSS`, keeping their paths. It adds `manifest.json`
+(sizes, sha256 hashes) and checks every copy against its source. It never
+changes the source or earlier backups. `--source` defaults to
+`private\book-prep`.
+
+1. In PowerShell with the venv active, at the repo root, find your OneDrive
+   folder: `echo $env:OneDriveCommercial` (the TU account). If that prints
+   nothing, use `echo $env:OneDrive`.
+2. Make a backup folder there once:
+   `mkdir "$env:OneDriveCommercial\g-pdf-backups"`.
+3. Run `gpdf-cli backup --to "$env:OneDriveCommercial\g-pdf-backups"`. Expect
+   4 files today (3 split decisions + catalogue decisions) plus any `.bak.json`.
+4. Check the new dated folder appears in OneDrive (File Explorer: the cloud
+   icon turns green).
+5. Repeat after every review session: split review, saving the catalogue
+   sheet, and later the structure review.
+
+To restore, copy the files from the dated folder back to the same relative
+paths under `private\book-prep`.
+
 ## Keyboard shortcuts
 
 | Action | Shortcut |
