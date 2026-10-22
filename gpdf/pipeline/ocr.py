@@ -261,8 +261,8 @@ def ocr_document(src, out, langs, jobs=None, pages=None, force=False, tess=None,
         selected = parse_pages(pages, len(doc))
         report = OcrReport(str(src), str(out), langs, tess.version, tess.tessdata, jobs,
                            len(doc))
-        report.pages = _ocr_pages(doc, selected, tess, langs, jobs, progress)
-        _save(doc, out)
+        report.pages = ocr_pages(doc, selected, tess, langs, jobs, progress)
+        save(doc, out)
     finally:
         doc.close()
     report.size_ratio = round(os.path.getsize(out) / max(1, os.path.getsize(src)), 4)
@@ -270,7 +270,23 @@ def ocr_document(src, out, langs, jobs=None, pages=None, force=False, tess=None,
     return report
 
 
-def _ocr_pages(doc, selected, tess, langs, jobs, progress) -> list[PageOcr]:
+def has_text(page) -> str | None:
+    """The OCR step's skip rule: a page with text is left as it is."""
+    return HAS_TEXT if page.get_text("words") else None
+
+
+def overlay_page(page, textpdf) -> str:
+    """The OCR step's placing: Tesseract's text over the page."""
+    overlay(page, textpdf)
+    return OCR
+
+
+def ocr_pages(doc, selected, tess, langs, jobs, progress=None, skip=has_text,
+              place=overlay_page) -> list[PageOcr]:
+    """OCR the 0-based pages ``selected`` of the open ``doc`` in place. ``skip(page)``
+    returns a status for a page not to read (else None); ``place(page, textpdf)`` lays
+    Tesseract's text-only page on a page where Tesseract found words and returns its
+    status. Pages without an image, or blank, are not read."""
     results = []
     done = 0
 
@@ -312,7 +328,7 @@ def _ocr_pages(doc, selected, tess, langs, jobs, progress) -> list[PageOcr]:
                     if confs:
                         r.mean_conf = round(sum(confs) / len(confs), 2)
                         r.low_conf_share = round(sum(c < LOW_CONF for c in confs) / len(confs), 4)
-                        overlay(doc[job.index], f"{job.outbase}.pdf")
+                        r.status = place(doc[job.index], f"{job.outbase}.pdf")
                 for p in (job.image, Path(f"{job.outbase}.pdf"), Path(f"{job.outbase}.tsv")):
                     p.unlink(missing_ok=True)
                 tick()
@@ -321,8 +337,8 @@ def _ocr_pages(doc, selected, tess, langs, jobs, progress) -> list[PageOcr]:
             page = doc[i]
             r = PageOcr(i + 1, OCR)
             results.append(r)
-            if page.get_text("words"):
-                r.status = HAS_TEXT
+            if status := skip(page):
+                r.status = status
             elif (d := source_dpi(page)) is None:
                 r.status = NO_IMAGE
             else:
@@ -349,7 +365,9 @@ def _ocr_pages(doc, selected, tess, langs, jobs, progress) -> list[PageOcr]:
     return results
 
 
-def _save(doc, out):
+def save(doc, out):
+    """Save ``doc`` to ``out`` via a temporary file in its folder: garbage-collected,
+    deflated, reopened and checked before it replaces ``out``."""
     fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=".gpdf-", suffix=".tmp")
     os.close(fd)
     try:
