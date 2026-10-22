@@ -660,4 +660,38 @@ def segment(flows: list[Flow], nodict: bool = False) -> tuple[list[Unit], dict]:
             units.append(Unit("quote" if small else "prose", [flows[i].line for i in r],
                               _join([flows[i] for i in r], nodict, counts)))
         flush()
+    _adopt_short(units)
     return units, counts
+
+
+SHORT_EDGE = 3.0            # pt: a short unit shares a verse neighbour's left edge
+
+
+def _adopt_short(units: list[Unit]) -> None:
+    """A unit of one hard-broken line (prose or quote; a soft-joined pair has two lines)
+    is verse when the nearest unit before or after it, on the same or the adjacent page,
+    is verse and either starts a line within SHORT_EDGE pt of its left edge or carries a
+    speaker label as it does: one- and two-line stanzas (Altazor p. 5) and two-line
+    speeches (Tempestad p. 45 "Miranda: Saber otra cosa jamás / Se ha cruzado...") that
+    the three-line minimum left as prose. The text is unchanged; converted units can in
+    turn make a neighbour verse, so the pass repeats until nothing changes."""
+    changed = True
+    while changed:
+        changed = False
+        for i, u in enumerate(units):
+            if u.kind not in ("prose", "quote") or len(u.lines) != 1:
+                continue
+            ln = u.lines[0]
+            for nb, near in ((units[i - 1], units[i - 1].lines[-1]) if i else (None, None),
+                             (units[i + 1], units[i + 1].lines[0]) if i + 1 < len(units)
+                             else (None, None)):
+                if nb is None or nb.kind != "verse" or abs(near.page - ln.page) > 1:
+                    continue
+                edge = any(abs(o.vx0 - ln.vx0) <= SHORT_EDGE for o in nb.lines)
+                label = cleanup.speaker(ln.text) and cleanup.speaker(nb.lines[0].text)
+                if edge or label:
+                    if u.kind == "quote":
+                        u.flags.append("quote")
+                    u.kind = "verse"
+                    changed = True
+                    break

@@ -276,6 +276,51 @@ def test_verse_units_end_at_page_breaks(tmp_path):
     assert len(prose) == 1 and prose[0]["pages"] == [2, 3]
 
 
+def test_short_hard_broken_units_next_to_verse_are_verse(tmp_path):
+    # Altazor p. 5: one- and two-line stanzas between stanzas of verse came out as prose
+    path = tmp_path / "stanzas.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    stanzas = [["Altazor ¿por qué perdiste tu primera serenidad?", "¿Qué ángel malo se paró",
+                "Con la espada en la mano?", "Y esa voz que te gritó vives"],
+               ["Altazor morirás Se secará tu voz y serás invisible"],
+               ["Acaso encuentres una luz sin noche", "Perdida en las grietas de los precipicios"],
+               ["Cae", "Cae eternamente", "Cae al fondo del infinito"]]
+    for st in stanzas:
+        for ln in st:
+            s.line(ln)
+        s.y += PITCH
+    s.para(words(3400, 40), x0=X0 + 40)                    # an indented prose paragraph
+    s.y += PITCH
+    s.line("Una nota de otro tenor.", x=X0 + 40)            # one line, other left edge
+    save(doc, path)
+    records, *_ = run(path, nodict=True)
+    kinds = [(r["kind"], r["text"].split("\n")[0][:5]) for r in records]
+    assert kinds[:6] == [("verse", "Altaz"), ("verse", "Altaz"), ("verse", "Acaso"),
+                         ("verse", "Perdi"), ("verse", "Cae"), ("prose", words(3400, 40)[0][:5])]
+    assert kinds[6][0] == "prose"                           # a different left edge: prose
+
+    # Tempestad p. 45: a two-line speech between verse speeches
+    path = tmp_path / "speech.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    s.line("Próspero: Ya es hora de que te informe mejor.")
+    for ln in ("Échame una mano", "Y quítame la capa", "De mago. Yace ahí, Arte mío."):
+        s.line(ln, x=X0 + 35)
+    s.line("Miranda: Saber otra cosa jamás")
+    s.line("Se ha cruzado con mis pensamientos.", x=X0 + 35)
+    s.line("Próspero: La hora")
+    for ln in ("Ha llegado, el momento exacto", "Que te obliga a aprestar el oído.",
+               "Obedece, y ponme atención."):
+        s.line(ln, x=X0 + 35)
+    s.line("Entra Ariel, cargado de baratijas.", x=X0 + 90)  # a stage direction: prose
+    save(doc, path)
+    records, *_ = run(path)
+    assert [(r["kind"], r["text"][:14]) for r in records] == [
+        ("verse", "Próspero: Ya e"), ("verse", "Miranda: Saber"), ("verse", "Se ha cruzado "),
+        ("verse", "Próspero: La h"), ("prose", "Entra Ariel, c")]
+
+
 def test_drama_one_unit_per_speech(tmp_path):
     path = tmp_path / "drama.pdf"
     doc = pymupdf.open()
@@ -949,5 +994,6 @@ def test_speaker_label_starts_the_verse_unit(tmp_path):
     assert ("verse", "\n".join([label] + verse)) in kinds
     assert [k for k, t in kinds if t.startswith("(I, II, 355")] == ["prose"]   # the reference:
     #                                                 its own unit (the dash glyph is the font's)
-    assert ("prose", "Ariel: Voy, voy. Sale.") in kinds
+    assert ("verse", "Ariel: Voy, voy. Sale.") in kinds        # a one-line speech between
+    #                                                             verse speeches: verse too
     assert ("verse", "Próspero: Bien hecho, pajarillo\nMío. Conserva aún\nTu forma invisible.") in kinds
