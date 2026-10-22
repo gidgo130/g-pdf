@@ -172,6 +172,12 @@ def read_pages(doc, selection, job, counts) -> tuple[list[Page], float]:
                 p.drop(ln, "giant_box")      # a box far taller than its type: OCR junk
             else:
                 kept.append(ln)
+        rule = rules_for(job["id"]).get("drop", {}).get(p.index + 1)
+        if rule:                         # per-file rules see the fragments, before fragments
+            reason, test = rule          # on one baseline are joined
+            for ln in [ln for ln in kept if test(ln)]:
+                kept.remove(ln)
+                p.drop(ln, reason)
         if p.scan_layer:
             kept = scan_junk(p, kept, job["nodict"])
         kept, p.giants = tl.take_giants(kept, size)
@@ -368,17 +374,9 @@ def furniture(pages: list[Page], counts: dict) -> None:
 
 # ---------------------------------------------------------------------------- junk
 def junk(pages: list[Page], job, counts) -> None:
-    """Per-file rules, ornaments, scan-layer junk (symbol-only lines, lines outside the
-    text column with no real word), pencil-mark artefacts."""
-    rules = rules_for(job["id"]).get("drop", {})
-    nodict = job["nodict"]
+    """Ornaments, symbol-only lines and pencil-mark artefacts on scan layers (per-file
+    rules and margin junk run on the fragments: read_pages, scan_junk)."""
     for p in pages:
-        rule = rules.get(p.index + 1)
-        if rule:
-            reason, test = rule
-            for ln in [ln for ln in p.lines if test(ln)]:
-                p.lines.remove(ln)
-                p.drop(ln, reason)
         for ln in list(p.lines):
             if cleanup.ornament(ln.text):
                 p.lines.remove(ln)

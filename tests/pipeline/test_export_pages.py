@@ -645,3 +645,20 @@ def test_last_line_of_an_indented_paragraph_is_not_a_hanging_indent(tmp_path):
     save(doc, path)
     records, *_ = run(path)
     assert [len(r["text"].split()) for r in records] == [20, 20, 20]
+
+
+def test_per_file_rule_drops_a_fragment_before_it_joins_a_body_line(tmp_path, monkeypatch):
+    # La raza cósmica p. 177: "DADDE MEXICO." in the left margin, on a body line's baseline
+    path = tmp_path / "rule.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    for k in range(6):
+        if k == 2:
+            s.text(5, s.y, "DADDE MEXICO.", 7)
+        s.line(" ".join(words(2000 + k, 6)), x=X0 + 50)
+    save(doc, path)
+    monkeypatch.setitem(export.RULES, "d" * 16,
+                        {"drop": {1: ("margin_rule", lambda ln: ln.x1 < X0 + 45)}})
+    records, rows, *_ = run(path, id="d" * 64)
+    assert "DADDE" not in " ".join(texts(records))
+    assert {"reason": "margin_rule", "text": "DADDE MEXICO."} in rows[0]["dropped"]
