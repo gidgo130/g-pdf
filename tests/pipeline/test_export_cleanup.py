@@ -24,6 +24,8 @@ def test_head_parts():
     assert c.head_parts("BRASIL (REVISTAS) | 165") == (
         "BRASIL (REVISTAS)", [(165, "arabic", "165")], [])
     assert c.head_parts("CANTO VII") == ("CANTO", [(7, "roman", "VII")], [])
+    assert c.head_parts("La revolución de entremés (II)") == (
+        "La revolución de entremés (II)", [], [(2, "roman", "II")])
     core, edge, inner = c.head_parts("Nota Extensa 6. Un despiste dramático")
     assert edge == [] and inner == [(6, "arabic", "6")]
 

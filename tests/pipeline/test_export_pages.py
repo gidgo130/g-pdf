@@ -46,11 +46,14 @@ def test_running_heads_stripped_headings_kept(tmp_path):
             s.text(X0, 40, f"{n} | INTRODUCCIÓN", 8)       # verso: number first
         else:
             s.text(220, 40, f"BRASIL (REVISTAS) | {n}", 8)  # recto: number last
-        if i in (1, 9):
+        if i in (0, 8):
             s.text(180, 62, "CANTO I", 14)                 # every 8 pages: a heading
             s.y = 90
         if i in (4, 5, 6):
             s.text(X0, 62, f"Nota Extensa {i - 1}", 14)    # numbers off the sequence
+            s.y = 90
+        if i in (9, 10, 11):                               # Tempestad: a roman in brackets
+            s.text(X0, 62, f"La revolución de entremés ({'I' * (i - 8)})", 14)
             s.y = 90
         body(s, 100 + i, 80)
     save(doc, path)
@@ -62,6 +65,7 @@ def test_running_heads_stripped_headings_kept(tmp_path):
     heads = texts(records, "heading")
     assert heads.count("CANTO I") == 2
     assert {"Nota Extensa 3", "Nota Extensa 4", "Nota Extensa 5"} <= set(heads)
+    assert {"La revolución de entremés (II)", "La revolución de entremés (III)"} <= set(heads)
     assert not any("INTRODUCCIÓN" in t or "BRASIL" in t for t in texts(records))
     assert counts["heads"] == ["BRASIL (REVISTAS)", "INTRODUCCIÓN"]
 

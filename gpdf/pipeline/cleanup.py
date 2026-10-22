@@ -87,11 +87,15 @@ def label_line(text: str) -> tuple[int, str, str] | None:
     return (n[0], n[1], t) if n else None
 
 
+_BRACKETED = re.compile(r"[(\[]([IVXLCDM]{1,8}|[ivxlcdm]{1,8})[)\]]")
+
+
 def head_parts(text: str) -> tuple[str, list[tuple[int, str, str]], list[tuple[int, str, str]]]:
     """A top-band line split into (core, edge numbers, inner numbers): numbers at the start
     or end (with their separators: "74 | INTRODUCCIÓN", "BRASIL (REVISTAS) | 165") and
-    arabic numbers inside ("Nota Extensa 6. Un despiste"). Numbers are (value, kind, token);
-    roman numerals count only at the edges."""
+    arabic numbers inside ("Nota Extensa 6. Un despiste") or a roman numeral in brackets
+    ("La revolución de entremés (II)"). Numbers are (value, kind, token); other roman
+    numerals count only at the edges."""
     words = text.split()
     edge = []
     while words and (n := number(words[0].strip(_EDGE))) and words[0].strip(_EDGE):
@@ -104,6 +108,9 @@ def head_parts(text: str) -> tuple[str, list[tuple[int, str, str]], list[tuple[i
             words.pop()
     core = " ".join(words).strip(_EDGE)
     inner = [(int(m.group()), "arabic", m.group()) for m in re.finditer(r"\d{1,4}", core)]
+    for m in _BRACKETED.finditer(core):                  # "(II)": part of a title
+        if (n := number(m.group(1))) and n[1] == "roman":
+            inner.append((n[0], n[1], m.group(1)))
     return core, edge, inner
 
 
