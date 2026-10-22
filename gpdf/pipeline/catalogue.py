@@ -1,0 +1,243 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""The survey's catalogue: one entry per file (id = sha256 of its bytes), merged across
+runs so the owner's decisions survive every re-run.
+
+Files in the catalogue folder:
+  catalogue.json            tool-owned, schema 1, rewritten by every survey (temp + replace)
+  catalogue.decisions.json  owner-owned, written only by the review sheet; read, never written
+  catalogue.review.html     the review sheet, always rewritten
+  cache/<sha256>.npy        shingles of each measured file
+
+A run touches only the entries under the roots it was given. A file that is gone becomes
+"missing" (never dropped); the same bytes at a new path keep their entry (moved or
+renamed); new bytes at a known path make a new entry, and the old one gets
+``replaced_by`` while the new one remembers it as ``previous_id``: a decision made for the
+old bytes is shown as "needs re-confirm", never applied silently to changed content.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+
+SCHEMA = 1
+CATALOGUE, DECISIONS, SHEET, CACHE = (
+    "catalogue.json", "catalogue.decisions.json", "catalogue.review.html", "cache")
+PRESENT, MISSING, ERROR = "present", "missing", "error"
+CONFIRMED, RECONFIRM, PENDING = "confirmed", "needs re-confirm", "pending"
+
+
+class CatalogueError(Exception):
+    """A problem with the catalogue folder; the message is meant for the user."""
+
+
+def now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def stamp(t: float) -> str:
+    return datetime.fromtimestamp(t).astimezone().isoformat(timespec="seconds")
+
+
+def norm(path) -> str:
+    """Absolute, normalised, case kept as given."""
+    return os.path.normpath(os.path.abspath(path))
+
+
+def same_path(a, b) -> bool:
+    return os.path.normcase(norm(a)) == os.path.normcase(norm(b))
+
+
+def under(path, folder) -> bool:
+    """``path`` is ``folder`` or inside it (case-insensitively on Windows)."""
+    p, f = os.path.normcase(norm(path)), os.path.normcase(norm(folder))
+    return p == f or p.startswith(f.rstrip(os.sep) + os.sep)
+
+
+# ---------------------------------------------------------------------------- JSON
+def dumps(obj) -> str:
+    """Indented JSON with flat lists and flat objects on one line (per-page rows)."""
+    def flat(o):
+        return all(not isinstance(v, (dict, list)) for v in o)
+
+    def enc(o, ind):
+        if isinstance(o, dict) and o and not flat(o.values()):
+            pad = " " * (ind + 1)
+            body = ",\n".join(f"{pad}{json.dumps(k, ensure_ascii=False)}: {enc(v, ind + 1)}"
+                              for k, v in o.items())
+            return "{\n" + body + "\n" + " " * ind + "}"
+        if isinstance(o, list) and o and not flat(o):
+            pad = " " * (ind + 1)
+            return "[\n" + ",\n".join(pad + enc(v, ind + 1) for v in o) + "\n" + " " * ind + "]"
+        return json.dumps(o, ensure_ascii=False)
+
+    return enc(obj, 0) + "\n"
+
+
+def write_text(path, text) -> None:
+    """Write via a temporary file in the same folder and os.replace."""
+    path = Path(path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".gpdf-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+# ---------------------------------------------------------------------------- catalogue
+def empty() -> dict:
+    return {"schema": SCHEMA, "tool_version": "", "score_version": 0, "updated": None,
+            "roots": [], "files": {}}
+
+
+def load(folder) -> dict:
+    path = Path(folder) / CATALOGUE
+    if not path.exists():
+        return empty()
+    try:
+        cat = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError) as e:
+        raise CatalogueError(f"cannot read {path}: {e} (move it away to start a new "
+                             "catalogue)") from None
+    if not isinstance(cat, dict) or cat.get("schema") != SCHEMA or not isinstance(
+            cat.get("files"), dict):
+        raise CatalogueError(f"{path} is not a schema-{SCHEMA} catalogue")
+    cat.setdefault("roots", [])
+    return cat
+
+
+def save(folder, cat) -> Path:
+    path = Path(folder) / CATALOGUE
+    write_text(path, dumps(cat))
+    return path
+
+
+def cache_path(folder, sha) -> Path:
+    return Path(folder) / CACHE / f"{sha}.npy"
+
+
+def load_shingles(folder, sha):
+    path = cache_path(folder, sha)
+    try:
+        return np.load(path, allow_pickle=False)
+    except (OSError, ValueError):
+        return None
+
+
+def save_shingles(folder, sha, arr) -> None:
+    path = cache_path(folder, sha)
+    path.parent.mkdir(exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".gpdf-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            np.save(f, np.asarray(arr, np.uint32), allow_pickle=False)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def merge(cat, roots, found, when) -> dict:
+    """Merge the files ``found`` under ``roots`` into ``cat`` (in place). ``found``: dicts
+    with sha, path, root, rel, size, mtime, kind, sorted by path. Returns counts."""
+    files = cat["files"]
+    in_scope = {k for k, e in files.items() if any(under(e["path"], r) for r in roots)}
+    counts = {"new": 0, "moved": 0, "changed": 0, "missing": 0}
+    by_sha = {}
+    for f in found:
+        by_sha.setdefault(f["sha"], []).append(f)
+    for sha, items in by_sha.items():
+        e = files.get(sha)
+        primary = items[0]
+        if e:
+            primary = next((f for f in items if same_path(f["path"], e["path"])), items[0])
+            if not same_path(primary["path"], e["path"]):
+                counts["moved"] += 1
+                e.setdefault("moved_from", [])
+                e["moved_from"].append(e["path"])
+            if e.get("status") != PRESENT:
+                e.pop("replaced_by", None)
+                e.pop("missing_since", None)
+        else:
+            e = files[sha] = {"id": sha, "first_seen": when}
+            counts["new"] += 1
+        e.update({"path": primary["path"], "root": primary["root"], "rel": primary["rel"],
+                  "size": primary["size"], "mtime": primary["mtime"], "kind": primary["kind"],
+                  "status": PRESENT, "last_seen": when})
+        copies = [f["path"] for f in items if f is not primary]
+        if copies:
+            e["copies"] = copies
+        else:
+            e.pop("copies", None)
+    at_path = {os.path.normcase(f["path"]): f["sha"] for f in found}
+    for k in sorted(in_scope - by_sha.keys()):
+        e = files[k]
+        if e.get("status") != MISSING:
+            e["status"] = MISSING
+            e["missing_since"] = when
+            counts["missing"] += 1
+        new = at_path.get(os.path.normcase(e["path"]))
+        if new and new != k:
+            e["replaced_by"] = new
+            if "previous_id" not in files[new]:
+                files[new]["previous_id"] = k
+                counts["changed"] += 1
+    return counts
+
+
+def set_root(cat, root, when) -> None:
+    for r in cat["roots"]:
+        if same_path(r["path"], root):
+            r["path"], r["last_survey"] = root, when
+            return
+    cat["roots"].append({"path": root, "last_survey": when})
+
+
+# ---------------------------------------------------------------------------- decisions
+def load_decisions(folder) -> dict:
+    """The owner's decisions file ({} of files if there is none). Never written here."""
+    path = Path(folder) / DECISIONS
+    if not path.exists():
+        return {"schema": SCHEMA, "files": {}}
+    try:
+        d = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError) as e:
+        raise CatalogueError(f"{path} is not valid JSON ({e}); fix it or move it away "
+                             "(the survey never rewrites it)") from None
+    if not (isinstance(d, dict) and d.get("schema") == SCHEMA and isinstance(d.get("files"), dict)
+            and all(isinstance(v, dict) for v in d["files"].values())):
+        raise CatalogueError(f"{path} is not a schema-{SCHEMA} decisions file "
+                             '({"schema": 1, "files": {id: {...}}}); fix it or move it away')
+    return d
+
+
+def decision_status(entry, decisions, files) -> tuple[str, dict | None, str]:
+    """(status, the decision that applies, why) for an entry: confirmed, needs re-confirm
+    (the file changed, or the suggestion changed since it was confirmed) or pending."""
+    dec = decisions.get("files", {})
+    d = dec.get(entry["id"])
+    if d is not None:
+        if not d.get("confirmed"):
+            return PENDING, d, "not confirmed"
+        was = d.get("suggestion_action")
+        now_ = (entry.get("suggestion") or {}).get("action")
+        if was and now_ and was != now_:
+            return RECONFIRM, d, f"suggestion changed ({was} -> {now_})"
+        return CONFIRMED, d, ""
+    prev, seen = entry.get("previous_id"), set()
+    while prev and prev not in seen:
+        seen.add(prev)
+        if prev in dec:
+            return RECONFIRM, dec[prev], "file changed since the decision"
+        prev = files.get(prev, {}).get("previous_id")
+    return PENDING, None, "no decision"

@@ -18,18 +18,23 @@ Nothing here writes outside the folder it is given (catalogue cache, a temporary
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
 import statistics
 import time
 import unicodedata
 import zlib
+from dataclasses import dataclass, field
 from functools import cmp_to_key
 from pathlib import Path
 
 import numpy as np
 import pymupdf
 
-from gpdf.pipeline import ocr, quality
+from gpdf import __version__
+from gpdf.pipeline import catalogue, ocr, quality
 
 TEXT_CHARS = 100            # a page with this many characters counts toward text %
 SCAN_COVER = 0.8            # one image covering this share of the page: a scanned page
@@ -471,3 +476,270 @@ def suggest(entry: dict, dup: dict | None, names: dict[str, str]) -> dict:
         reasons.append("kept in its duplicate group over " + ", ".join(others))
     return {"action": action, "pages": pages, "reason": reason, "duplicate_of": None,
             "reasons": reasons}
+
+
+# ---------------------------------------------------------------------------- the run
+DERIVED_SUFFIXES = ("_split_ocr.pdf", "_ocr.pdf", "_split.pdf")
+KINDS = {".pdf": "pdf", ".txt": "txt"}
+HASH_CHUNK = 1 << 20
+
+
+class SurveyError(Exception):
+    """A refusal (bad root, catalogue folder inside a root...); meant for the user."""
+
+
+def sha256(path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(HASH_CHUNK):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def walk(root, skip) -> list[Path]:
+    """*.pdf and *.txt under ``root`` (recursively, sorted), outside the ``skip`` folders."""
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames
+                             if not any(catalogue.under(os.path.join(dirpath, d), s)
+                                        for s in skip))
+        for name in sorted(filenames):
+            if Path(name).suffix.lower() in KINDS:
+                out.append(Path(dirpath) / name)
+    return out
+
+
+def find_working(src, derived) -> Path | None:
+    """The derived working file of ``src``: <stem>_split_ocr.pdf, then _ocr.pdf, then
+    _split.pdf, in the first --derived folder that has one."""
+    stem = Path(src).stem
+    for suffix in DERIVED_SUFFIXES:
+        for d in derived:
+            p = Path(d) / f"{stem}{suffix}"
+            if p.is_file():
+                return p
+    return None
+
+
+def _ocr_pages(working) -> tuple[str | None, list[int]]:
+    """(report path, pages the OCR step read) from <working stem>.report.json."""
+    report = Path(working).with_suffix(".report.json")
+    if not report.is_file():
+        return None, []
+    try:
+        data = json.loads(report.read_text("utf-8"))
+        pages = [p["page"] for p in data.get("pages", []) if p.get("status") == ocr.OCR]
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return str(report), []
+    return str(report), pages
+
+
+@dataclass
+class SurveyResult:
+    folder: Path
+    catalogue: dict
+    decisions: dict
+    scanned: list[str]                 # ids of the entries under the roots of this run
+    measured: int = 0
+    reused: int = 0
+    hashed_bytes: int = 0
+    shingles_recomputed: int = 0
+    trial_pages: int = 0
+    trial_failed: int = 0
+    trial_note: str = ""
+    seconds: float = 0.0
+    counts: dict = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    written: list[Path] = field(default_factory=list)
+
+    @property
+    def unreadable(self) -> list[dict]:
+        files = self.catalogue["files"]
+        return [files[k] for k in self.scanned
+                if files[k]["status"] == catalogue.ERROR
+                or (files[k].get("measured") or {}).get("errors")]
+
+    @property
+    def exit_code(self) -> int:
+        """0 ok; 2 a file could not be read or a trial page failed."""
+        return 2 if self.unreadable or self.trial_failed else 0
+
+
+def _source_layer(m) -> dict:
+    keep = ("for", "score_version", "pages", "text_pages", "text_pct", "scan", "dpi",
+            "language", "score", "no_text")
+    return {k: m[k] for k in keep if k in m}
+
+
+def _stale(m, for_sha, remeasure) -> bool:
+    return (remeasure or not m or m.get("for") != for_sha
+            or m.get("score_version") != quality.SCORE_VERSION)
+
+
+def _measure_entry(e, folder, derived, remeasure, result):
+    """Measure (or reuse) one present entry, with its working file; keep its shingles in
+    the cache."""
+    wf = find_working(e["path"], derived) if e["kind"] == "pdf" else None
+    if wf:
+        st = wf.stat()
+        sha = sha256(wf)
+        result.hashed_bytes += st.st_size
+        report, ocr_done = _ocr_pages(wf)
+        e["working_file"] = {"path": str(wf), "sha256": sha, "size": st.st_size,
+                             "mtime": catalogue.stamp(st.st_mtime), "report": report,
+                             "ocr_pages": ocr_done}
+        target, target_kind = wf, "pdf"
+    else:
+        e.pop("working_file", None)
+        e.pop("source_layer", None)
+        sha, target, target_kind = e["id"], Path(e["path"]), e["kind"]
+    try:
+        if _stale(e.get("measured"), sha, remeasure):
+            m, sh = measure(target, target_kind)
+            m["for"] = sha
+            e["measured"] = m
+            e.pop("trial", None)
+            catalogue.save_shingles(folder, sha, sh)
+            result.measured += 1
+        else:
+            result.reused += 1
+            if not catalogue.cache_path(folder, sha).is_file():
+                catalogue.save_shingles(folder, sha, measure(target, target_kind)[1])
+                result.shingles_recomputed += 1
+        if wf and _stale(e.get("source_layer"), e["id"], remeasure):
+            m, _ = measure(e["path"], e["kind"])
+            m["for"] = e["id"]
+            e["source_layer"] = _source_layer(m)
+        e.pop("error", None)
+    except MeasureError as err:
+        e["status"], e["error"], e["measured"] = catalogue.ERROR, str(err), None
+        e.pop("source_layer", None)
+        e.pop("trial", None)
+
+
+def _shingle_sets(files, folder, result) -> dict:
+    """Shingles of every present, measured entry (from the cache; recomputed when missing
+    and the file is unchanged)."""
+    sets = {}
+    for k, e in files.items():
+        m = e.get("measured")
+        if e["status"] != catalogue.PRESENT or not m:
+            continue
+        sh = catalogue.load_shingles(folder, m["for"])
+        if sh is None:
+            wf = e.get("working_file")
+            target, kind = (wf["path"], "pdf") if wf else (e["path"], e["kind"])
+            try:
+                if sha256(target) != m["for"]:
+                    raise MeasureError("changed")
+                sh = measure(target, kind)[1]
+            except (OSError, MeasureError):
+                result.warnings.append(f"no shingles for {e['path']}: left out of duplicates")
+                continue
+            catalogue.save_shingles(folder, m["for"], sh)
+            result.shingles_recomputed += 1
+        sets[k] = sh
+    return sets
+
+
+def run(roots, folder, derived=(), trial=True, remeasure=False, jobs=None,
+        tesseract_path=None, progress=None) -> SurveyResult:
+    """Survey ``roots`` into the catalogue folder ``folder``. Reads the roots and the
+    ``derived`` folders; writes only into ``folder`` (and a temporary folder)."""
+    t0 = time.perf_counter()
+    roots = [catalogue.norm(r) for r in roots]
+    derived = [catalogue.norm(d) for d in derived]
+    folder = Path(catalogue.norm(folder))
+    for r in roots:
+        if not os.path.isdir(r):
+            raise SurveyError(f"no such folder: {r}")
+        if catalogue.under(folder, r):
+            raise SurveyError(f"the catalogue folder {folder} is inside the source folder {r}; "
+                              "put it elsewhere (the survey never writes under a source folder)")
+    for d in derived:
+        if not os.path.isdir(d):
+            raise SurveyError(f"no such --derived folder: {d}")
+    cat = catalogue.load(folder)
+    decisions = catalogue.load_decisions(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    when = catalogue.now()
+
+    found = []
+    skip = [str(folder), *derived]
+    for r in roots:
+        for p in walk(r, skip):
+            st = p.stat()
+            found.append({"sha": sha256(p), "path": str(p), "root": r,
+                          "rel": os.path.relpath(p, r), "size": st.st_size,
+                          "mtime": catalogue.stamp(st.st_mtime),
+                          "kind": KINDS[p.suffix.lower()]})
+    result = SurveyResult(folder, cat, decisions, [])
+    result.hashed_bytes = sum(f["size"] for f in found)
+    result.counts = catalogue.merge(cat, roots, found, when)
+    files = cat["files"]
+    result.scanned = sorted({f["sha"] for f in found},
+                            key=lambda k: (files[k]["root"].lower(), files[k]["rel"].lower()))
+    for i, k in enumerate(result.scanned):
+        if progress:
+            progress(i + 1, len(result.scanned), files[k]["rel"])
+        _measure_entry(files[k], folder, derived, remeasure, result)
+
+    users = {}
+    for k in result.scanned:
+        if wf := files[k].get("working_file"):
+            users.setdefault(os.path.normcase(wf["path"]), []).append(files[k]["rel"])
+    for path, rels in users.items():
+        if len(rels) > 1:
+            result.warnings.append(f"{path} is the working file of several sources: "
+                                   + ", ".join(rels))
+
+    present = {k: e for k, e in files.items()
+               if e["status"] == catalogue.PRESENT and e.get("measured")}
+    sets = _shingle_sets(present, folder, result)
+    dups = duplicates({k: present[k] for k in sets}, sets)
+    for k, e in files.items():
+        if e["status"] == catalogue.PRESENT:
+            e["duplicates"] = dups.get(k, {"group": None, "same_work": [], "related": [],
+                                           "keeper": None})
+
+    run_trials(files, result, trial, jobs, tesseract_path)
+
+    names = {k: e["rel"] for k, e in files.items()}
+    for k, e in files.items():
+        if e["status"] != catalogue.MISSING:
+            e["suggestion"] = suggest(e, e.get("duplicates"), names)
+
+    for r in roots:
+        catalogue.set_root(cat, r, when)
+    cat.update({"schema": catalogue.SCHEMA, "tool_version": __version__,
+                "score_version": quality.SCORE_VERSION, "updated": when})
+    result.written.append(catalogue.save(folder, cat))
+    result.seconds = round(time.perf_counter() - t0, 1)
+    return result
+
+
+# ---------------------------------------------------------------------------- trial
+def needs_trial(e) -> bool:
+    """A present, kept, es/en PDF whose scan layer triggers a rebuild trial or that has
+    ink pages without text."""
+    m = e.get("measured")
+    if e["status"] != catalogue.PRESENT or not m or m["kind"] != "pdf":
+        return False
+    dup = e.get("duplicates") or {}
+    if dup.get("keeper") and dup["keeper"] != e["id"]:
+        return False
+    if m["language"]["lang"] not in WORK_LANGS:
+        return False
+    rebuild = m["scan"] and m["text_pages"] and rebuild_triggers(m["score"])
+    return bool(rebuild or m["no_text"]["ink"])
+
+
+def run_trials(files, result, enabled, jobs, tesseract_path) -> None:
+    if not enabled:
+        result.trial_note = "not run (--no-trial)"
+    for k in result.scanned:
+        e = files[k]
+        if not needs_trial(e):
+            e.pop("trial", None)
+        elif not (e.get("trial") or {}).get("ran"):
+            e["trial"] = {"ran": False, "note": f"trial {result.trial_note or 'not run'}"}

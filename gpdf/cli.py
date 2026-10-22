@@ -7,9 +7,12 @@
     gpdf-cli split book.pdf -o OUTDIR --sheet-only [--decisions FILE]
                                                     # rewrite only the review sheet
     gpdf-cli ocr book.pdf -o OUTDIR --lang spa      # invisible text over the scans
+    gpdf-cli survey ROOT [ROOT ...] --catalogue DIR [--derived DIR]
+                                                    # read-only catalogue + suggestions
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
-reviewed (or spreads could not be split), or OCR failed on some pages; 1 error.
+reviewed (or spreads could not be split), OCR failed on some pages, or the survey could
+not read a file or run a trial page; 1 error.
 """
 
 from __future__ import annotations
@@ -86,6 +89,29 @@ def build_parser() -> argparse.ArgumentParser:
     o.add_argument("--tesseract", metavar="PATH",
                    help="the tesseract executable (default: $GPDF_TESSERACT, PATH, then "
                         r"C:\Program Files\Tesseract-OCR)")
+    v = sub.add_parser("survey", help="read-only survey: catalogue, text quality, suggestions",
+                       description="Walk the ROOT folders for *.pdf and *.txt and write "
+                                   "DIR/catalogue.json with each file's facts, text-quality "
+                                   "score, duplicates and a suggested action, plus the review "
+                                   "sheet DIR/catalogue.review.html. Nothing under a ROOT or "
+                                   "--derived folder is changed; nothing is applied.")
+    v.add_argument("roots", metavar="ROOT", nargs="*", type=Path,
+                   help="folders to walk (recursively)")
+    v.add_argument("--catalogue", metavar="DIR", type=Path, required=True,
+                   help="catalogue folder (created if missing; keep "
+                        "catalogue.decisions.json here)")
+    v.add_argument("--derived", metavar="DIR", type=Path, action="append", default=[],
+                   help="folder with working files (<name>_split_ocr.pdf, <name>_ocr.pdf, "
+                        "<name>_split.pdf); may be repeated")
+    v.add_argument("--no-trial", action="store_true",
+                   help="don't run the Tesseract rebuild trial")
+    v.add_argument("--remeasure", action="store_true",
+                   help="measure every file again, even if unchanged")
+    v.add_argument("--jobs", metavar="N", type=int,
+                   help="Tesseract processes in parallel for the trial (default: CPU count - 1)")
+    v.add_argument("--tesseract", metavar="PATH",
+                   help="the tesseract executable (default: $GPDF_TESSERACT, PATH, then "
+                        r"C:\Program Files\Tesseract-OCR)")
     return p
 
 
@@ -99,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "ocr":
         return _ocr_main(args, parser)
+    if args.command == "survey":
+        return _survey_main(args, parser)
     if args.sheet_only:
         for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
                          ("--report", args.report), ("--accept-flagged", args.accept_flagged)):
@@ -184,6 +212,117 @@ def _print_ocr(report, ocr, out, report_path):
     for p in report.by_status(ocr.FAILED):
         print(f"  p. {p.page} failed: {p.error.splitlines()[-1] if p.error else ''}")
     print(f"report:    {report_path}")
+
+
+def _survey_main(args, parser) -> int:
+    if args.jobs is not None and args.jobs < 1:
+        parser.error("--jobs must be at least 1")
+    if not args.roots:
+        parser.error("give at least one ROOT folder")
+    try:
+        from gpdf.pipeline import catalogue, survey
+    except ModuleNotFoundError as e:
+        if e.name in ("numpy", "PIL", "wordfreq"):
+            print(f"gpdf-cli: {PREP_HINT}", file=sys.stderr)
+            return EXIT_ERROR
+        raise
+    try:
+        res = survey.run(args.roots, args.catalogue, args.derived, trial=not args.no_trial,
+                         remeasure=args.remeasure, jobs=args.jobs,
+                         tesseract_path=args.tesseract, progress=_file_progress("measuring"))
+    except (survey.SurveyError, catalogue.CatalogueError, OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    except Exception as e:  # noqa: BLE001 - one line for the user, not a traceback
+        print(f"gpdf-cli: unexpected error: {type(e).__name__}: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    _print_survey(res, survey, catalogue)
+    return res.exit_code
+
+
+def _short(text, n):
+    return text if len(text) <= n else text[: n // 2 - 1] + "..." + text[-(n - n // 2 - 2):]
+
+
+def _suggestion_text(s) -> str:
+    if not s:
+        return ""
+    a = s["action"]
+    if a == "ocr_missing" and s.get("pages"):
+        return f"{a} p. {_pages(s['pages'][:6])}" + (" ..." if len(s["pages"]) > 6 else "")
+    return f"{a} ({s['reason']})" if s.get("reason") else a
+
+
+def _print_survey(res, survey, catalogue):
+    files = res.catalogue["files"]
+    roots = [r["path"] for r in res.catalogue["roots"]]
+    shown = list(res.scanned) + sorted(
+        (k for k, e in files.items() if e["status"] == catalogue.MISSING
+         and any(catalogue.under(e["path"], r) for r in roots) and k not in res.scanned),
+        key=lambda k: files[k]["rel"].lower())
+    head = (f"{'file':<52} {'pages':>5} {'lang':<4} {'median/wtd %':>13} {'poor':>4}  "
+            f"{'suggestion':<28} decision")
+    print(head)
+    print("-" * len(head))
+    working = False
+    for k in shown:
+        e = files[k]
+        m = e.get("measured") or {}
+        name = e["rel"] + ("  +" if e.get("working_file") else "")
+        working |= bool(e.get("working_file"))
+        if e["status"] == catalogue.MISSING:
+            print(f"{_short(name, 52):<52} {'':>5} {'':<4} {'':>13} {'':>4}  {'missing':<28}")
+            continue
+        s = m.get("score") or {}
+        pages = m.get("pages")
+        pages = "txt" if m.get("kind") == "txt" else "?" if pages is None else str(pages)
+        med = "n/a" if s.get("median") is None else f"{s['median']:.1f}"
+        wtd = "n/a" if s.get("weighted") is None else f"{s['weighted']:.1f}"
+        lang = (m.get("language") or {}).get("lang") or "?"
+        status, _, _ = catalogue.decision_status(e, res.decisions, files)
+        print(f"{_short(name, 52):<52} {pages:>5} {lang:<4} {med + ' / ' + wtd:>13} "
+              f"{s.get('poor', 0):>4}  {_short(_suggestion_text(e.get('suggestion')), 28):<28} "
+              f"{status}")
+    if working:
+        print("+ measured on its working file (--derived)")
+    counts = {}
+    for k in res.scanned:
+        a = (files[k].get("suggestion") or {}).get("action", "?")
+        counts[a] = counts.get(a, 0) + 1
+    print("suggestions: " + ", ".join(f"{a} {n}" for a, n in sorted(counts.items())))
+    c = res.counts
+    print(f"files: {len(res.scanned)} ({res.measured} measured, {res.reused} reused; "
+          f"{c.get('new', 0)} new, {c.get('moved', 0)} moved, {c.get('changed', 0)} changed, "
+          f"{c.get('missing', 0)} newly missing); hashed {res.hashed_bytes / 1e6:.0f} MB")
+    if res.trial_note:
+        print(f"trial: {res.trial_note}")
+    else:
+        print(f"trial: {res.trial_pages} pages ({res.trial_failed} failed)")
+    for e in res.unreadable:
+        why = e.get("error") or "; ".join(e["measured"]["errors"])
+        print(f"  could not read {e['rel']}: {why}")
+    for w in res.warnings:
+        print(f"  warning: {w}")
+    print(f"time:      {res.seconds:.1f} s")
+    for path in res.written:
+        print(f"wrote:     {path}")
+    dec = res.folder / catalogue.DECISIONS
+    if dec.exists():
+        print(f"decisions: {dec} (read; the survey never writes it)")
+    else:
+        print(f"decisions: none yet; Save decisions from the sheet into {res.folder}")
+
+
+def _file_progress(label):
+    if not sys.stderr.isatty():
+        return None
+
+    def show(done, total, name):
+        end = "\n" if done == total else ""
+        print(f"\r  {label} {done}/{total} {_short(name, 50):<50}", end=end, file=sys.stderr,
+              flush=True)
+
+    return show
 
 
 def _progress(label):
