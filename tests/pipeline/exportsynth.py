@@ -71,6 +71,22 @@ class Sheet:
                 self.line(" ".join(ln), left, size, pitch)
         return lines
 
+    def line_to(self, seed, x1, x=X0, size=SIZE, pitch=PITCH) -> str:
+        """A ragged line of corpus words that ends exactly at ``x1`` (its last word is
+        placed there; the gap before it is an ordinary word gap). Returns the text."""
+        ws = words(seed, 60)
+        last = ws.pop()
+        end = x1 - width(last, size, self.font) - 3          # where the rest must stop
+        head = []
+        for w in ws:
+            if x + width(" ".join(head + [w]), size, self.font) > end:
+                break
+            head.append(w)
+        self.text(x, self.y, " ".join(head), size)
+        self.text(x1 - width(last, size, self.font), self.y, last, size)
+        self.y += pitch
+        return " ".join(head + [last])
+
     def spaced(self, tokens, gaps, x=X0, size=SIZE, pitch=PITCH) -> None:
         """Tokens placed with exact gaps (pt) between their boxes."""
         for i, t in enumerate(tokens):

@@ -616,6 +616,28 @@ def test_verse_with_space_indents_and_a_file_of_mostly_verse(tmp_path):
     assert verse[-1]["text"].endswith("\n" + "\n".join(stair))       # spaces kept
 
 
+def test_verse_lines_ending_near_one_x_are_not_a_prose_column(tmp_path):
+    # Altazor p. 25: 8 of 26 long verse lines end within 3 pt of x=400 and 5 run past it,
+    # so the page passed as justified prose with a 400 pt column and the lines ending there
+    # looked full (joined to the next line); the file's prose column (the preface) is wider
+    path = tmp_path / "altazor25.pdf"
+    doc = pymupdf.open()
+    for i in range(3):
+        body(Sheet(doc), 2100 + i, 140)
+    s = Sheet(doc)
+    ends = ([300, 296, 291, 286] + [270, 269.5, 269, 268.5, 268, 267.5, 270, 269]
+            + [230 + 3 * k for k in range(13)])         # 25 long lines: 8 of them at one x
+    lines = [s.line_to(2200 + k, x1) for k, x1 in enumerate(ends)]
+    for ln in ("Eres más hermosa que el relincho de un potro", "en la montaña"):
+        s.line(ln)                                 # a turnover: stays its own line
+        lines.append(ln)
+    save(doc, path)
+    records, *_ = run(path, nodict=True)
+    mine = [r for r in records if r["pages"][0] == 4]
+    assert [r["kind"] for r in mine] == ["verse"]
+    assert mine[0]["text"] == "\n".join(lines)
+
+
 def test_verse_after_a_speaker_label_is_not_joined(tmp_path):
     # Tempestad p. 31: "Miranda: ...Te tuve lástima," then verse lines set further in
     path = tmp_path / "miranda.pdf"

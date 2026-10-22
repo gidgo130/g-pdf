@@ -362,12 +362,15 @@ def _pct(values, q):
 
 
 def column(lines: list[Line], fallback_width: float | None = None,
-           page_width: float | None = None) -> Column | None:
+           page_width: float | None = None, fallback_left: float | None = None) -> Column | None:
     """The text column of a page: 10th percentile x0 to 90th percentile x1 of its lines
     longer than LONG_LINE characters, an edge that >= 2 lines (or a fifth) reach. A ragged
     page (few lines reach that right edge: verse)
     gets ``fallback_width`` (the file's prose column) from its left edge when that is wider,
-    or without one the right margin mirrored from the left (``page_width``)."""
+    or without one the right margin mirrored from the left (``page_width``). So does a page
+    whose lines start at the file's left edge (``fallback_left``) whatever the reach: the
+    column is never narrower than the file's prose measure there (Altazor p. 25: 8 of 26
+    verse lines end within 3 pt of one x, which looked like a justified column)."""
     long_ = [ln for ln in lines if ln.chars > LONG_LINE] or lines
     if not long_:
         return None
@@ -379,11 +382,12 @@ def column(lines: list[Line], fallback_width: float | None = None,
             break
     reach = sum(l.x1 >= right - 3 for l in long_)
     ragged = reach < 3 or reach < 0.3 * len(long_)
-    if ragged:
-        if fallback_width:
-            right = max(right, left + fallback_width)
-        elif page_width:
-            right = max(right, page_width - left)
+    em = statistics.median(l.size for l in long_)
+    same_left = fallback_left is not None and abs(left - fallback_left) < INDENT_EM * em
+    if fallback_width and (ragged or same_left):
+        right = max(right, left + fallback_width)
+    elif ragged and page_width:
+        right = max(right, page_width - left)
     return Column(left, right, ragged)
 
 

@@ -597,8 +597,10 @@ def _link(pages, counts) -> None:
                 counts["markers"]["left"] += left
 
 
-def _flows(pages, size, file_width) -> list[tl.Flow]:
+def _flows(pages, size, file_col) -> list[tl.Flow]:
+    """``file_col``: (left, width) of the file's prose column, or None."""
     flows, prev = [], None
+    file_left, file_width = file_col if file_col else (None, None)
     for p in pages:
         if p.kind not in (BODY, FRONT):
             prev = None
@@ -608,7 +610,8 @@ def _flows(pages, size, file_width) -> list[tl.Flow]:
         for c in sorted({ln.col for ln in lines}):
             mine = [ln for ln in lines if ln.col == c]
             cols[c] = tl.column(mine, None if p.two_col else file_width,
-                                None if p.two_col else p.width)
+                                None if p.two_col else p.width,
+                                None if p.two_col else file_left)
         pitch = tl.pitch([ln for ln in lines if not ln.small] or lines)
         hsize = max(size, tl.body_size([ln for ln in lines if not ln.small] or lines))
         for k, ln in enumerate(lines):
@@ -681,7 +684,8 @@ def export_pdf(job) -> tuple[list[dict], list[dict], list[dict], str, dict]:
     long_cols = [c for p in pages if p.kind == BODY and not p.two_col
                  and sum(ln.chars > tl.LONG_LINE for ln in p.lines) >= 10
                  and (c := tl.column(p.lines)) and not c.ragged]    # prose pages only
-    file_width = statistics.median(c.width for c in long_cols) if long_cols else None
+    file_col = (statistics.median(c.left for c in long_cols),
+                statistics.median(c.width for c in long_cols)) if long_cols else None
     pitch = statistics.median([tl.pitch([ln for ln in p.lines if not ln.small] or p.lines)
                                for p in pages if len(p.lines) > 3] or [1.2 * size])
     rules = rules_for(job["id"])
@@ -692,7 +696,7 @@ def export_pdf(job) -> tuple[list[dict], list[dict], list[dict], str, dict]:
         if p.kind in (BODY, FRONT):
             find_notes(p, state, rules, job["nodict"])
     _link(pages, counts)
-    units, joins = tl.segment(_flows(pages, size, file_width), job["nodict"])
+    units, joins = tl.segment(_flows(pages, size, file_col), job["nodict"])
     counts["joins"].update(joins)
     records = _records(units, pages)
     return _outputs(job, pages, records, counts, size)
