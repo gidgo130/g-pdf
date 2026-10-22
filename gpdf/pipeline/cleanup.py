@@ -442,9 +442,13 @@ def tight_joins(tokens: list[str], gaps: list[float | None], size: float,
     singles = quality.ONE_LETTER_WORDS.get(lang, quality.ONE_LETTER_ANY)
 
     def word(piece):
+        # a solid word: a one-letter word, or >= KNOWN_OTHER_ZIPF in the page language
+        # ("ática" at 2.4 and "iento" at 1.3 are fragments the lists happen to hold)
         parts = [p for p in _bare(piece).split("-") if p]
         return bool(parts) and all(
-            (p.lower() in singles) if len(p) == 1 else _is_word(p, lang) for p in parts)
+            (p.lower() in singles) if len(p) == 1
+            else bool(_WORD.match(p)) and _z(p, lang) >= quality.KNOWN_OTHER_ZIPF
+            for p in parts)
 
     def dash(piece):
         return not any(c.isalnum() for c in piece) and bool(piece.strip(_QUOTES))

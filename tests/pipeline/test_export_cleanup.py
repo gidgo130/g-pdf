@@ -204,6 +204,12 @@ def test_tight_joins_by_the_gap_alone_with_the_undo_guard():
     out, joins = c.tight_joins(toks, gaps, 11, "es")
     assert out == ["como", "movimiento", "el", "runrunismo", "consta", "de", "seis", "columnas"]
     assert joins == 5
+    # a piece the lists hold at a low frequency ("ática" 2.4, "iento" 1.3) is a fragment, so
+    # the rare joined word is not asked for; two solid words whose join is unknown stay
+    toks = "paradigm ática acomodam iento tim onel im perm".split()
+    gaps = [2.0, 7.0, 2.0, 7.0, 2.0, 7.0, 2.0]
+    assert c.tight_joins(toks, gaps, 11, "es")[0] == ["paradigmática", "acomodamiento",
+                                                      "timonel", "im", "perm"]
     toks = "cósm ica u m b ilical in fin ito".split()                  # chains
     assert c.tight_joins(toks, [1.75, 7.0, 1.67, 2.5, 1.66, 7.0, 2.0, 2.1], 11, "es")[0] == [
         "cósmica", "umbilical", "infinito"]
