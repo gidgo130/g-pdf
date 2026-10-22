@@ -54,6 +54,9 @@ BOILER_PAGES = 3            # a bottom-band URL on this many pages is boilerplat
 MISREAD_LABEL = 4           # characters: an isolated line where a page number should be
 SMALL, SMALL_TESS = 0.9, 0.86            # x the body size: smaller type
 SMALL_PITCH = 0.85          # x the body pitch: a Tesseract line in smaller type
+SMALL_SHARE = 0.7           # share of a page's lines in small type: it is the page's body
+SMALL_PAGE_PITCH = 0.9      # x the file pitch: a Tesseract page set tighter (Unruh's Notes)
+BACK_MATTER = {"bibliography", "selected bibliography", "works cited", "index", "glossary"}
 SHORT_LINE = 15             # characters: a Tesseract line too short to judge by its size
 GIANT_BOX = 5.0             # x the body size and its own size: a box no text line has
 MARGIN_WORDS = 3
@@ -437,20 +440,35 @@ def _small(p: Page, size: float, pitch: float) -> None:
     from the line boxes) by size, or by a tighter line pitch with a smaller size; a short
     Tesseract line ("cante.") by its size only with the tighter pitch. A born-digital page
     whose text is mostly "smaller" than the file's body (the Mexico anthology states its
-    body at 8 pt on some pages) is measured against its own size, and by pitch."""
+    body at 8 pt on some pages) is measured against its own size, and by pitch. When small
+    type makes up >= SMALL_SHARE of a page's lines it is that page's body (Ariel's
+    prologue, Unruh's Notes section): the lines are judged again by the page's own size
+    and pitch, and only type smaller than that is small (its footnotes). On a Tesseract
+    layer the sizes are noisy and the page's own pitch is the reliable measure: a page set
+    tighter than SMALL_PAGE_PITCH x the file's, with half its lines small, is such a page."""
     lines = p.lines
-    own = tl.body_size(lines) if lines else size
+    if not lines:
+        return
+    own = tl.body_size(lines)
     unreliable = not p.tesseract and own < SMALL * size
-    ref = own if unreliable else size
+    _mark_small(lines, own if unreliable else size, pitch, p.tesseract, unreliable)
+    share = sum(ln.small for ln in lines) / len(lines)
+    own_pitch = tl.pitch(lines)
+    if share >= SMALL_SHARE or (p.tesseract and share >= 0.5
+                                and own_pitch < SMALL_PAGE_PITCH * pitch):
+        _mark_small(lines, own, own_pitch, p.tesseract, False)
+
+
+def _mark_small(lines, ref: float, pitch: float, tesseract: bool, unreliable: bool) -> None:
     for k, ln in enumerate(lines):
         near = [abs(o.base - ln.base) for o in lines[max(0, k - 1):k + 2]
                 if o is not ln and o.col == ln.col and abs(o.base - ln.base) < 1.6 * pitch]
         tight = bool(near) and min(near) < SMALL_PITCH * pitch
-        if not p.tesseract:
+        if not tesseract:
             ln.small = ln.size < SMALL * ref or (unreliable and tight and ln.size <= ref)
             continue
-        by_size = ln.size < SMALL_TESS * size and (ln.chars >= SHORT_LINE or tight)
-        ln.small = by_size or (tight and ln.size < 0.95 * size)
+        by_size = ln.size < SMALL_TESS * ref and (ln.chars >= SHORT_LINE or tight)
+        ln.small = by_size or (tight and ln.size < 0.95 * ref)
 
 
 def find_notes(p: Page, state: dict, rules: dict, nodict: bool) -> None:
@@ -699,7 +717,24 @@ def export_pdf(job) -> tuple[list[dict], list[dict], list[dict], str, dict]:
     units, joins = tl.segment(_flows(pages, size, file_col), job["nodict"])
     counts["joins"].update(joins)
     records = _records(units, pages)
+    if rules.get("endnotes"):
+        _flag_endnotes(records)
     return _outputs(job, pages, records, counts, size)
+
+
+def _flag_endnotes(records: list) -> None:
+    """With the endnotes rule (Unruh): the units after a "Notes" heading, up to the next
+    back-matter heading, are flagged ``endnotes`` (plain text, no linking)."""
+    inside = False
+    for r in records:
+        if r.kind == HEADING:
+            t = cleanup.fold(r.text)
+            if t == "notes":
+                inside = True
+            elif t in BACK_MATTER:
+                inside = False
+        elif inside:
+            r.flags.append("endnotes")
 
 
 def _label_of(p: Page) -> str | None:

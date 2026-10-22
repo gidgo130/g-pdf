@@ -688,3 +688,45 @@ def test_per_file_rule_drops_a_fragment_before_it_joins_a_body_line(tmp_path, mo
     records, rows, *_ = run(path, id="d" * 64)
     assert "DADDE" not in " ".join(texts(records))
     assert {"reason": "margin_rule", "text": "DADDE MEXICO."} in rows[0]["dropped"]
+
+
+def test_small_type_that_fills_a_page_is_its_body(tmp_path, monkeypatch, scan_font):
+    # Ariel pp. 9-37: the prologue set at 10 pt / 13 pt pitch in a file whose body is
+    # 12 pt / 17 pt; smaller and tighter than the file's lines, but it fills its pages
+    path = tmp_path / "prologue.pdf"
+    doc = pymupdf.open()
+    for i in range(4):
+        body(Sheet(doc), 2300 + i, 90, size=12, pitch=17)
+    s = Sheet(doc)
+    s.para(words(2310, 120), size=10, pitch=13)
+    s.para(words(2311, 60), size=10, pitch=13)
+    s.y += 12
+    s.line("1 Una nota al pie de la página del prólogo.", size=8, pitch=10)
+    save(doc, path)
+    records, *_ = run(path)
+    mine = [r for r in records if r["pages"][0] == 5]
+    assert [r["kind"] for r in mine] == ["prose", "prose", "note"]
+    assert mine[2]["note"] == 1 and mine[2]["text"].startswith("Una nota")
+
+    # Unruh pp. 270+: the Notes section, set tighter (10.3 vs 12 pt pitch) and OCR'd at
+    # sizes around the small-type threshold, so only 55-70% of its lines came out small
+    # and every flip made a unit; with the endnotes rule its units are flagged
+    path = tmp_path / "endnotes.pdf"
+    doc = pymupdf.open()
+    for i in range(4):
+        s = Sheet(doc, font="cour")
+        for k in range(12):
+            s.line(" ".join(words(2400 + 10 * i + k, 7)), size=9)
+    s = Sheet(doc, font="cour")
+    s.text(170, 60, "Notes", 14)
+    s.y = 90
+    for k in range(5):
+        s.justify(words(2500 + k, 8), x0=X0 + 10, size=8.0 if k in (1, 3) else 7.5, pitch=10.5)
+        s.line(" ".join(words(2510 + k, 5)), size=8.0 if k in (0, 2) else 7.5, pitch=10.5)
+    save(doc, path)
+    monkeypatch.setitem(export.RULES, "b" * 16, {"endnotes": True})
+    records, *_ = run(path, scan=True, lang="en", id="b" * 64)
+    mine = [r for r in records if r["pages"][0] == 5]
+    assert [r["kind"] for r in mine] == ["heading"] + ["prose"] * 5
+    assert mine[0]["text"] == "Notes" and "endnotes" not in mine[0]["flags"]
+    assert all("endnotes" in r["flags"] for r in mine[1:])
