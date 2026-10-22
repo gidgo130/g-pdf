@@ -195,6 +195,33 @@ def test_msplit_joins_real_words_on_small_gaps():
     assert c.msplit(toks, [7.0, 1.0, 1.0, 7.0, 1.0, 1.0, 1.0, 1.0, 1.0, 7.0, 1.0], "es")[1] == 0
 
 
+def test_tight_joins_by_the_gap_alone_with_the_undo_guard():
+    # Manifiestos (Batang): a space of 1.7-2.5 pt inside words ("com o", "runrunism o",
+    # "m ovim iento"), at 11 pt and at 14.5 pt alike; the word list is not asked
+    # ("runrunismo" is not in it)
+    toks = "com o m ovim iento el runrunism o consta de seis colum nas".split()
+    gaps = [1.8, 7.0, 2.0, 2.0, 6.9, 7.1, 2.1, 7.0, 6.8, 7.2, 7.0, 2.0]
+    out, joins = c.tight_joins(toks, gaps, 11, "es")
+    assert out == ["como", "movimiento", "el", "runrunismo", "consta", "de", "seis", "columnas"]
+    assert joins == 5
+    toks = "cósm ica u m b ilical in fin ito".split()                  # chains
+    assert c.tight_joins(toks, [1.75, 7.0, 1.67, 2.5, 1.66, 7.0, 2.0, 2.1], 11, "es")[0] == [
+        "cósmica", "umbilical", "infinito"]
+    # real word gaps on tightly justified 14.5 pt lines go down to 2.8 pt (0.19 em): the cap
+    # in pt keeps them; "adm itirlo" (2.44 pt) still joins
+    toks = "es la mayor riqueza de adm itirlo!... y las".split()
+    gaps = [3.36, 8.0, 3.18, 8.0, 8.0, 2.44, 8.0, 3.47]
+    assert c.tight_joins(toks, gaps, 14.5, "es") == (
+        "es la mayor riqueza de admitirlo!... y las".split(), 1)
+    # the undo guard: real words set with overlapping or near-zero gaps stay apart; a dash
+    # never joins, a quote does
+    toks = "que anda Favorables París-Poemas santana - andrade « dicen»".split()
+    gaps = [-0.45, 8.0, 0.78, 8.0, 2.0, 2.1, 8.0, 2.49]
+    assert c.tight_joins(toks, gaps, 12, "es") == (
+        "que anda Favorables París-Poemas santana - andrade «dicen»".split(), 1)
+    assert c.tight_joins(toks, [None] * 8, 12, "es") == (toks, 0)        # no gaps: nothing
+
+
 # ---------------------------------------------------------------------------- notes, markers
 def test_note_start():
     assert c.note_start("24. B. Brecht, «Der Dreigroschenprozeß»") == (24, "24.", False)

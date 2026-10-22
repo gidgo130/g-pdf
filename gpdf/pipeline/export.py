@@ -80,8 +80,10 @@ RULES = {
     "2c416f2e81060b0e": {"drop": {1: ("scielo_sidebar", lambda ln: ln.x0 > 400 and
                                       150 < ln.y0 < 575)}},
     # Manifiestos: unnumbered editorial notes in small type, indented, after a manifesto
-    # ("Publicado en ...", "Este ...").
-    "e27a278fac5297c8": {"editorial_notes": True},
+    # ("Publicado en ...", "Este ..."). Its Batang font puts a 1.7-2.5 pt space after "m"
+    # (and a few other letters) inside words ("com o", "runrunism o") where real word gaps
+    # are >= 2.8 pt: a tight gap is no word boundary (cleanup.tight_joins).
+    "e27a278fac5297c8": {"editorial_notes": True, "tight_gap": True},
     # Unruh: endnotes (a Notes section at the back), not footnotes: plain text, no linking.
     "be5a47fac943c90c": {"endnotes": True},
 }
@@ -583,15 +585,18 @@ def _note_text(lines, lang, nodict, number) -> str:
 
 # ---------------------------------------------------------------------------- the entry
 def _respace(pages, job, counts) -> None:
+    tight = bool(rules_for(job["id"]).get("tight_gap"))
     for p in pages:
         if p.kind in (CONTENTS, INDEX, BLANK):
             continue
         em = None if p.tesseract else tl.word_gap_em(p.lines)     # the page's word gap
         for ln in p.lines:
             c = tl.respace_line(ln, p.lang, job["nodict"], p.tesseract,
-                                None if em is None else em * ln.size)
-            counts["spacing"].update({k: v for k, v in c.items() if k != "msplit"})
+                                None if em is None else em * ln.size, tight)
+            counts["spacing"].update({k: v for k, v in c.items()
+                                      if k not in ("msplit", "tight")})
             counts["msplit"] += c["msplit"]
+            counts["tight_joins"] += c["tight"]
         for g in p.giants:
             if g.drop_cap:
                 into = tl.apply_drop_cap(p.lines, g)
@@ -702,7 +707,7 @@ def _new_counts() -> dict:
     return {"pages": 0, "units": Counter(), "notes": Counter(),
             "markers": Counter(), "heads": [], "labels": Counter(), "joins": Counter(),
             "spacing": Counter({"geometry": 0, "dictionary": 0, "even": 0, "undone": 0,
-                                "unchanged": 0}), "msplit": 0,
+                                "unchanged": 0}), "msplit": 0, "tight_joins": 0,
             "merged_seen": 0, "dropped": Counter(), "apparatus_pages": 0,
             "low_quality_pages": 0, "drop_caps": 0, "artefacts": Counter(), "reported": []}
 

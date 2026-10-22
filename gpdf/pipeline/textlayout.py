@@ -334,21 +334,28 @@ def word_gap_em(lines: list[Line]) -> float | None:
 
 
 def respace_line(line: Line, lang: str | None, nodict: bool, tesseract: bool,
-                 word_gap: float | None = None) -> dict:
+                 word_gap: float | None = None, tight: bool = False) -> dict:
     """Letter-spaced runs and "m"-split words of one line rejoined (cleanup.respace and
     cleanup.msplit on the gaps between visible characters; no gaps on a Tesseract layer).
     ``word_gap``: the page's ordinary word gap for this line (pt), if the page has one.
+    ``tight``: the per-file rule (cleanup.tight_joins) that a tight gap is no word boundary.
     Returns the counts."""
     texts = [w.text for w in line.words]
     gaps = [None if tesseract else _gap(a, b) for a, b in zip(line.words, line.words[1:])]
     tokens, counts = cleanup.respace(texts, gaps, lang, nodict, word_gap=word_gap)
-    counts["msplit"] = 0
+    counts["msplit"] = counts["tight"] = 0
     if tokens != texts:
         line.words = _regroup(line.words, tokens)
     if not tesseract and not nodict:
         texts = [w.text for w in line.words]
         gaps = [_gap(a, b) for a, b in zip(line.words, line.words[1:])]
         tokens, counts["msplit"] = cleanup.msplit(texts, gaps, lang)
+        if tokens != texts:
+            line.words = _regroup(line.words, tokens)
+    if tight and not tesseract:
+        texts = [w.text for w in line.words]
+        gaps = [_gap(a, b) for a, b in zip(line.words, line.words[1:])]
+        tokens, counts["tight"] = cleanup.tight_joins(texts, gaps, line.size, lang)
         if tokens != texts:
             line.words = _regroup(line.words, tokens)
     return counts

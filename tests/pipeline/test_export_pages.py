@@ -771,3 +771,26 @@ def test_fully_letter_spaced_line_is_measured_against_the_page(tmp_path):
     save(doc, path)
     records, *_ = run(path)
     assert "tomados como ejemplos de la segunda" in " ".join(texts(records))
+
+
+def test_per_file_tight_gap_rule_joins_without_the_word_list(tmp_path, monkeypatch):
+    # Manifiestos (Batang 11 pt): a 2 pt space inside words; real word gaps >= 6.8 pt
+    path = tmp_path / "tight.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    for k in range(4):
+        s.spaced(words(2800 + k, 7), [7.0] * 6, size=11, pitch=15)
+    s.spaced("com o m ovim iento el runrunism o es la síntesis".split(),
+             [1.8, 7.0, 2.0, 2.0, 6.9, 7.1, 2.1, 7.0, 6.8, 7.2], size=11, pitch=15)
+    s.spaced("la mayor riqueza de la rima".split(), [7.0, 3.2, 7.0, 7.0, 7.0], size=11, pitch=15)
+    save(doc, path)
+    records, *_ = run(path)
+    t = " ".join(texts(records))
+    assert "com o movimiento el runrunismo es" in t     # the word list alone: "como" is not
+    #                                                   clearly more frequent than "com" + "o"
+    monkeypatch.setitem(export.RULES, "c" * 16, {"tight_gap": True})
+    records, _, _, _, counts = run(path, id="c" * 64)
+    t = " ".join(texts(records))
+    assert "como movimiento el runrunismo es la síntesis" in t
+    assert "la mayor riqueza de la rima" in t
+    assert counts["tight_joins"] == 1          # "com o"; the others the word list already joins

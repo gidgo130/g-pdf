@@ -419,6 +419,59 @@ def msplit(tokens: list[str], gaps: list[float | None], lang: str | None) -> tup
     return out, joins
 
 
+TIGHT_EM, TIGHT_PT = 0.25, 2.6   # a tight gap: below this many em, and below this many pt
+_QUOTES = "«»“”\"'()[]¿¡"
+
+
+def tight_joins(tokens: list[str], gaps: list[float | None], size: float,
+                lang: str | None) -> tuple[list[str], int]:
+    """A per-file rule (Manifiestos, Batang): a space whose gap between visible characters
+    is tight (below TIGHT_EM x ``size`` and below TIGHT_PT) is not a word boundary, whatever
+    the word list says of the parts ("runrunism o", "com o", "m ovim iento"). The glitch's
+    gap is 1.7-2.5 pt at 11 and at 14.5 pt alike, while real word gaps on tightly justified
+    14.5 pt lines go down to 2.8 pt (0.19 em): hence the cap in pt. The one guard is the
+    undo guard of respace, on the whole chain of tight gaps: pieces that are all real words
+    (one-letter words and hyphenated words included) whose join is not a well-known word
+    (KNOWN_OTHER_ZIPF: the lists hold "ylas" and "porlo" at 1.9-2.2) stay apart ("que anda"
+    and "Favorables París-Poemas", set with overlapping or near-zero gaps). A dash never
+    joins ("santana - andrade"); a quote or bracket does ("« dicen»"); nothing joins after
+    sentence punctuation. Returns (tokens, joins)."""
+    if not any(g is not None for g in gaps):
+        return tokens, 0
+    limit = min(TIGHT_EM * size, TIGHT_PT)
+    singles = quality.ONE_LETTER_WORDS.get(lang, quality.ONE_LETTER_ANY)
+
+    def word(piece):
+        parts = [p for p in _bare(piece).split("-") if p]
+        return bool(parts) and all(
+            (p.lower() in singles) if len(p) == 1 else _is_word(p, lang) for p in parts)
+
+    def dash(piece):
+        return not any(c.isalnum() for c in piece) and bool(piece.strip(_QUOTES))
+
+    def tight(k):
+        g = gaps[k] if k < len(gaps) else None
+        return (g is not None and g < limit and not _SENTENCE_PUNCT.search(tokens[k])
+                and not dash(tokens[k]) and not dash(tokens[k + 1]))
+
+    out, joins, i, n = [], 0, 0, len(tokens)
+    while i < n:
+        j = i
+        while j + 1 < n and tight(j):
+            j += 1
+        chain = tokens[i:j + 1]
+        joined = "".join(chain)
+        if j > i and not (all(word(p) for p in chain)
+                          and not (_WORD.match(_bare(joined))
+                                   and _z(_bare(joined), lang) >= quality.KNOWN_OTHER_ZIPF)):
+            out.append(joined)
+            joins += j - i
+        else:
+            out.extend(chain)
+        i = j + 1
+    return out, joins
+
+
 # ---------------------------------------------------------------------------- notes, markers
 _UP = "A-ZÀ-ÖØ-Þ"
 _NOTE_START = re.compile(rf"^(?:(\d{{1,3}})\.?|(\*{{1,3}})|([?!¡¿$%&§])(\d{{0,2}}))(?=\s|[\"«“])"
