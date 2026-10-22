@@ -107,8 +107,25 @@ def test_respace_needs_gaps_below_the_lines_word_gap():
 def test_respace_veto_on_a_tiny_gap_between_real_words():
     toks = "ni yo ni fosa ni hoyo".split()
     gaps = [2.5, 4.0, 1.2, 5.6, 4.4]
-    assert c.respace(toks, gaps, "es")[0] == toks
+    trace = []
+    out, counts = c.respace(toks, gaps, "es", trace=trace)
+    assert out == toks and counts["undone"] == 1 and counts["geometry"] == 0
+    assert trace == [("undone", "ni yo ni fosa", "ni yo ni fosa")]
     assert c.respace(toks, gaps, "es", nodict=True)[0] == ["ni", "yo", "nifosa", "ni", "hoyo"]
+
+
+def test_veto_ignores_one_letter_pieces():
+    # every letter is in wordfreq's lists: a join with a one-letter piece is never undone,
+    # even when the result is not a word ("x a l m e" -> "xalme")
+    toks = "dijo x a l m e con voz".split()
+    gaps = [6.0, 2.0, 2.0, 2.0, 2.0, 6.0, 6.0]
+    trace = []
+    out, counts = c.respace(toks, gaps, "es", trace=trace)
+    assert out == ["dijo", "xalme", "con", "voz"] and counts["geometry"] == 1
+    assert trace[0][0] == "geometry"
+    toks = "dijo u o a con voz".split()           # Spanish one-letter words, "uoa" unknown
+    assert c.respace(toks, [6.0, 2.0, 2.0, 6.0, 6.0], "es")[0] == ["dijo", "uoa", "con",
+                                                                    "voz"]
 
 
 def test_respace_a_letter_spaced_phrase():

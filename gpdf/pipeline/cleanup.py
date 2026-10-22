@@ -268,7 +268,7 @@ def _dict_run(pieces: list[str], lang: str | None) -> list[str] | None:
 
 
 def respace(tokens: list[str], gaps: list[float | None], lang: str | None,
-            nodict: bool = False) -> tuple[list[str], dict]:
+            nodict: bool = False, trace: list | None = None) -> tuple[list[str], dict]:
     """Letter-spaced runs of one line rejoined. ``gaps[i]`` is the gap (pt) between the
     visible characters of tokens i and i+1, or None (Tesseract: word boxes only).
 
@@ -278,8 +278,10 @@ def respace(tokens: list[str], gaps: list[float | None], lang: str | None,
     never after sentence punctuation; unless ``nodict``, a join of pieces that are all words
     by themselves into something that is not a word is undone (_veto). A run without a jump
     (evenly spaced: one word, or ordinary short words) and runs without gaps are joined
-    only by the word list (never with ``nodict``). Returns (tokens, counts)."""
-    counts = {"geometry": 0, "dictionary": 0}
+    only by the word list (never with ``nodict``). Returns (tokens, counts: geometry,
+    dictionary, even, undone, unchanged per run). ``trace`` (a list) gets (outcome, the run
+    with its neighbours, the result) per run."""
+    counts = {"geometry": 0, "dictionary": 0, "even": 0, "undone": 0, "unchanged": 0}
     runs = spaced_runs(tokens)
     if not runs:
         return tokens, counts
@@ -289,6 +291,7 @@ def respace(tokens: list[str], gaps: list[float | None], lang: str | None,
     outside = [g for k, g in enumerate(gaps)
                if g is not None and k not in near and k + 1 not in near]
     ref = statistics.median(outside) / WORD_GAP if len(outside) >= 2 else None
+    outcome = {}
     for a, b in runs:
         lo, hi = max(a - 1, 0), min(b + 1, len(tokens))
         span = gaps[lo:hi - 1]
@@ -300,16 +303,29 @@ def respace(tokens: list[str], gaps: list[float | None], lang: str | None,
             for k in range(lo, hi - 1):
                 if gaps[k] < cut and not _SENTENCE_PUNCT.search(tokens[k]):
                     join_after[k] = True
-            counts["geometry"] += 1
+            outcome[a] = "geometry"
             continue
-        if nodict or (measured and (lo < a or hi > b)):
-            continue                     # even gaps beside neighbours: ordinary words
-        words = _dict_run(tokens[a:b], lang)
+        if measured and (lo < a or hi > b):
+            outcome[a] = "even"          # even gaps beside neighbours: ordinary words
+            continue
+        words = None if nodict else _dict_run(tokens[a:b], lang)
         if words is not None:
             replace[a] = (b, words)
-            counts["dictionary"] += 1
+        outcome[a] = "unchanged" if words is None else "dictionary"
     if not nodict:
         _veto(tokens, join_after, replace, lang)
+    for a, b in runs:
+        lo, hi = max(a - 1, 0), min(b + 1, len(tokens))
+        if outcome[a] == "geometry" and not any(join_after[lo:hi - 1]):
+            outcome[a] = "undone"
+        counts[outcome[a]] += 1
+        if trace is not None:
+            if a in replace:
+                after = " ".join(tokens[lo:a] + replace[a][1] + tokens[b:hi])
+            else:
+                after = "".join(t + ("" if join_after[k] or k == hi - 1 else " ")
+                                for k, t in enumerate(tokens[lo:hi], lo))
+            trace.append((outcome[a], " ".join(tokens[lo:hi]), after))
     out, i = [], 0
     while i < len(tokens):
         if i in replace:
@@ -327,15 +343,17 @@ def respace(tokens: list[str], gaps: list[float | None], lang: str | None,
 
 
 def _is_word(piece: str, lang: str | None) -> bool:
-    singles = quality.ONE_LETTER_WORDS.get(lang, quality.ONE_LETTER_ANY)
+    """A known word of >= 2 letters. One-letter pieces never count: wordfreq lists every
+    letter, and letters are what letter-spaced runs are made of."""
     bare = _bare(piece)
-    return bare.lower() in singles if len(bare) == 1 else bool(bare) and quality.known(bare, lang)
+    return len(bare) >= 2 and bool(_WORD.match(bare)) and quality.known(bare, lang)
 
 
 def _veto(tokens, join_after, replace, lang) -> None:
-    """Undo a gap join whose pieces are all words by themselves and whose result is not one
-    ("ni fosa" with a 1.2 pt gap is not "nifosa"): a tiny gap between real words is a
-    typesetting quirk the geometry cannot tell from letter-spacing."""
+    """Undo a gap join whose pieces are all words of >= 2 letters by themselves and whose
+    result is not one ("ni fosa" with a 1.2 pt gap is not "nifosa"): a tiny gap between
+    real words is a typesetting quirk the geometry cannot tell from letter-spacing. A join
+    with a one-letter piece is never undone."""
     i = 0
     while i < len(tokens):
         j = i

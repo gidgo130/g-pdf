@@ -533,8 +533,7 @@ def _respace(pages, job, counts) -> None:
             continue
         for ln in p.lines:
             c = tl.respace_line(ln, p.lang, job["nodict"], p.tesseract)
-            counts["spacing"]["geometry"] += c["geometry"]
-            counts["spacing"]["dictionary"] += c["dictionary"]
+            counts["spacing"].update({k: v for k, v in c.items() if k != "msplit"})
             counts["msplit"] += c["msplit"]
         for g in p.giants:
             if g.drop_cap:
@@ -622,7 +621,8 @@ def _records(units, pages) -> list[Record]:
 def _new_counts() -> dict:
     return {"pages": 0, "units": Counter(), "notes": Counter(),
             "markers": Counter(), "heads": [], "labels": Counter(), "joins": Counter(),
-            "spacing": Counter({"geometry": 0, "dictionary": 0}), "msplit": 0,
+            "spacing": Counter({"geometry": 0, "dictionary": 0, "even": 0, "undone": 0,
+                                "unchanged": 0}), "msplit": 0,
             "merged_seen": 0, "dropped": Counter(), "apparatus_pages": 0,
             "low_quality_pages": 0, "drop_caps": 0, "artefacts": Counter(), "reported": []}
 
