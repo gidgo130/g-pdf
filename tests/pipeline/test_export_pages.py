@@ -582,6 +582,32 @@ def test_running_head_with_a_misread_page_number(tmp_path):
     assert not any("TALES" in t for t in texts(records))
 
 
+def test_running_head_with_the_page_number_and_other_numbers(tmp_path):
+    # Unruh's notes section: "264 NOTES TO PAGES 7-15" / "NOTES TO PAGES 16-32 265": the
+    # referenced range changes every page, the page number fits the sequence; one page's
+    # number is misread ("210" for 270). "Nota Extensa N" (no page number) stays a heading.
+    path = tmp_path / "notes_heads.pdf"
+    doc = pymupdf.open()
+    ranges = [(7, 15), (16, 32), (34, 54), (56, 73), (73, 85), (85, 95), (96, 115), (116, 129)]
+    for i, (a, b) in enumerate(ranges):
+        s = Sheet(doc)
+        n = 264 + i if i != 4 else 210
+        head = f"{n} NOTES TO PAGES {a}-{b}" if i % 2 == 0 else f"NOTES TO PAGES {a}-{b} {n}"
+        s.text(X0 if i % 2 == 0 else 200, 40, head, 8)
+        if i in (2, 5):
+            s.text(X0, 62, f"Nota Extensa {i}", 14)
+            s.y = 90
+        body(s, 3500 + i, 70)
+    save(doc, path)
+    records, rows, *_ = run(path, lang="en")
+    assert [r["head"] for r in rows] == ["NOTES TO PAGES"] * 8
+    assert [r["label"] for r in rows] == [str(264 + i) for i in range(8)]
+    assert rows[4]["label_status"] == "inferred"
+    assert not any("NOTES TO PAGES" in r["text"] for r in records)
+    assert {"Nota Extensa 2", "Nota Extensa 5"} <= {r["text"] for r in records
+                                                      if r["kind"] == "heading"}
+
+
 def test_short_tesseract_line_is_not_small_type_by_its_size(tmp_path, scan_font):
     # Bürger p. 78: "insignif-" + "cante." (a one-word line OCR'd at a smaller size)
     path = tmp_path / "cante.pdf"

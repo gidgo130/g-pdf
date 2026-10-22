@@ -281,6 +281,14 @@ def _strip_edges(ln, tokens) -> None:
         ln.words.pop()
 
 
+_DIGITS = re.compile(r"[\d\-–—]+")
+
+
+def _bare_head(core: str) -> str:
+    """The head without its numbers: "NOTES TO PAGES 96-115" -> "NOTES TO PAGES"."""
+    return " ".join(_DIGITS.sub(" ", core).split())
+
+
 def furniture(pages: list[Page], counts: dict) -> None:
     """Running heads and page numbers (labels), bottom-band URL boilerplate."""
     bands = {p.index: _bands(p) for p in pages}
@@ -305,27 +313,44 @@ def furniture(pages: list[Page], counts: dict) -> None:
                 continue
             core, edge, inner = cleanup.head_parts(ln.text)
             fit = all(seq.fits(p.index + 1, v, k) for v, k, _ in edge + inner)
+            fit_edge = bool(edge) and all(seq.fits(p.index + 1, v, k) for v, k, _ in edge)
             if core:
-                cores.setdefault(p.index, []).append((ln, core, edge, inner, fit))
+                cores.setdefault(p.index, []).append(
+                    (ln, core, edge, inner, fit, fit_edge, _bare_head(core)))
 
-    def repeats(index, core, numbered):
+    def repeats(index, core, numbered, stripped=False):
         """Other pages within HEAD_WINDOW with a similar head whose numbers all fit (with
-        ``numbered``: that carries a fitting edge number)."""
+        ``numbered``: that carries a fitting edge number). With ``stripped`` the heads are
+        compared with their digits taken out and the other head's edge number must fit:
+        "264 NOTES TO PAGES 7-15" / "NOTES TO PAGES 16-32 265" (Unruh's notes section)."""
         return {q for q in range(index - HEAD_WINDOW, index + HEAD_WINDOW + 1)
-                if q != index and any(f and (e or not numbered) and cleanup.similar(core, c)
-                                      for _, c, e, _, f in cores.get(q, []))}
+                if q != index and any(
+                    (fe and cleanup.similar(core, s)) if stripped
+                    else (f and (e or not numbered) and cleanup.similar(core, c))
+                    for _, c, e, _, f, fe, s in cores.get(q, []))}
 
     for p in pages:
         top, bottom = bands[p.index]
-        for ln, core, edge, inner, fit in cores.get(p.index, []):
+        for ln, core, edge, inner, fit, fit_edge, bare in cores.get(p.index, []):
             # guard 1: numbers in the head fit the page sequence, or (OCR misread the page
             # number: Unruh "12" for 222) an edge number on a head that, nearby, carries
-            # fitting page numbers; guard 2: the window
+            # fitting page numbers; or the page number at an edge plus other numbers inside
+            # (a referenced range) with the digit-stripped head repeating on pages whose
+            # edge number fits (with the page number misread too: "210" for 270);
+            # guard 2: the window
             misread = not fit and edge and not inner
-            if not (fit or misread) or len(repeats(p.index, core, misread)) < HEAD_REPEAT:
+            numbered = not fit and edge and inner
+            if fit or misread:
+                if len(repeats(p.index, core, misread)) < HEAD_REPEAT:
+                    continue
+            elif numbered and bare:
+                if len(repeats(p.index, bare, True, stripped=True)) < HEAD_REPEAT:
+                    continue
+                core = bare
+            else:
                 continue
             p.head = core if p.head is None else f"{p.head} | {core}"
-            if fit:
+            if fit or fit_edge:
                 for v, k, t in edge:
                     p.label = Label(v, k, t, FOUND)
             p.lines.remove(ln)
