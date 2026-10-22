@@ -824,9 +824,11 @@ def test_per_file_tight_gap_rule_joins_without_the_word_list(tmp_path, monkeypat
     assert counts["tight_joins"] == 1          # "com o"; the others the word list already joins
 
 
-def test_marginalia_dropped_on_a_tesseract_layer(tmp_path, scan_font):
+def test_suspected_handwriting_is_flagged_not_dropped(tmp_path, scan_font):
     # Unruh: handwritten marginalia read by Tesseract come out as headings or short units
-    # ("b DENADTA| Bunives de Ralz GUNOCTA"); a real foreign-language heading survives
+    # ("b DENADTA| Bunives de Ralz GUNOCTA"); avant-garde sound-words look the same to a
+    # word list (Schwartz "Catitú Catitú"), so the unit stays, flagged, and the .txt marks
+    # it; a real foreign-language heading is not flagged
     path = tmp_path / "marginalia.pdf"
     doc = pymupdf.open()
     s = Sheet(doc, font="cour")
@@ -842,24 +844,28 @@ def test_marginalia_dropped_on_a_tesseract_layer(tmp_path, scan_font):
     for k in range(6):
         s.line(" ".join(words(3010 + k, 7)), size=9)
     save(doc, path)
-    records, rows, _, _, counts = run(path, scan=True, lang="en")
-    allt = [r["text"] for r in records]
-    assert "b DENADTA| Bunives de Ralz GUNOCTA" not in allt
-    assert "Qresho = beatralidal," not in allt
-    assert "Prefácio interessantíssimo" in allt
-    dropped = [d["text"] for d in rows[0]["dropped"] if d["reason"] == "marginalia"]
-    assert dropped == ["b DENADTA| Bunives de Ralz GUNOCTA", "Qresho = beatralidal,"]
-    assert counts["marginalia"] == ["p. 1: b DENADTA| Bunives de Ralz GUNOCTA",
-                                    "p. 1: Qresho = beatralidal,"]
-    records, *_ = run(path, scan=True, lang="en", nodict=True)      # no dictionary: kept
-    assert "Qresho = beatralidal," in [r["text"] for r in records]
+    records, rows, _, txt, counts = run(path, scan=True, lang="en")
+    by_text = {r["text"]: r for r in records}
+    assert by_text["b DENADTA| Bunives de Ralz GUNOCTA"]["kind"] == "heading"
+    assert "suspect_ocr" in by_text["b DENADTA| Bunives de Ralz GUNOCTA"]["flags"]
+    assert "suspect_ocr" in by_text["Qresho = beatralidal,"]["flags"]
+    assert "suspect_ocr" not in by_text["Prefácio interessantíssimo"]["flags"]
+    assert rows[0]["suspect_ocr"] == ["b DENADTA| Bunives de Ralz GUNOCTA",
+                                      "Qresho = beatralidal,"]
+    assert not [d for d in rows[0]["dropped"] if d["reason"] == "marginalia"]
+    assert counts["suspect_ocr"] == ["p. 1: b DENADTA| Bunives de Ralz GUNOCTA",
+                                     "p. 1: Qresho = beatralidal,"]
+    assert "## [?] b DENADTA| Bunives de Ralz GUNOCTA" in txt
+    assert "\n[?] Qresho = beatralidal,\n" in txt and "[?] Prefácio" not in txt
+    records, *_ = run(path, scan=True, lang="en", nodict=True)      # no dictionary: no flag
+    assert not any("suspect_ocr" in r["flags"] for r in records)
     monkeypatch_font = tl.TESSERACT_FONTS
-    tl.TESSERACT_FONTS = ("GlyphLessFont",)                          # born-digital: kept
+    tl.TESSERACT_FONTS = ("GlyphLessFont",)                          # born-digital: no flag
     try:
         records, *_ = run(path, lang="en")
     finally:
         tl.TESSERACT_FONTS = monkeypatch_font
-    assert "Qresho = beatralidal," in [r["text"] for r in records]
+    assert not any("suspect_ocr" in r["flags"] for r in records)
 
 
 def test_dash_tilde_mark_and_a_hyphen_never_ends_a_unit(tmp_path, scan_font):

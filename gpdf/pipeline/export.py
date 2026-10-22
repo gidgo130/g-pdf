@@ -140,6 +140,7 @@ class Page:
     kind: str = BODY
     dropped: list = field(default_factory=list)     # (reason, text)
     notes: list = field(default_factory=list)
+    suspect: list = field(default_factory=list)     # texts flagged suspect_ocr
 
     def drop(self, line, reason) -> None:
         self.dropped.append((reason, line.text))
@@ -720,7 +721,7 @@ def _new_counts() -> dict:
                                 "unchanged": 0}), "msplit": 0, "tight_joins": 0,
             "merged_seen": 0, "dropped": Counter(), "apparatus_pages": 0,
             "low_quality_pages": 0, "drop_caps": 0, "artefacts": Counter(), "reported": [],
-            "marginalia": []}
+            "suspect_ocr": []}
 
 
 def export_pdf(job) -> tuple[list[dict], list[dict], list[dict], str, dict]:
@@ -751,7 +752,7 @@ def export_pdf(job) -> tuple[list[dict], list[dict], list[dict], str, dict]:
     units, joins = tl.segment(_flows(pages, size, file_col), job["nodict"])
     counts["joins"].update(joins)
     if not job["nodict"]:
-        units = _marginalia(units, pages, counts)
+        _suspect_ocr(units, pages, counts)
     records = _records(units, pages)
     if rules.get("endnotes"):
         _flag_endnotes(records)
@@ -761,15 +762,16 @@ def export_pdf(job) -> tuple[list[dict], list[dict], list[dict], str, dict]:
 _TOKEN = re.compile(r"[^\W\d_]{2,}")
 
 
-def _marginalia(units: list, pages: list, counts: dict) -> list:
-    """Handwritten marginalia read by Tesseract (Unruh: "b DENADTA| Bunives de Ralz
-    GUNOCTA" as a heading): on a Tesseract layer a heading, or a unit of <= MARGINALIA_WORDS
-    words, with >= 2 tokens of >= 2 letters of which fewer than half are known words
-    (quality.known: the page language, or well known in another of LANGS) is dropped; the
-    page records it under "marginalia" and counts["marginalia"] lists every one for the
-    owner to scan. Never with no_dictionary_fixes."""
+def _suspect_ocr(units: list, pages: list, counts: dict) -> None:
+    """Suspected handwriting read by Tesseract (Unruh: "b DENADTA| Bunives de Ralz GUNOCTA"
+    as a heading): on a Tesseract layer a heading, or a unit of <= MARGINALIA_WORDS words,
+    with >= 2 tokens of >= 2 letters of which fewer than half are known words
+    (quality.known: the page language, or well known in another of LANGS) is flagged
+    ``suspect_ocr``, never dropped: avant-garde text is full of coined sound-words
+    (Schwartz "Catitú Catitú", Unruh quoting Altazor "Ululayu lulayu") that a word list
+    cannot tell from handwriting. The page lists them (pages.jsonl ``suspect_ocr``), so does
+    counts["suspect_ocr"], and the .txt marks them "[?]". Never with no_dictionary_fixes."""
     by_index = {p.index: p for p in pages}
-    kept = []
     for u in units:
         p = by_index[u.pages[0]]
         words = u.text.split()
@@ -778,11 +780,9 @@ def _marginalia(units: list, pages: list, counts: dict) -> list:
             known = sum(quality.known(t, p.lang) for t in toks)
             if len(toks) >= 2 and 2 * known < len(toks):
                 text = " ".join(words)
-                p.dropped.append(("marginalia", text))
-                counts["marginalia"].append(f"p. {p.index + 1}: {text}")
-                continue
-        kept.append(u)
-    return kept
+                u.flags.append("suspect_ocr")
+                p.suspect.append(text)
+                counts["suspect_ocr"].append(f"p. {p.index + 1}: {text}")
 
 
 def _flag_endnotes(records: list) -> None:
@@ -838,7 +838,8 @@ def _outputs(job, pages, records, counts, size):
         rows.append({"entry": job["id"], "page": p.index + 1, "label": _label_of(p),
                      "label_status": p.label.status, "kind": p.kind, "head": p.head,
                      "quality": p.quality, "lang": p.lang, "removed": p.removed(),
-                     "dropped": [{"reason": r, "text": t} for r, t in p.dropped]})
+                     "dropped": [{"reason": r, "text": t} for r, t in p.dropped],
+                     "suspect_ocr": list(p.suspect)})
         if p.kind in (CONTENTS, INDEX):
             counts["apparatus_pages"] += 1
             lines = [cleanup.leaders(cleanup.soft_hyphens(ln.text)) for ln in p.lines]
@@ -866,14 +867,15 @@ def render_txt(records, rows) -> str:
             shown += 1
             if shown in labels:
                 parts.append(marker(shown))
+        mark = "[?] " if "suspect_ocr" in r["flags"] else ""        # suspected handwriting
         if r["kind"] == NOTE:
             n = r["note"] if r["note"] is not None else ("ed." if "editorial" in r["flags"]
                                                          else "*")
-            parts.append(f"[^{n}] {r['text']}")
+            parts.append(f"[^{n}] {mark}{r['text']}")
         elif r["kind"] == HEADING:
-            parts.append(f"## {r['text']}")
+            parts.append(f"## {mark}{r['text']}")
         else:
-            parts.append(r["text"])
+            parts.append(mark + r["text"])
     return "\n\n".join(parts) + "\n"
 
 
