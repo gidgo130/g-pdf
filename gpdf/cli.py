@@ -107,8 +107,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="catalogue folder (created if missing; keep "
                         "catalogue.decisions.json here)")
     v.add_argument("--derived", metavar="DIR", type=Path, action="append", default=[],
-                   help="folder with working files (<name>_split_ocr.pdf, <name>_ocr.pdf, "
-                        "<name>_split.pdf); may be repeated")
+                   help="folder with working files (<name>_split_ocr.pdf, <name>_rebuilt.pdf, "
+                        "<name>_ocr.pdf, <name>_split.pdf); may be repeated")
     v.add_argument("--no-trial", action="store_true",
                    help="don't run the Tesseract rebuild trial")
     v.add_argument("--remeasure", action="store_true",

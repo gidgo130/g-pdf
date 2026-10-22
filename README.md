@@ -200,8 +200,8 @@ a file moves, and flag them for re-confirming when a file changes.
   words (names, or Tesseract reading an ornament), and words missing an
   accent (`tambien`).
 - **Working files.** With `--derived`, a source's `<name>_split_ocr.pdf`
-  (or `_ocr.pdf`, `_split.pdf`) is measured instead of the source. The
-  source's own layer is kept for comparison.
+  (or `_rebuilt.pdf`, `_ocr.pdf`, `_split.pdf`) is measured instead of the
+  source. The source's own layer is kept for comparison.
 - **Duplicates.** Files that share most of their text are the same work.
   One is kept: a PDF before a `.txt`, then the more complete one, then the
   cleaner text, then the one with more bookmarks.
@@ -222,6 +222,29 @@ file but never writes it. A re-run only hashes unchanged files; use
 `--remeasure` to measure everything again, and `--sheet-only` to rewrite
 just the sheet. The command exits with code 2 if a file could not be read or
 a trial page failed.
+
+### Applying the decisions
+
+```powershell
+gpdf-cli apply --catalogue out\catalogue --derived out --dry-run
+gpdf-cli apply --catalogue out\catalogue --derived out
+```
+
+`apply` acts only on confirmed decisions, and only after checking that each
+file is still the one the survey measured. For `rebuild_layer` (and
+`ocr_missing`) it writes `out\<name>_rebuilt.pdf` and a report. Tesseract
+reads each page as the OCR step does. Only once it has read a page is the
+old invisible text removed and the new text laid over the untouched scan.
+A page with visible text, a page whose text cannot be removed and a page
+Tesseract failed on keep their old layer. Links, notes and bookmarks stay.
+`keep_text` and `exclude` write nothing.
+
+`--dry-run` prints the plan. `--only TEXT` limits it to files whose path
+contains TEXT. An existing output needs `--force`. Sources, `catalogue.json`
+and the decisions file are never changed. Each output is recorded in
+`applied.json` in the catalogue folder. The next survey (with `--derived`)
+measures the `_rebuilt.pdf` and shows the decision as **applied**. Exit
+code 2 means a file was refused or a page failed.
 
 ## Keyboard shortcuts
 
