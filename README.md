@@ -170,6 +170,53 @@ the run to those pages, and `--jobs N` sets how many Tesseract processes run at
 once (the default is one fewer than the number of CPUs). If Tesseract fails on
 a page, that page is left without text and the command exits with code 2.
 
+## Book prep: survey
+
+`gpdf-cli survey` is a read-only look at a whole corpus. It never changes
+anything under the folders it reads, and it applies nothing:
+
+```powershell
+gpdf-cli survey "C:\fuentes" "C:\lecturas" --catalogue out\catalogue --derived out
+```
+
+It walks each folder for `*.pdf` and `*.txt` and writes three things into
+`out\catalogue`:
+
+- `catalogue.json`, with one entry per file. Each entry holds page facts,
+  scan or born-digital, the language, a text-quality score, duplicates and a
+  suggested action.
+- `catalogue.review.html`, the review sheet.
+- `cache\`, word shingles used to find duplicates.
+
+A file is identified by its contents, so later runs keep your decisions when
+a file moves, and flag them for re-confirming when a file changes.
+
+- **Text quality** is the share of suspect lowercase words: unknown to the
+  word lists, mixed case like `opouyIy`, or a digit inside a word like
+  `Jap6n`. Each page is graded good (< 3%), fair, or poor (>= 8%).
+- **Working files.** With `--derived`, a source's `<name>_split_ocr.pdf`
+  (or `_ocr.pdf`, `_split.pdf`) is measured instead of the source. The
+  source's own layer is kept for comparison.
+- **Duplicates.** Files that share most of their text are the same work.
+  One is kept: a PDF before a `.txt`, then the more complete one, then the
+  cleaner text, then the one with more bookmarks.
+- **Suggestions.** Each file gets `keep_text`, `ocr_missing` (pages),
+  `rebuild_layer`, `exclude` (duplicate, other language) or `review`, with
+  its reasons. For a scan with a weak text layer, Tesseract re-reads up to 8
+  pages as a trial, and `rebuild_layer` is suggested only if that is clearly
+  better. Tesseract prefers dictionary words, so this comparison may favour
+  re-OCR. Pages with ink but no text are tried too: text or picture.
+  `--no-trial` skips the trial.
+
+Open the sheet in a browser. Check each file, change the action or add a
+title, author, year, page offset or notes, and press **Confirm** (or
+**Confirm all shown**). Then press **Save decisions** and keep
+`catalogue.decisions.json` in the catalogue folder. The survey reads that
+file but never writes it. A re-run only hashes unchanged files; use
+`--remeasure` to measure everything again, and `--sheet-only` to rewrite
+just the sheet. The command exits with code 2 if a file could not be read or
+a trial page failed.
+
 ## Keyboard shortcuts
 
 | Action | Shortcut |
