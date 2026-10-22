@@ -246,6 +246,38 @@ and the decisions file are never changed. Each output is recorded in
 measures the `_rebuilt.pdf` and shows the decision as **applied**. Exit
 code 2 means a file was refused or a page failed.
 
+### Exporting the text
+
+```powershell
+gpdf-cli export --catalogue out\catalogue --out out\text --dry-run
+gpdf-cli export --catalogue out\catalogue --out out\text
+```
+
+`export` writes clean, citable text for every confirmed (or applied) entry
+that is not excluded. It reads the applied output if there is one, else the
+working file, else the source, and checks each file's hash first. Pending,
+re-confirm, missing and changed files are refused (exit code 2). For each
+entry it writes, in `out\text`:
+
+- `<name>.jsonl`: one record per heading, paragraph, verse, quote or note,
+  in reading order, with its PDF pages and printed page labels (or, for a
+  `.txt`, its line numbers), its language and flags such as `low_quality`.
+- `<name>.pages.jsonl`: per page, the label, the page kind (body, contents,
+  index, blank, front), the running head that was removed, and every removed
+  line with its reason.
+- `<name>.apparatus.jsonl`: the contents and index pages, kept out of the text.
+- `<name>.txt`: a readable version with `[p. 74 · pdf 74]` at each page.
+
+`export.json` records the inputs, their hashes and the counts.
+
+Line breaks, headings, page numbers, running heads, footnotes and
+letter-spaced words are decided from where the characters sit on the page.
+Word lists are used only where the layout cannot decide (hyphens, OCR's "."
+for a hyphen, letter-spacing without measurable gaps). Tick **No dictionary
+fixes** for an entry in the review sheet to turn the word lists off for it,
+for a poet's invented words. `--only TEXT` and `--pages 74-75` (with
+`--only`) are for quick checks; an existing output needs `--force`.
+
 ## Keyboard shortcuts
 
 | Action | Shortcut |
