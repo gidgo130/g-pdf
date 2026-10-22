@@ -12,10 +12,12 @@
     gpdf-cli survey --sheet-only --catalogue DIR    # rewrite only its review sheet
     gpdf-cli apply --catalogue DIR --derived OUTDIR [--dry-run]
                                                     # apply the confirmed decisions
+    gpdf-cli export --catalogue DIR --out OUTDIR [--dry-run]
+                                                    # clean, citable text per entry
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
 reviewed (or spreads could not be split), OCR failed on some pages, the survey could
-not read a file or run a trial page, or apply refused a file; 1 error.
+not read a file or run a trial page, or apply or export refused a file; 1 error.
 """
 
 from __future__ import annotations
@@ -140,6 +142,28 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--tesseract", metavar="PATH",
                    help="the tesseract executable (default: $GPDF_TESSERACT, PATH, then "
                         r"C:\Program Files\Tesseract-OCR)")
+    x = sub.add_parser("export", help="export clean, citable text of the confirmed entries",
+                       description="Write clean text for every confirmed catalogue entry that "
+                                   "is not excluded: OUTDIR/<name>.jsonl (one record per "
+                                   "heading, paragraph, verse, quote or note, with its PDF "
+                                   "pages and printed page labels), <name>.pages.jsonl, "
+                                   "<name>.apparatus.jsonl (contents and index pages), "
+                                   "<name>.txt, and OUTDIR/export.json. Sources, working "
+                                   "files and the catalogue folder are only read.")
+    x.add_argument("--catalogue", metavar="DIR", type=Path, required=True,
+                   help="catalogue folder (catalogue.json, catalogue.decisions.json, "
+                        "applied.json)")
+    x.add_argument("--out", metavar="OUTDIR", type=Path, required=True,
+                   help="folder for the output files (created if missing)")
+    x.add_argument("--dry-run", action="store_true",
+                   help="print which file each entry would be read from; write nothing")
+    x.add_argument("--only", metavar="TEXT", nargs="+", default=[],
+                   help="only files whose id starts with TEXT or whose path contains it")
+    x.add_argument("--pages", metavar="RANGE",
+                   help="only these PDF pages (1-based), e.g. 74-75,766; needs --only")
+    x.add_argument("--jobs", metavar="N", type=int,
+                   help="files exported in parallel (default: CPU count - 1)")
+    x.add_argument("--force", action="store_true", help="replace existing output files")
     return p
 
 
@@ -157,6 +181,8 @@ def main(argv: list[str] | None = None) -> int:
         return _survey_main(args, parser)
     if args.command == "apply":
         return _apply_main(args, parser)
+    if args.command == "export":
+        return _export_main(args, parser)
     if args.sheet_only:
         for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
                          ("--report", args.report), ("--accept-flagged", args.accept_flagged)):
@@ -349,6 +375,98 @@ def _apply_main(args, parser) -> int:
     if errors:
         return EXIT_ERROR
     return EXIT_UNREVIEWED if refused or failed else EXIT_OK
+
+
+def _export_main(args, parser) -> int:
+    if args.jobs is not None and args.jobs < 1:
+        parser.error("--jobs must be at least 1")
+    if args.pages and not args.only:
+        parser.error("--pages needs --only (it is for quick checks of one file)")
+    try:
+        from gpdf.pipeline import catalogue, export
+    except ModuleNotFoundError as e:
+        if e.name in ("numpy", "PIL", "wordfreq"):
+            print(f"gpdf-cli: {PREP_HINT}", file=sys.stderr)
+            return EXIT_ERROR
+        raise
+    try:
+        items = export.plan(args.catalogue, args.out, args.only, args.pages, args.force)
+    except (export.ExportError, catalogue.CatalogueError, OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    t0 = time.perf_counter()
+    todo = [it for it in items if it.writes]
+    done, errors = [], 0
+    if args.dry_run:
+        for it in todo:
+            print(f"would export {_short(it.rel, 60)} from the {it.input_from} "
+                  f"{Path(it.input).name}" + (f", pages {args.pages}" if it.pages else "")
+                  + (" [no dictionary fixes]" if it.nodict else ""))
+    elif todo:
+        args.out.mkdir(parents=True, exist_ok=True)
+        jobs = max(1, min(args.jobs or (os.cpu_count() or 2) - 1, len(todo)))
+        for it, result in _run_exports(export, todo, args.out, jobs):
+            if isinstance(result, Exception):
+                print(f"error    {_short(it.rel, 60)}: {type(result).__name__}: {result}",
+                      file=sys.stderr)
+                errors += 1
+                continue
+            done.append((it, result))
+            _print_exported(it, result)
+        if done:
+            log = export.write_log(args.out, done, {"pages": args.pages, "force": args.force})
+            print(f"recorded in {log}")
+    for it in items:
+        if it.excluded:
+            print(f"excluded {_short(it.rel, 60)}")
+    refused = [it for it in items if it.refused]
+    for it in refused:
+        print(f"refused  {_short(it.rel, 60)}: {it.refused}")
+    flagged = [it for it in todo if it.nodict]
+    if flagged:
+        print("no dictionary fixes: " + ", ".join(_short(it.rel, 40) for it in flagged))
+    excluded = sum(it.excluded for it in items)
+    if args.dry_run:
+        print(f"dry run: {len(todo)} file(s) would be exported, {excluded} excluded, "
+              f"{len(refused)} refused; nothing written")
+    else:
+        print(f"exported {len(done)} file(s), {excluded} excluded, {len(refused)} refused, "
+              f"{errors} error(s) ({time.perf_counter() - t0:.1f} s)")
+    if errors:
+        return EXIT_ERROR
+    return EXIT_UNREVIEWED if refused else EXIT_OK
+
+
+def _run_exports(export, todo, out, jobs):
+    """(item, counts or the exception) per item, in parallel processes with jobs > 1."""
+    work = [(it, export.job_for(it, out)) for it in todo]
+    if jobs == 1:
+        for it, job in work:
+            try:
+                yield it, export.run_job(job)
+            except Exception as e:  # noqa: BLE001 - reported per file, the rest go on
+                yield it, e
+        return
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    with ProcessPoolExecutor(max_workers=jobs) as pool:
+        futures = {pool.submit(export.run_job, job): it for it, job in work}
+        for fut in as_completed(futures):
+            try:
+                yield futures[fut], fut.result()
+            except Exception as e:  # noqa: BLE001 - reported per file, the rest go on
+                yield futures[fut], e
+
+
+def _print_exported(it, c):
+    units = c.get("units", {})
+    kinds = ", ".join(f"{k} {units[k]}" for k in ("heading", "prose", "verse", "quote", "note")
+                      if units.get(k))
+    labels = c.get("labels", {})
+    print(f"exported {_short(it.rel, 60)}: {c.get('pages') or 'txt'} pages; {kinds}; labels "
+          f"found {labels.get('found', 0)}, inferred {labels.get('inferred', 0)}; "
+          f"{c.get('seconds', 0):.1f} s")
+    print(f"  from the {it.input_from} {it.input}")
 
 
 def _spec(pages) -> str:
