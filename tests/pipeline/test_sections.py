@@ -310,3 +310,42 @@ def test_contents_lines_kept_in_the_text_are_a_contents_page_not_headings():
                       ("Segundo ensayo del tomo", "Autor Beta", 7),
                       ("Tercer ensayo del tomo", "Autora Gamma", 9)]
     assert all(x.role == "criticism" for x in s.sections if x.level == 2)
+
+
+# ---------------------------------------------------------------------------- texts: intros
+def texts_book():
+    """An anthology of texts like Schwartz's: the index lists a group («Chile») and its
+    texts as "Author: “Title”, N"; the group opens with the editor's own essay."""
+    units = [unit(0, 1, "Las vanguardias de prueba", "heading"), unit(0, 1, "EDITORA PRUEBA"),
+             unit(0, 2, "Vicente Huidobro: “Arte poética” (1916). “Non serviam” (1914)."),
+             unit(0, 2, "VICENTE HUIDOBRO, el fundador de las vanguardias, nació en 1893."),
+             unit(0, 2, "Su trayectoria pasa por París y Madrid."),
+             unit(0, 3, "ARTE POÉTICA", "heading"), unit(0, 3, "Que el verso sea como una llave."),
+             unit(0, 4, "NON SERVIAM", "heading"), unit(0, 4, "Y he aquí que una buena mañana."),
+             unit(0, 5, "Sigue el manifiesto hasta el final.")]
+    rows = rows_for(6, kinds={6: "index"})
+    apparatus = [{"entry": "e" * 64, "page": 6, "label": "6", "kind": "index", "columns": 1,
+                  "lines": ["ÍNDICE", "MANIFIESTOS", "Chile 2",
+                            "Vicente Huidobro: “Arte poética”, 3; “Non serviam”, 4"]}]
+    return entry(units, rows, apparatus, [], stem="textos",
+                 meta={"title": "Las vanguardias de prueba", "author": "Editora Prueba"})
+
+
+def test_editor_introduction_before_the_first_text_is_its_own_criticism_section():
+    e = texts_book()
+    s = sc.detect(e)
+    check_invariants(s, e.units)
+    assert s.kind == "texts"
+    by_title = {x.title: x for x in s.sections}
+    chile = by_title["Chile"]
+    arte = by_title["Arte poética"]
+    assert chile.level == 2 and arte.level == 3 and arte.first == 6
+    intro = [x for x in s.sections if x.parent == chile.id and x.first == chile.first]
+    assert len(intro) == 1
+    intro = intro[0]
+    assert (intro.title, intro.role, intro.author, intro.level) == ("Introducción", "criticism", None, 3)
+    assert (intro.first, intro.last) == (chile.first, arte.first - 1)
+    assert intro.confidence == chile.confidence
+    assert "editor" in " ".join(intro.evidence)
+    held = {seq: sid for seq, sid in leaves(s).items()}          # the container holds no
+    assert chile.id not in held.values()                           # units of its own

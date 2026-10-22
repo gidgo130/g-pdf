@@ -1249,6 +1249,8 @@ def _finish(secs: list[Section], units: list, e: Entry, s: Structure) -> None:
                 secs.remove(x)
                 changed = True
                 break
+    if s.kind == "texts":
+        _editor_intros(secs, units, s)
     stack: list[Section] = []
     for k, x in enumerate(secs, 1):
         x.id = f"s{k:03d}"
@@ -1290,6 +1292,31 @@ def _finish(secs: list[Section], units: list, e: Entry, s: Structure) -> None:
                                         if x.role == FRONT else "implicit part"]
             x.confidence = HIGH if x.start == 0 else x.confidence
     _check_tiling(secs, n)
+
+
+def _editor_intros(secs: list[Section], units: list, s: Structure) -> None:
+    """In an anthology of texts, the units of a container before its first child are the
+    volume editor's introduction: an implicit child section (criticism, no author, the
+    container's confidence), titled by the first heading inside it that is not the
+    container's own title, else "Introducción". A container then holds no units."""
+    added = []
+    for x in secs:
+        if x.level >= 3:
+            continue
+        kids = [y for y in secs if y.level == x.level + 1 and x.start <= y.start < x.end]
+        if not kids or kids[0].start <= x.start:
+            continue
+        span = units[x.start:kids[0].start]
+        title = next((u["text"].strip() for u in span if u["kind"] == "heading"
+                      and ratio(u["text"], x.title) < 0.8 and len(u["text"]) <= 80), "Introducción")
+        intro = Section(level=x.level + 1, title=title, role=CRITICISM, role_fixed=True,
+                        start=x.start, end=kids[0].start, confidence=x.confidence,
+                        sources=["implicit"], page=x.page,
+                        evidence=[f"the editor's introduction: the units of «{x.title[:40]}» "
+                                  f"before its first text «{kids[0].title[:40]}»"])
+        added.append(intro)
+    secs += added
+    secs.sort(key=lambda y: (y.start, y.level))
 
 
 def _check_tiling(secs: list[Section], n: int) -> None:
