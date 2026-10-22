@@ -917,3 +917,165 @@ def verify_outline(toc: list, rows: list[dict], units: list[dict],
             res.dropped.append((c, why))
     del kept_pages
     return res
+
+
+# ---------------------------------------------------------------------------- running heads
+RUN_GAP = 3                 # pages: a head run survives this gap (verso/recto + a blank)
+
+
+@dataclass
+class HeadRun:
+    key: str
+    text: str                        # the most frequent original form
+    first: int
+    last: int
+    pages: list[int] = field(default_factory=list)
+    forms: dict = field(default_factory=dict)
+
+    @property
+    def span(self) -> int:
+        return self.last - self.first + 1
+
+
+def head_runs(rows: list[dict]) -> list[HeadRun]:
+    """Runs of one running head (OCR variants clustered: fuzzy ratio >= 0.8) over
+    consecutive pages, a gap of up to RUN_GAP pages allowed (the other head of a
+    verso/recto pair, a blank page)."""
+    keys: list[str] = []
+    runs: list[HeadRun] = []
+    open_: dict[str, HeadRun] = {}
+    for pg, parts in sorted(heads_of(rows).items()):
+        for part in parts:
+            f = fold(part)
+            key = next((k for k in keys if k == f or (abs(len(k) - len(f)) <= 4 and
+                                                      SequenceMatcher(None, k, f).ratio() >= 0.8)),
+                       None)
+            if key is None:
+                key = f
+                keys.append(key)
+            run = open_.get(key)
+            if run is None or pg - run.last > RUN_GAP:
+                run = HeadRun(key, part, pg, pg)
+                runs.append(run)
+                open_[key] = run
+            run.last = pg
+            run.pages.append(pg)
+            run.forms[part] = run.forms.get(part, 0) + 1
+    for run in runs:
+        run.text = max(run.forms, key=lambda t: (run.forms[t], -len(t)))
+    return sorted(runs, key=lambda r: (r.first, r.last))
+
+
+def head_boundaries(rows: list[dict], units: list[dict]) -> list[Claim]:
+    """One claim per place where a new head run begins: the title is the new non-name
+    head, the author the name-like one; a head that outlasts the others by far (a part's
+    verso head) is the enclosing head, not the title. The boundary page moves back over
+    an opening page without a head (an essay's first page) but never over a page another
+    run still covers."""
+    runs = head_runs(rows)
+    on = units_on(units)
+    kinds = {r["page"]: r.get("kind") for r in rows}
+    claims: list[Claim] = []
+    k = 0
+    while k < len(runs):
+        group = [runs[k]]
+        while k + 1 < len(runs) and runs[k + 1].first <= group[0].first + 1:
+            k += 1
+            group.append(runs[k])
+        k += 1
+        names = [r for r in group if name_like(r.text)]
+        others = [r for r in group if not name_like(r.text)]
+        enclosing = None
+        if len(others) > 1:
+            longest = max(others, key=lambda r: r.last)
+            rest_end = max(r.last for r in others if r is not longest)
+            if longest.last >= rest_end + 3:
+                enclosing = longest
+                others = [r for r in others if r is not longest]
+        if others:
+            title_run = min(others, key=lambda r: r.first)
+        elif enclosing:
+            title_run = enclosing
+        else:
+            title_run = names[0]
+        page = min(r.first for r in group)
+        covered = {q for r in runs if r not in group for q in range(r.first, r.last + 1)}
+        q = page - 1
+        while q >= 1 and (kinds.get(q) == "blank" or not on.get(q)):
+            q -= 1
+        if q >= 1 and q not in heads_of(rows) and q not in covered and page - q <= 2:
+            page = q
+        ev = [f"running head «{title_run.text}» pp. {title_run.first}-{title_run.last}"]
+        if enclosing:
+            ev.append(f"under the head «{enclosing.text}»")
+        author = None
+        if names and title_run not in names:
+            author = names[0].text
+            ev.append(f"author head «{author}» pp. {names[0].first}-{names[0].last}")
+        claims.append(Claim(title_run.text, page, "head", author=author, evidence=ev,
+                            key=title_run.key))
+    return claims
+
+
+# ---------------------------------------------------------------------------- anchoring
+def _starts_with(title: str, text: str) -> bool:
+    """The unit's text opens with the title: "ACTO I\nESCENA I" for "Acto I"."""
+    ft, fx = fold(title), fold(text)[:len(fold(title)) + 8]
+    if not ft:
+        return False
+    if fx.startswith(ft) and (len(fx) == len(ft) or not fx[len(ft)].isalnum()):
+        return True
+    head = " ".join(fold(text).split()[:8])
+    return len(ft) >= 8 and SequenceMatcher(None, ft, head[:len(ft)]).ratio() >= 0.85
+
+
+def _heading_matches(title: str, text: str) -> bool:
+    return (ratio(title, text) >= 0.8 or (title_match(title, text) and title_match(text, title))
+            or _starts_with(title, text)) and same_numerals(title, text)
+
+
+def _author_lines_before(units: list[dict], k: int, page: int, author: str | None) -> int:
+    """Index of the first author or affiliation line right before units[k] on the same
+    page (short, name-like or matching ``author``), else k."""
+    j = k
+    while j - 1 >= 0 and (units[j - 1].get("pages") or [0])[0] == page:
+        t = units[j - 1]["text"].strip()
+        short = len(t) <= 60 and "\n" not in t and not t.endswith((".", ":", ";", ","))
+        if short and (name_like(t) or (author and ratio(t, author) >= 0.8)
+                      or units[j - 1]["kind"] == "heading" and len(t.split()) <= 4):
+            j -= 1
+        else:
+            break
+    return j
+
+
+def anchor(claim: Claim, units: list[dict], on: dict[int, list[dict]],
+           pos: dict | None = None) -> tuple[int, str]:
+    """(index into ``units``, how) of the unit where the claimed section starts: a heading
+    on the page (or the next page) that carries the title, preceded by its author lines;
+    else the unit on the page that opens with the title; else the first unit on the page
+    (or after it)."""
+    if pos is None:
+        pos = {id(u): i for i, u in enumerate(units)}
+    page = claim.page
+    for pg in (page, page + 1):
+        for u in on.get(pg, []):
+            if u["kind"] == "heading" and _heading_matches(claim.title, u["text"]):
+                k = pos[id(u)]
+                j = _author_lines_before(units, k, pg, claim.author)
+                how = f"heading unit on p{pg}" + (", after the author lines" if j < k else "")
+                return j, how
+    for u in on.get(page, []):
+        if _starts_with(claim.title, u["text"]) and same_numerals(claim.title, u["text"][:40]):
+            return pos[id(u)], f"title at the start of a unit on p{page}"
+    for u in on.get(page, []):
+        if u["kind"] != "note" and title_match(claim.title, u["text"][:200]) and len(
+                u["text"]) <= 200:
+            return pos[id(u)], f"title words in a short unit on p{page}"
+    if on.get(page):
+        return pos[id(on[page][0])], f"first unit on p{page} (title not found)"
+    later = [pg for pg in on if pg > page]
+    if later:
+        q = min(later)
+        return pos[id(on[q][0])], f"first unit on p{q}, after p{page} (no units there)"
+    return len(units) - 1, "last unit of the file"

@@ -220,3 +220,74 @@ def test_two_bookmarks_on_one_page_the_grouping_folds_into_the_section():
     assert [c.title for c in res.confirmed] == ["Trayectoria poética de Mariano Brull"]
     assert [(c.title, why) for c, why in res.dropped][0][0] == "Cuba"
     assert "same page" in res.dropped[0][1]
+
+
+# ---------------------------------------------------------------------------- heads
+def test_head_runs_cluster_ocr_variants_and_start_at_the_opening_page():
+    heads = {}
+    for p in range(401, 412):
+        heads[p] = "Emilio de Armas" if p % 2 == 0 else (
+            "Trayectoria poética de Mariano Bruii" if p < 405 else
+            "Trayectoria poética de Mariano Brull")
+    heads[401] = "Emilio de Armas | Trayectoria poética de Mariano Bruii*"
+    for p in range(414, 420):
+        heads[p] = "Antonio Benitez-Rojo" if p % 2 == 0 else "Nicolás Guillén and Sugar"
+    rows = rows_with_heads(420, heads)
+    for r in rows:
+        r["kind"] = "blank" if r["page"] == 412 else "body"
+    units = [unit(1, 1, "x"), unit(2, 401, "Trayectoria", "heading"), unit(3, 413, "Nicolás Guillén and Sugar", "heading")]
+    runs = st.head_runs(rows)
+    keys = {r.key for r in runs}
+    assert len([r for r in runs if "trayectoria" in r.key]) == 1     # Bruii/Brull: one run
+    assert len(keys) == 4
+    bounds = st.head_boundaries(rows, units)
+    assert [(b.page, b.title) for b in bounds][:2] == [
+        (401, "Trayectoria poética de Mariano Brull"), (413, "Nicolás Guillén and Sugar")]
+    assert bounds[0].author == "Emilio de Armas" and bounds[1].author == "Antonio Benitez-Rojo"
+    assert "pp. 401-411" in " ".join(bounds[0].evidence)
+
+
+def test_head_boundary_inside_a_constant_verso_head():
+    heads = {}
+    for p in range(33, 60):
+        heads[p] = "Bibliografía" if p % 2 == 0 else ("Caribe" if p < 53 else "Cuba")
+    rows = rows_with_heads(80, heads)
+    units = [unit(1, 33, "x"), unit(2, 53, "Cuba", "heading")]
+    bounds = st.head_boundaries(rows, units)
+    assert [(b.page, b.title, b.author) for b in bounds] == [
+        (33, "Caribe", None), (53, "Cuba", None)]
+
+
+def test_anchor_a_claim_to_the_unit_where_the_section_starts():
+    units = [unit(1, 605, "Lo curioso es que la obra acabe resolviendo."),
+             unit(2, 606, "Bibliografía", "heading"),
+             unit(3, 606, "BATAILLE, Georges. Espace, en Documents (1930): 41-2."),
+             unit(4, 607, "Pablo de Rokha,", "heading"), unit(5, 607, "Naín Nómez"),
+             unit(6, 607, "Universidad de Santiago de Chile"),
+             unit(7, 607, "Partamos de la presunción de que en medio de nuestras vanguardias."),
+             unit(8, 633, "María Inés Zaldívar"), unit(9, 633, "Universidad Católica"),
+             unit(10, 633, "Winétt de Rokha y la vanguardia literaria en Chile", "heading"),
+             unit(11, 634, "Texto."),
+             unit(12, 128, "ZSIGMOND REMENYIK", "heading"),
+             unit(13, 128, "CARTEL NÚM. 11I*", "heading"), unit(14, 128, "Texto del cartel."),
+             unit(15, 150, "Texto que sigue en la página."),
+             unit(16, 151, "ROSA NAUTICA", "heading"), unit(17, 151, "Texto."),
+             unit(18, 40, "La Escena, una Isla deshabitada", "heading"),
+             unit(19, 40, "ACTO I\nESCENA I", "verse"), unit(20, 40, "Entra el Contramaestre.")]
+    on = st.units_on(units)
+
+    def anchor(title, page, author=None):
+        c = st.Claim(title, page, "contents", author=author)
+        idx, how = st.anchor(c, units, on)
+        return units[idx]["seq"], how
+
+    assert anchor("Pablo de Rokha, las vanguardias y lo nacional-popular", 607) == (
+        4, "heading unit on p607")
+    assert anchor("Winétt de Rokha y la vanguardia literaria en Chile", 633) == (
+        8, "heading unit on p633, after the author lines")
+    assert anchor("Cartel núm. 111", 128, "Zsigmond Remenyik") == (
+        12, "heading unit on p128, after the author lines")
+    assert anchor("Rosa náutica", 150) == (16, "heading unit on p151")
+    assert anchor("Acto I", 40) == (19, "title at the start of a unit on p40")
+    assert anchor("Bibliografía", 606) == (2, "heading unit on p606")
+    assert anchor("Nada que ver", 606) == (2, "first unit on p606 (title not found)")
