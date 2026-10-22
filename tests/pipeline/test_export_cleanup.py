@@ -1,0 +1,197 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""pipeline.cleanup: the pure text rules of the text export (labels, head keys, line
+joins, letter-spaced runs, the "m"-split glitch, markers, scan artefacts, dot leaders)."""
+
+import pytest
+
+pytest.importorskip("wordfreq")
+
+from gpdf.pipeline import cleanup as c  # noqa: E402
+
+
+# ---------------------------------------------------------------------------- labels, heads
+@pytest.mark.parametrize("text, want", [
+    ("74", (74, "arabic", "74")), ("- 12 -", (12, "arabic", "12")),
+    ("xxxv", (35, "roman", "xxxv")), ("XIV", (14, "roman", "XIV")),
+    ("Página 3 de 92", (3, "arabic", "3")), ("Page 2 of 16", (2, "arabic", "2")),
+    ("Tn", None), ("CANTO I", None), ("1927.", (1927, "arabic", "1927")), ("Mi", None)])
+def test_label_line(text, want):
+    assert c.label_line(text) == want
+
+
+def test_head_parts():
+    assert c.head_parts("74 | INTRODUCCIÓN") == ("INTRODUCCIÓN", [(74, "arabic", "74")], [])
+    assert c.head_parts("BRASIL (REVISTAS) | 165") == (
+        "BRASIL (REVISTAS)", [(165, "arabic", "165")], [])
+    assert c.head_parts("CANTO VII") == ("CANTO", [(7, "roman", "VII")], [])
+    core, edge, inner = c.head_parts("Nota Extensa 6. Un despiste dramático")
+    assert edge == [] and inner == [(6, "arabic", "6")]
+
+
+def test_similar_heads_fold_accents_and_ocr_variants():
+    assert c.similar("Bibliografia", "Bibliografìa")
+    assert c.similar("INTRODUCCIÓN", "Introduccion")
+    assert not c.similar("Antología crítica", "Francine Masiello")
+
+
+# ---------------------------------------------------------------------------- line joins
+@pytest.mark.parametrize("a, b, text, how", [
+    ("la transfor-", "mación social", "la transformación social", c.JOINED),
+    ("el diálogo luso-", "hispánico de", "el diálogo luso-hispánico de", c.KEPT),
+    ("sus aportes teórico-", "críticas", "sus aportes teórico-críticas", c.KEPT),
+    ("la Avant-", "garde histórica", "la Avant-garde histórica", c.KEPT),
+    ("pp. 57-", "79.", "pp. 57-79.", c.KEPT),
+    ("entre 1920-", "1940", "entre 1920-1940", c.KEPT),
+    ("Wentzlaff-", "Eggebert", "Wentzlaff-Eggebert", c.KEPT),
+    ("maes­", "tro, á quien", "maestro, á quien", c.SOFT),
+    ("pp. 39­", "69", "pp. 39-69", c.KEPT),
+    ("el de insti.", "tución arte", "el de institución arte", c.DOT),
+    ("y así termina.", "luego vino", "y así termina. luego vino", c.SPACE),
+    ("una palabra", "otra", "una palabra otra", c.SPACE),
+])
+def test_join_lines(a, b, text, how):
+    assert c.join_lines(a, b, "es") == (text, how)
+
+
+def test_join_lines_without_the_dictionary():
+    assert c.join_lines("nuestros ma-", "nantiales", "es", nodict=True)[0] == "nuestros manantiales"
+    assert c.join_lines("diálogo luso-", "hispánico", "es", nodict=True)[0] == "diálogo lusohispánico"
+    assert c.join_lines("el de insti.", "tución", "es", nodict=True) == ("el de insti. tución",
+                                                                        c.SPACE)
+    assert c.join_lines("pp. 57-", "79", "es", nodict=True)[0] == "pp. 57-79"
+
+
+def test_soft_hyphens_inside_a_line():
+    assert c.soft_hyphens("pala­bra 39­69") == "palabra 39-69"
+
+
+# ---------------------------------------------------------------------------- letter-spacing
+def test_spaced_runs():
+    assert c.spaced_runs("la C h il e de".split()) == [(0, 6)]   # "la", "de" too
+    assert c.spaced_runs("y h e t e n d i d o".split()) == [(0, 10)]
+    assert c.spaced_runs("una palabra normal".split()) == []
+    assert c.spaced_runs("to d a s, y".split()) == [(0, 4)]          # the comma ends it
+
+
+def test_split_gaps():
+    assert c.split_gaps([1.2, 1.4, 1.5, 3.1, 4.9]) == pytest.approx((1.5 * 3.1) ** 0.5)
+    assert c.split_gaps([3.0, 3.2, 3.5]) is None
+
+
+def test_respace_by_gaps_keeps_one_letter_words():
+    # "Yo h e t e n d i d o": a word gap after "Yo" and after "h e"
+    toks = "Yo h e t e n d i d o".split()
+    gaps = [6.0, 1.5, 6.0, 1.5, 1.4, 1.6, 1.5, 1.5, 1.4]
+    assert c.respace(toks, gaps, "es")[0] == ["Yo", "he", "tendido"]
+    toks = "dijo y a l l í".split()
+    gaps = [6.0, 6.2, 1.5, 1.4, 1.6]
+    out, counts = c.respace(toks, gaps, "es")
+    assert out == ["dijo", "y", "allí"] and counts["geometry"] == 1
+    # the geometry also runs without the dictionary
+    assert c.respace(toks, gaps, "es", nodict=True)[0] == ["dijo", "y", "allí"]
+
+
+def test_respace_needs_gaps_below_the_lines_word_gap():
+    # one wide gap after ")," makes a jump, but the run's gaps are ordinary word gaps
+    toks = "el citado), o de la consideración fisiológica o sociológica del parque".split()
+    gaps = [3.0, 7.0, 2.9, 3.1, 3.0, 3.2, 2.9, 3.1, 3.0, 2.8]
+    assert c.respace(toks, gaps, "es")[0] == toks
+    toks = "en la revista A m a u t a es ecléctica en Arte con todos los credos".split()
+    gaps = [7.0, 8.0, 9.0, 1.9, 2.0, 1.8, 2.1, 2.0, 8.5, 5.0, 8.0, 7.5, 9.0, 8.0, 7.0]
+    assert c.respace(toks, gaps, "es")[0][:5] == ["en", "la", "revista", "Amauta", "es"]
+    toks = "1920: J u a n M a r t ín . Z a in".split()
+    gaps = [6.0, 1.5, 1.5, 1.5, 6.0, 1.5, 1.5, 1.5, 1.5, 1.4, 6.0, 1.5, 1.5]
+    assert c.respace(toks, gaps, "es")[0] == ["1920:", "Juan", "Martín.", "Zain"]
+
+
+def test_respace_veto_on_a_tiny_gap_between_real_words():
+    toks = "ni yo ni fosa ni hoyo".split()
+    gaps = [2.5, 4.0, 1.2, 5.6, 4.4]
+    assert c.respace(toks, gaps, "es")[0] == toks
+    assert c.respace(toks, gaps, "es", nodict=True)[0] == ["ni", "yo", "nifosa", "ni", "hoyo"]
+
+
+def test_respace_a_letter_spaced_phrase():
+    toks = "L o q u e G o r o s t i z a l l a m a".split()
+    gaps = [1.3, 4.0, 1.2, 1.4, 4.2, 1.3, 1.5, 1.2, 1.4, 1.3, 1.2, 1.4, 1.3, 4.5, 1.3, 1.2, 1.4, 1.5]
+    assert c.respace(toks, gaps, "es")[0] == ["Lo", "que", "Gorostiza", "llama"]
+
+
+def test_respace_leaves_ordinary_short_words():
+    toks = "se lo da a él".split()
+    assert c.respace(toks, [3.0, 3.1, 2.9, 3.0], "es")[0] == toks       # no jump, not a word
+    assert c.respace(toks, [None] * 4, "es")[0] == toks
+    toks = "contemplación y a la masturbación.".split()                # "yala" is listed
+    assert c.respace(toks, [4.05, 3.0, 2.96, 4.04], "es")[0] == toks
+    assert c.respace(toks, [None] * 4, "es")[0] == toks
+
+
+def test_respace_without_gaps_uses_the_word_list():
+    toks = "en C h il e hoy".split()
+    out, counts = c.respace(toks, [None] * 5, "es")
+    assert out == ["en", "Chile", "hoy"] and counts["dictionary"] == 1
+    assert c.respace(toks, [None] * 5, "es", nodict=True)[0] == toks
+    toks = "a i a a i i i i o".split()                                 # Altazor: evenly spaced
+    assert c.respace(toks, [3.0] * 8, "es", nodict=True)[0] == toks
+
+
+def test_msplit_joins_real_words_on_small_gaps():
+    toks = "es u n m ovim iento hom bres de la cósm ico".split()
+    gaps = [9.0, 1.9, 9.0, 1.9, 2.0, 8.0, 2.1, 9.0, 8.5, 7.9, 1.8]
+    out, joins = c.msplit(toks, gaps, "es")
+    assert out == ["es", "un", "movimiento", "hombres", "de", "la", "cósmico"]
+    assert joins == 5
+    toks = "una palabra otra".split()
+    assert c.msplit(toks, [7.0, 7.5], "es") == (toks, 0)                # no small cluster
+    toks = "Bremer / Jochen ( 1 8 7 4 ) Inter -".split()                 # letters only
+    assert c.msplit(toks, [7.0, 1.0, 1.0, 7.0, 1.0, 1.0, 1.0, 1.0, 1.0, 7.0, 1.0], "es")[1] == 0
+
+
+# ---------------------------------------------------------------------------- notes, markers
+def test_note_start():
+    assert c.note_start("24. B. Brecht, «Der Dreigroschenprozeß»") == (24, "24.", False)
+    assert c.note_start("2 Conocida es la estructura") == (2, "2", False)
+    assert c.note_start("* Véase el capítulo") == (None, "*", False)
+    assert c.note_start("?1 El segundo texto") == (1, "?1", True)
+    assert c.note_start("1925, p. 1. Ver también") is None
+    assert c.note_start("Martín Fierro, 3") is None
+
+
+def test_link_markers():
+    text = "las vanguardias1 y luego pienso.”45 el estado26— en p.5 y 1927 pp.3 vol. 13.1"
+    out, linked, left = c.link_markers(text, {1, 45})
+    assert out == ("las vanguardias[^1] y luego pienso.”[^45] el estado26— en p.5 y 1927 "
+                   "pp.3 vol. 13.1")
+    assert (linked, left) == (2, 1)
+
+
+def test_speaker_ornament_url_index():
+    assert c.speaker("GALÁN: Es la contrahecha")
+    assert c.speaker("REINA BIZANTINA (moviendo desalentadamente los brazos): Ya voy")
+    assert c.speaker("Miranda:")
+    assert not c.speaker("la ciudad española, trazando una clara analogía: «")
+    assert c.ornament("*****") and c.ornament("* * *") and not c.ornament("*")
+    assert c.url("http://www.scielo.org.mx/scielo.php?script=sci_arttext")
+    assert c.index_heading("ÍNDICE") and c.index_heading("Índice general")
+    assert not c.index_heading("Índice de la modernidad en la poesía de la época")
+
+
+# ---------------------------------------------------------------------------- leaders, artefacts
+def test_dot_leaders():
+    assert c.leaders("Prólogo ........o.ooooomommmoommm.... 175") == "Prólogo … 175"
+    assert c.leaders("Bibliografía . . . . . . 9") == "Bibliografía … 9"
+    assert c.leaders("Capítulo III ......»«::") == "Capítulo III …"
+    assert c.leaders("una frase... que sigue") == "una frase... que sigue"
+    assert c.has_leader("Índice ........ 3") and not c.has_leader("fin...")
+
+
+def test_unruh_artefacts():
+    assert c.symbol_only("_ ~ |") and c.symbol_only("—") and not c.symbol_only("a _")
+    text, counts, reported = c.artefacts("_ Language may_be considered an actor ~")
+    assert text == "Language may be considered an actor"
+    assert counts == {"edge_mark": 2, "underscore": 1}
+    text, counts, reported = c.artefacts("in culture but also-a-protagonist in the history")
+    assert text == "in culture but also-a-protagonist in the history"
+    assert reported == ["also-a-protagonist"]
+    text, _, reported = c.artefacts("as.a matter of fact language—when spoken")
+    assert text == "as.a matter of fact language—when spoken" and reported == ["as.a"]
