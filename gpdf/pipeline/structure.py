@@ -215,7 +215,8 @@ def _parse_item(text: str, authored: bool, carry: str | None,
     if m:
         return m.group("title").strip(), (m.group("author") or carry or None), num
     m = _COLON.match(title)
-    if m and (authored or (standalone and name_like(m.group("author")))):
+    if m and (authored or (standalone and name_like(m.group("author")))
+              or _QUOTED.match(m.group("title").strip())):    # "Authors: “Title”": always
         a, rest = m.group("author").strip(), m.group("title").strip()
         q = _QUOTED.match(rest)
         return (q.group("title") if q else rest).strip(), a, num

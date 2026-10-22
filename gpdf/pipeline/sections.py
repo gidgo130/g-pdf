@@ -699,9 +699,48 @@ class _Group:
 
 _SOURCE_RANK = {"contents": 0, "bookmark": 1, "head": 2, "heading": 3, "header": 4,
                 "inferred": 5}
+_NOT_PERSON = {"movimiento", "grupo", "revista", "vanguardia", "manifiesto", "arte",
+               "poesia", "nueva", "nuevo", "generacion", "escuela", "asociacion", "sociedad",
+               "comite", "redaccion", "editorial", "antologia", "union", "frente", "liga",
+               "circulo", "taller", "teatro", "poetas", "pintores", "artistas", "escritores",
+               "anonimo", "anonymous", "varios", "autores", "estridentista", "estridentistas",
+               "ultraista", "ultraistas", "creacionista", "surrealista", "surrealistas"}
+_NAME_SEP = re.compile(r"\s*(?:,|;|\by\b|\be\b|\bet al\.?|\band\b|/|\s\.\s)\s*")
 
 
-def _merge(g: _Group, units: list, not_authors: set) -> _Group:
+def clean_author(author: str | None, title: str, heads: set, titles: set) -> tuple[str | None, str | None]:
+    """(author, why) with the author cleaned: a revista's bracketed editors stand for it,
+    a leading running-head or section text is stripped, a phrase that is a head or a
+    section title is no author, and what is left must read as a list of person names."""
+    if not author:
+        return None, None
+    a = author.strip()
+    m = re.search(r"\[([^\]]+)\]", a)
+    if m and len(a[:m.start()].split()) <= 1 and not a[m.end():].strip(" ,."):
+        a = m.group(1).strip()                        # "Proa [Jorge Luis Borges]"
+    a = re.sub(r"[\[\]]", "", a).strip()
+    fa = fold(a)
+    for h in sorted(heads | titles, key=len, reverse=True):
+        if len(h) >= 4 and fa.startswith(h + " ") and len(fa) > len(h) + 3:
+            a, fa = a[len(h):].strip(" ,.:;-"), fa[len(h) + 1:]     # "Surrealismo Alejo ..."
+            break
+    if any(len(h) >= 4 and (ratio(fa, h) >= 0.75 or fa == h) for h in heads | titles) or \
+            ratio(fa, fold(title)) >= 0.75:
+        return None, f"«{author[:50]}» is a running head or a section title, not an author"
+    parts = [p for p in _NAME_SEP.split(a) if p and p.strip()]
+    def person(p):
+        toks = p.strip(" .").split()
+        return 1 <= len(toks) <= 7 and all(
+            st._INITIAL.match(tok.strip("'’\"“”()")) or tok in st._PARTICLES
+            or (tok[:1].isupper() and tok.lower() not in st._NOT_NAMES
+                and fold(tok) not in _NOT_PERSON) for tok in toks)
+    if not parts or not all(person(p) for p in parts) or len(a) > 160:
+        return None, f"«{author[:50]}» does not read as a list of person names"
+    return a, None
+
+
+def _merge(g: _Group, units: list, not_authors: set, heads: set = frozenset(),
+           sec_titles: set = frozenset()) -> _Group:
     """One group's claims into a title, author, sources, evidence and confidence."""
     ordered = sorted(g.claims, key=lambda ch: (_SOURCE_RANK.get(ch[0].source, 9),
                                                -len(ch[0].title)))
@@ -720,6 +759,9 @@ def _merge(g: _Group, units: list, not_authors: set) -> _Group:
                and ratio(c.author, g.title) < 0.8]
     if authors:
         g.author = next((a for a in authors if not a.isupper()), authors[0])
+    author_why = None
+    if g.author:
+        g.author, author_why = clean_author(g.author, g.title, heads, sec_titles)
     g.sources = {c.source for c, _ in g.claims}
     strength = 0.0
     heading_hit = False
@@ -759,6 +801,10 @@ def _merge(g: _Group, units: list, not_authors: set) -> _Group:
                           "the page's first unit")
     else:
         g.confidence = HIGH if strength >= 2 else MEDIUM
+    if author_why:
+        g.evidence.append("author dropped: " + author_why)
+        if "person names" in author_why:
+            g.confidence = LOW
     g.role_hint = role_of_title(g.title)[0]
     g.page = (units[g.idx].get("pages") or [0])[0]
     seen, ev = set(), []
@@ -809,12 +855,28 @@ def _fold_duplicates(merged: list[_Group]) -> list[_Group]:
     return out
 
 
-def _attach_authors(merged: list[_Group], author_only: list[Claim]) -> list[str]:
+def _attach_authors(merged: list[_Group], author_only: list[Claim], heads: set = frozenset(),
+                    titles: set = frozenset()) -> list[str]:
     """Author-only head runs (an anthology whose recto head is the contributor) name the
-    section opening on that page or up to two pages earlier."""
+    section opening on that page or up to two pages earlier; a head that is the section's
+    own title (OCR-damaged in the contents) names it instead."""
     notes = []
     for c in author_only:
         target = None
+        own = next((g for g in merged if not g.part_like and abs(g.page - c.page) <= 2
+                    and ratio(g.title, c.author) >= 0.75), None)
+        if own is not None:
+            if "bookmark" not in own.sources and own.title.upper() != own.title:
+                own.evidence.append(f"title from the running head «{c.author}» (the contents "
+                                    f"read «{own.title[:40]}»)")
+                own.title = c.author
+            own.sources.add("head")
+            continue
+        cleaned, why = clean_author(c.author, "", heads, titles)
+        if cleaned is None:
+            notes.append(f"head «{c.author}» from p{c.page} is no author: {why}")
+            continue
+        c.author = cleaned
         for g in merged:
             if not g.part_like and g.page <= c.page <= g.page + 2 and not g.author:
                 target = g
@@ -917,7 +979,11 @@ def detect(e: Entry, decisions: dict | None = None) -> Structure:
             s.outline.dropped.append((c, why))
         s.notes.append(f"claim «{c.title[:50]}» ({c.source}) dropped: {why}")
     # 3. merge the claims of each unit; authors from author-only heads; duplicates
-    merged = [_merge(g, units, not_authors) for g in groups.values()]
+    head_keys = {fold(h) for parts in st.heads_of(e.rows).values() for h in parts
+                 if not name_like(h)}                   # contributor heads are authors
+    contents_titles = {fold(c.title) for c in c_claims if c.source == "contents"
+                       and (len(c.title.split()) >= 2 or len(c.title) >= 6)}
+    merged = [_merge(g, units, not_authors, head_keys, contents_titles) for g in groups.values()]
     dropped_groupings = {fold(c.title) for c, why in s.outline.dropped if "grouping" in why}
     kept_groups = []
     for g in merged:
@@ -928,7 +994,7 @@ def detect(e: Entry, decisions: dict | None = None) -> Structure:
         kept_groups.append(g)
     merged = kept_groups
     merged.sort(key=lambda g: (g.idx, not g.part_like))
-    s.notes += _attach_authors(merged, author_only)
+    s.notes += _attach_authors(merged, author_only, head_keys, contents_titles)
     merged = _fold_duplicates(merged)
     merged = _tidy(merged, s)
     # 4. the book's kind and default role

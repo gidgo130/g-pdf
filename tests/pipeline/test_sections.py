@@ -381,3 +381,39 @@ def test_texts_matched_to_an_authored_index_entry_are_primary_wherever_they_sit(
     for t in ("Naturaleza y arte", "Querer construir"):
         x = by_title[t]
         assert (x.role, x.author, x.parent) == ("primary", "Joaquín Torres-García", part.id), t
+
+
+def test_authors_are_cleaned_of_heads_and_titles_and_must_read_as_person_names():
+    heads = {5: "LA NUEVA POESÍA", 6: "LA NUEVA POESÍA", 7: "LA NUEVA POESÍA"}
+    units = [unit(0, 1, "Las vanguardias de prueba", "heading"), unit(0, 1, "EDITORA PRUEBA"),
+             unit(0, 2, "Alejo Carpentier: “En la extrema avanzada” (1928)."),
+             unit(0, 2, "EL SURREALISMO llegó a Cuba por la revista de avance."),
+             unit(0, 3, "EN LA EXTREMA AVANZADA", "heading"), unit(0, 3, "Texto de Carpentier."),
+             unit(0, 4, "MANIFIESTO POR UN ARTE REVOLUCIONARIO", "heading"),
+             unit(0, 4, "Texto del manifiesto."),
+             unit(0, 5, "LA NUEVA POESÍA", "heading"), unit(0, 5, "La nueva poesía abre aquí."),
+             unit(0, 6, "AL OPORTUNO LECTOR", "heading"), unit(0, 6, "Texto de Proa."),
+             unit(0, 7, "SOMOS", "heading"), unit(0, 7, "Texto del movimiento."),
+             unit(0, 8, "Sigue hasta el final.")]
+    rows = rows_for(9, heads, kinds={9: "index"})
+    apparatus = [{"entry": "e" * 64, "page": 9, "label": "9", "kind": "index", "columns": 1,
+                  "lines": ["ÍNDICE", "MANIFIESTOS", "Surrealismo 2",
+                            "Surrealismo Alejo Carpentier: “En la extrema avanzada”, 3; Diego Rivera, "
+                            "André Breton, [León Trotsky]: “Manifiesto por un arte revolucionario”, 4",
+                            "La NUEVA POCA 5",
+                            "Proa [Jorge Luis Borges]: “Al oportuno lector”, 6; Movimiento de "
+                            "Vanguardia: “Somos”, 7"]}]
+    e = entry(units, rows, apparatus, [], stem="textos3",
+              meta={"title": "Las vanguardias de prueba", "author": "Editora Prueba"})
+    s = sc.detect(e)
+    check_invariants(s, e.units)
+    by_title = {x.title: x for x in s.sections}
+    assert by_title["En la extrema avanzada"].author == "Alejo Carpentier"      # head stripped
+    rev = by_title["Manifiesto por un arte revolucionario"]
+    assert rev.author == "Diego Rivera, André Breton, León Trotsky"            # the quoted part
+    assert by_title["Al oportuno lector"].author == "Jorge Luis Borges"         # the revista's
+    nueva = by_title["LA NUEVA POESÍA"]                                         # the head names
+    assert nueva.author is None and nueva.pdf_pages[0] == 5                     # it, not an author
+    somos = by_title["Somos"]
+    assert somos.author is None and somos.confidence == "low"
+    assert any("person names" in ev for ev in somos.evidence)
