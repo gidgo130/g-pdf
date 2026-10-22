@@ -294,10 +294,13 @@ def _print_survey(res, survey, catalogue):
     print(f"files: {len(res.scanned)} ({res.measured} measured, {res.reused} reused; "
           f"{c.get('new', 0)} new, {c.get('moved', 0)} moved, {c.get('changed', 0)} changed, "
           f"{c.get('missing', 0)} newly missing); hashed {res.hashed_bytes / 1e6:.0f} MB")
+    reused = f"; earlier trials kept for {res.trial_reused} file(s)" if res.trial_reused else ""
     if res.trial_note:
-        print(f"trial: {res.trial_note}")
+        print(f"trial: {res.trial_note}{reused}")
     else:
-        print(f"trial: {res.trial_pages} pages ({res.trial_failed} failed)")
+        print(f"trial: {res.trial_pages} pages ({res.trial_failed} failed){reused}")
+    if res.trial_pages:
+        print(f"  note: {survey.TRIAL_NOTE}")
     for e in res.unreadable:
         why = e.get("error") or "; ".join(e["measured"]["errors"])
         print(f"  could not read {e['rel']}: {why}")

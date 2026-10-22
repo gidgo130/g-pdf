@@ -22,10 +22,13 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import statistics
+import tempfile
 import time
 import unicodedata
 import zlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from functools import cmp_to_key
 from pathlib import Path
@@ -34,7 +37,7 @@ import numpy as np
 import pymupdf
 
 from gpdf import __version__
-from gpdf.pipeline import catalogue, ocr, quality
+from gpdf.pipeline import catalogue, ocr, quality, tesseract
 
 TEXT_CHARS = 100            # a page with this many characters counts toward text %
 SCAN_COVER = 0.8            # one image covering this share of the page: a scanned page
@@ -55,6 +58,12 @@ TRIGGER_FAIR_POOR = 0.25    # share of scored pages that are fair or poor
 TRIGGER_MERGED = 2.0        # per 1000 words
 TRIGGER_DIGIT = 2.0         # per 1000 words
 TRIGGER_JUNK = 0.5          # %
+TRIAL_WORST, TRIAL_SPREAD = 4, 4
+TRIAL_GAIN_RATIO, TRIAL_GAIN_POINTS = 0.6, 1.0
+TRIAL_MIN_PAGES = 4
+OCR_MISSING_WORDS, OCR_MISSING_SUSPECT = 20, 8.0     # an ink page holds text
+TRIAL_NOTE = ("Tesseract prefers dictionary words, so this score may flatter re-OCR "
+              "(an audit against ground truth is still to come)")
 
 KEEP_TEXT, OCR_MISSING, REBUILD, EXCLUDE, REVIEW = (
     "keep_text", "ocr_missing", "rebuild_layer", "exclude", "review")
@@ -547,6 +556,7 @@ class SurveyResult:
     trial_pages: int = 0
     trial_failed: int = 0
     trial_note: str = ""
+    trial_reused: int = 0              # entries whose earlier trial still holds
     seconds: float = 0.0
     counts: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
@@ -734,12 +744,171 @@ def needs_trial(e) -> bool:
     return bool(rebuild or m["no_text"]["ink"])
 
 
+def trial_pages(m, skip=()) -> list[int]:
+    """Up to 8 scored pages with an image: the 4 worst by suspect % and 4 spread evenly
+    over the other scored pages. ``skip``: pages whose layer is already this pipeline's
+    OCR."""
+    rows = [r for r in m["page_scores"]
+            if r["pct"] is not None and r.get("image") and r["page"] not in skip]
+    worst = {r["page"] for r in sorted(rows, key=lambda r: (-r["pct"], r["page"]))[:TRIAL_WORST]}
+    rest = [r["page"] for r in rows if r["page"] not in worst]
+    if len(rest) > TRIAL_SPREAD:
+        rest = [rest[round(i * (len(rest) - 1) / (TRIAL_SPREAD - 1))] for i in range(TRIAL_SPREAD)]
+    return sorted(worst | set(rest))
+
+
+def verdict(pages) -> dict:
+    """rebuild_layer if the trial's median suspect % is <= 0.6 x the layer's on the same
+    pages and at least 1 point lower, over >= 4 pages scored on both sides."""
+    both = [p for p in pages if p["kind"] == "layer" and p["layer_pct"] is not None
+            and p["trial_pct"] is not None]
+    if len(both) < TRIAL_MIN_PAGES:
+        return {"action": KEEP_TEXT, "pages": len(both), "layer_median": None,
+                "trial_median": None,
+                "why": f"trial: only {len(both)} page(s) scored on both sides: no clear gain"}
+    lm = statistics.median(p["layer_pct"] for p in both)
+    tm = statistics.median(p["trial_pct"] for p in both)
+    gain = tm <= TRIAL_GAIN_RATIO * lm and lm - tm >= TRIAL_GAIN_POINTS
+    change = f"median suspect {lm:.1f}% -> {tm:.1f}% on {len(both)} pages"
+    return {"action": REBUILD if gain else KEEP_TEXT, "pages": len(both),
+            "layer_median": round(lm, 2), "trial_median": round(tm, 2),
+            "why": f"trial: {change}" if gain else f"trial: no clear gain ({change})"}
+
+
+def _recognize(tess, image, outbase, langs, dpi) -> str:
+    """tesseract.recognize, tried once more on failure (as the OCR step does)."""
+    err = ""
+    for _ in range(ocr.ATTEMPTS):
+        err = tesseract.recognize(tess, image, outbase, langs, dpi)
+        if not err:
+            return ""
+        for ext in (".pdf", ".tsv"):
+            Path(f"{outbase}{ext}").unlink(missing_ok=True)
+    return err
+
+
+def _plan(e) -> list[dict]:
+    """The trial pages of an entry: layer pages (if the scan triggers a rebuild trial) and
+    ink pages without text."""
+    m = e["measured"]
+    skip = set((e.get("working_file") or {}).get("ocr_pages") or ())
+    rows = {r["page"]: r for r in m["page_scores"]}
+    plan = []
+    if m["scan"] and m["text_pages"] and rebuild_triggers(m["score"]):
+        for p in trial_pages(m, skip):
+            r = rows[p]
+            plan.append({"page": p, "kind": "layer", "lang": r["lang"], "layer_pct": r["pct"],
+                         "layer_words": r["lower"]})
+    for p in m["no_text"]["ink"]:
+        if p not in skip:
+            plan.append({"page": p, "kind": "ink", "lang": m["language"]["lang"],
+                         "layer_pct": None, "layer_words": 0})
+    return plan
+
+
+def _finish_trial(e, pages, tess, langs) -> dict:
+    m = e["measured"]
+    ok = [p for p in pages if not p.get("error")]
+    ink_text = [p["page"] for p in ok if p["kind"] == "ink"
+                and p["trial_words"] >= OCR_MISSING_WORDS and p["trial_pct"] is not None
+                and p["trial_pct"] < OCR_MISSING_SUSPECT]
+    trial = {"ran": True, "for": m["for"], "score_version": quality.SCORE_VERSION,
+             "langs": langs, "tesseract": tess.version, "pages": pages,
+             "ink_text": ink_text,
+             "pictures": [p["page"] for p in ok if p["kind"] == "ink"
+                          and p["page"] not in ink_text],
+             "failed": sum(bool(p.get("error")) for p in pages), "verdict": None,
+             "note": TRIAL_NOTE}
+    if m["scan"] and m["text_pages"] and rebuild_triggers(m["score"]):
+        if any(p["kind"] == "layer" for p in pages):
+            trial["verdict"] = verdict(pages)
+        else:
+            trial["verdict"] = {"action": KEEP_TEXT, "pages": 0, "layer_median": None,
+                                "trial_median": None,
+                                "why": "trial: no pages to try (the scored pages already "
+                                       "hold this pipeline's OCR)"}
+    return trial
+
+
 def run_trials(files, result, enabled, jobs, tesseract_path) -> None:
+    """Run the rebuild trial (Tesseract on a few pages, in a temporary folder) for every
+    entry of this run that needs one and has no valid trial yet."""
+    todo = []
     if not enabled:
         result.trial_note = "not run (--no-trial)"
     for k in result.scanned:
         e = files[k]
         if not needs_trial(e):
             e.pop("trial", None)
-        elif not (e.get("trial") or {}).get("ran"):
-            e["trial"] = {"ran": False, "note": f"trial {result.trial_note or 'not run'}"}
+            continue
+        t = e.get("trial") or {}
+        if (t.get("ran") and not t.get("failed") and t.get("for") == e["measured"]["for"]
+                and t.get("score_version") == quality.SCORE_VERSION):
+            result.trial_reused += 1
+            continue
+        todo.append(e)
+    if not todo:
+        return
+    tess = None
+    if enabled:
+        try:
+            tess = tesseract.probe(tesseract.find(tesseract_path))
+        except tesseract.TesseractError as err:
+            result.trial_note = f"not run ({err})"
+    if tess is None:
+        for e in todo:
+            e["trial"] = {"ran": False, "note": f"trial {result.trial_note}"}
+        return
+    jobs = max(1, jobs or (os.cpu_count() or 2) - 1)
+    tmp = tempfile.mkdtemp(prefix="gpdf-survey-")
+    pool = ThreadPoolExecutor(max_workers=jobs)
+    futures = {}
+    try:
+        plans = []
+        for e in todo:
+            langs = e["measured"]["language"]["tesseract"]
+            try:
+                tesseract.check(tess, langs)
+            except tesseract.TesseractError as err:
+                e["trial"] = {"ran": False, "note": f"trial not run ({err})"}
+                continue
+            pages = _plan(e)
+            plans.append((e, langs, pages))
+            wf = e.get("working_file")
+            with pymupdf.open(wf["path"] if wf else e["path"]) as doc:
+                for p in pages:
+                    page = doc[p["page"] - 1]
+                    d = ocr.source_dpi(page)
+                    if d is None:
+                        p["error"] = "no image"
+                        continue
+                    im, dpi, _, _ = ocr.render(page, d)
+                    base = Path(tmp) / f"t{len(futures):05d}"
+                    im.save(f"{base}.png", compress_level=1)
+                    futures[pool.submit(_recognize, tess, f"{base}.png", base, langs, dpi)] = (
+                        p, base)
+        for fut in as_completed(list(futures)):
+            p, base = futures[fut]
+            err = fut.result()
+            if err:
+                p["error"] = err
+                continue
+            with pymupdf.open(f"{base}.pdf") as text_pdf:
+                text = text_pdf[0].get_text() if len(text_pdf) else ""
+            s = quality.score_text(text, p["lang"], p["page"])
+            p.update({"trial_pct": s.pct, "trial_words": s.lower, "trial_class": s.cls,
+                      "text": text[:SAMPLE_CHARS]})
+            for ext in (".png", ".pdf", ".tsv"):
+                Path(f"{base}{ext}").unlink(missing_ok=True)
+        for e, langs, pages in plans:
+            for p in pages:
+                p.setdefault("trial_pct", None)
+                p.setdefault("trial_words", 0)
+            e["trial"] = _finish_trial(e, pages, tess, langs)
+            result.trial_pages += len(pages)
+            result.trial_failed += e["trial"]["failed"]
+    finally:
+        for fut in futures:
+            fut.cancel()
+        pool.shutdown(wait=True)
+        shutil.rmtree(tmp, ignore_errors=True)

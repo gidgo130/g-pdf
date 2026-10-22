@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Survey measurements, .txt handling, duplicate groups and suggestions (synthetic files)."""
 
+import os
+
 import pytest
 
 pytest.importorskip("numpy")
@@ -218,3 +220,123 @@ def test_duplicate_loser_and_other_language_are_excluded(files, tmp_path):
 def test_unreadable_entry_is_reviewed():
     s = survey.suggest({"id": "x", "status": "error", "error": "encrypted"}, None, {})
     assert (s["action"], s["reason"]) == (survey.REVIEW, "could not read")
+
+
+# ---------------------------------------------------------------------------- trial
+def test_trial_pages_worst_four_plus_four_spread():
+    rows = [{"page": i, "pct": float(i % 7), "image": True} for i in range(1, 41)]
+    rows[9]["pct"] = None                                      # unscored: never picked
+    rows[19]["image"] = False                                  # no image: never picked
+    m = {"page_scores": rows}
+    pages = survey.trial_pages(m)
+    worst = [6, 13, 27, 34]                                    # pct 6, lowest pages first
+    assert set(worst) <= set(pages) and len(pages) == 8
+    assert 10 not in pages and 20 not in pages
+    assert survey.trial_pages(m) == pages                      # deterministic
+    assert set(survey.trial_pages(m, skip={6})) & {6} == set()
+    few = {"page_scores": rows[:5]}
+    assert survey.trial_pages(few) == [1, 2, 3, 4, 5]
+
+
+def layer(page, lp, tp):
+    return {"page": page, "kind": "layer", "layer_pct": lp, "trial_pct": tp}
+
+
+def test_verdict_thresholds():
+    # La amortajada-like: a clear gain
+    v = survey.verdict([layer(1, 29.7, 0.7), layer(2, 32.7, 1.9), layer(3, 13.6, 1.1),
+                        layer(4, 20.0, 1.0)])
+    assert v["action"] == survey.REBUILD and v["pages"] == 4
+    # Ariel-like tie: keep
+    v = survey.verdict([layer(1, 8.3, 5.2), layer(2, 5.1, 5.6), layer(3, 1.3, 1.3),
+                        layer(4, 2.0, 2.0)])
+    assert v["action"] == survey.KEEP_TEXT and "no clear gain" in v["why"]
+    # under 1 point lower: keep, even at <= 0.6x
+    v = survey.verdict([layer(i, 1.5, 0.6) for i in range(1, 5)])
+    assert v["action"] == survey.KEEP_TEXT
+    # fewer than 4 pages scored on both sides
+    v = survey.verdict([layer(1, 30, 1), layer(2, 30, 1), layer(3, 30, None),
+                        layer(4, None, 1)])
+    assert v["action"] == survey.KEEP_TEXT and v["pages"] == 2
+
+
+@pytest.fixture(scope="module")
+def tess():
+    from gpdf.pipeline import tesseract
+
+    try:
+        return tesseract.prepare("spa")
+    except tesseract.TesseractError as e:
+        pytest.skip(f"needs Tesseract 5 with spa: {e}")
+
+
+@pytest.fixture(scope="module")
+def trial_run(tess, tmp_path_factory):
+    """A root with a garbled-layer scan, a good-layer scan and a scan with an ink page
+    that holds text and a picture page, surveyed once with the trial."""
+    root = tmp_path_factory.mktemp("trial_root")
+    text = [corpus.prose(500 + i, 110) for i in range(5)]
+    corpus.scan(root / "garbled.pdf", [(t, corpus.noisy(t, 0.35, i)) for i, t in enumerate(text)])
+    corpus.scan(root / "good.pdf", [(t, t) for t in text])
+    other = [corpus.prose(600 + i, 110) for i in range(4)]       # not a duplicate
+    corpus.scan(root / "mixed.pdf", [(t, t) for t in other[:3]] + [(other[3], None),
+                                                                    ("picture", None)])
+    folder = tmp_path_factory.mktemp("trial_cat")
+    res = survey.run([root], folder, trial=True, jobs=3)
+    return res, {e["rel"]: e for e in res.catalogue["files"].values()}
+
+
+def test_trial_garbled_layer_is_rebuilt(trial_run):
+    res, files = trial_run
+    e = files["garbled.pdf"]
+    t = e["trial"]
+    assert t["ran"] and t["failed"] == 0 and t["langs"] == "spa"
+    assert [p["page"] for p in t["pages"]] == [1, 2, 3, 4, 5]
+    for p in t["pages"]:
+        assert p["layer_pct"] >= 15 and p["trial_pct"] < 5, p
+        assert p["text"] and p["trial_words"] >= 30
+    assert t["verdict"]["action"] == survey.REBUILD
+    s = e["suggestion"]
+    assert (s["action"], s["pages"]) == (survey.REBUILD, "all")
+    assert any("median suspect" in r for r in s["reasons"])
+    assert res.exit_code == 0 and res.trial_failed == 0
+
+
+def test_trial_good_layer_is_kept(trial_run):
+    _, files = trial_run
+    e = files["good.pdf"]
+    assert "trial" not in e                                    # nothing triggers it
+    assert e["suggestion"]["action"] == survey.KEEP_TEXT
+
+
+def test_trial_ink_pages_text_or_picture(trial_run):
+    _, files = trial_run
+    e = files["mixed.pdf"]
+    assert e["measured"]["no_text"]["ink"] == [4, 5]
+    t = e["trial"]
+    assert t["ink_text"] == [4] and t["pictures"] == [5] and t["verdict"] is None
+    s = e["suggestion"]
+    assert (s["action"], s["pages"]) == (survey.OCR_MISSING, [4])
+    assert any("picture" in r and "p. 5" in r for r in s["reasons"])
+
+
+def test_trial_is_reused_and_temp_folder_removed_also_on_error(trial_run, tmp_path,
+                                                               monkeypatch):
+    import tempfile
+
+    res, files = trial_run
+    root = res.catalogue["roots"][0]["path"]
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    again = survey.run([root], res.folder, trial=True, jobs=2)
+    assert again.trial_pages == 0 and again.trial_reused == 2
+    assert os.listdir(tmp_path) == []
+
+    def broken(*a, **k):
+        raise RuntimeError("scoring broke")
+
+    real = survey.quality.score_text
+    monkeypatch.setattr(survey.quality, "score_text", broken)
+    with pytest.raises(RuntimeError, match="scoring broke"):
+        survey.run([root], res.folder, trial=True, jobs=2, remeasure=True)
+    monkeypatch.setattr(survey.quality, "score_text", real)
+    assert os.listdir(tmp_path) == []
