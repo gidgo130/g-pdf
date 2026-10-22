@@ -26,7 +26,7 @@ def extra(text, lang="es", base=ES):
     a, b = q.score_text(base + "\n" + text, lang), q.score_text(base, lang)
     return {k: getattr(a, k) - getattr(b, k)
             for k in ("words", "lower", "suspect", "merged", "spaced", "digit", "chaos",
-                      "repeated", "caps", "caps_unknown")}
+                      "repeated", "caps", "caps_unknown", "cap_junk")}
 
 
 def test_clean_base_pages_have_no_suspect_words():
@@ -112,6 +112,18 @@ def test_capitalised_unknown_names_are_not_in_the_rate():
     e = extra("Qzxwvb Wvbqzx Xqzwvb")
     assert e["suspect"] == 0 and e["lower"] == 0
     assert e["caps"] == 3 and e["caps_unknown"] == 3
+
+
+def test_cap_unknown_is_a_rate_of_its_own():
+    e = extra("Qzxwvb AND THE il oi AT Xqzwvb Calderón la casa de")
+    assert e["suspect"] == 0                       # not in suspect %
+    assert e["cap_junk"] == 6                      # Qzxwvb Xqzwvb AND THE il AT
+    s = q.score_text(ES + " Qzxwvb AND THE il", "es")
+    assert s.cap_unknown_pct == round(100 * 4 / s.lower, 2) and s.pct == 0.0
+    assert s.row()["cap_unknown_pct"] == s.cap_unknown_pct
+    assert q.summarise([s])["cap_unknown_pct"] == s.cap_unknown_pct
+    assert not any(q.short_foreign(w, "es") for w in "de la el en un se lo va da".split())
+    assert q.short_foreign("the", "es") and not q.short_foreign("the", "en")
 
 
 def test_period_orthography_is_known():

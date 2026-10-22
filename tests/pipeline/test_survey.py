@@ -260,6 +260,30 @@ def test_verdict_thresholds():
     assert v["action"] == survey.KEEP_TEXT and v["pages"] == 2
 
 
+def test_ornament_junk_page_is_not_text():
+    """Tesseract's reading of an ornament next to a little text scores good on suspect %
+    alone (Ariel p. 141: 1.4% at 53% word errors); with cap_unknown_pct it is not text."""
+    from gpdf.pipeline import quality
+
+    junk = "ZA ES SA AAN AND MIO AN NAS AGS ANAR OS AT UN IN XA SS INS AS LU oi il"
+    s = quality.score_text(corpus.prose(700, 40) + "\n" + junk, "es")
+    assert s.pct is not None and s.pct < survey.OCR_MISSING_SUSPECT
+    p = {"trial_words": s.lower, "trial_pct": s.pct, "trial_cap": s.cap_unknown_pct}
+    assert not survey.ink_text(p)
+    assert survey.ink_text({**p, "trial_cap": 0.0})
+    clean = quality.score_text(corpus.prose(700, 40), "es")
+    assert survey.ink_text({"trial_words": clean.lower, "trial_pct": clean.pct,
+                            "trial_cap": clean.cap_unknown_pct})
+
+
+def test_verdict_compares_suspect_plus_cap_unknown():
+    pages = [dict(layer(i, 4.0, 1.0), layer_cap=0.5, trial_cap=3.0) for i in range(1, 5)]
+    v = survey.verdict(pages)                          # 4.5 -> 4.0: no clear gain
+    assert v["action"] == survey.KEEP_TEXT and (v["layer_median"], v["trial_median"]) == (4.5, 4.0)
+    pages = [dict(p, trial_cap=0.5) for p in pages]    # 4.5 -> 1.5
+    assert survey.verdict(pages)["action"] == survey.REBUILD
+
+
 @pytest.fixture(scope="module")
 def tess():
     from gpdf.pipeline import tesseract

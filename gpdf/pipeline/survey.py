@@ -71,7 +71,7 @@ ACTIONS = (KEEP_TEXT, OCR_MISSING, REBUILD, EXCLUDE, REVIEW)
 DUPLICATE, OTHER_LANGUAGE, OFF_TOPIC, OTHER = "duplicate", "other_language", "off_topic", "other"
 WORK_LANGS = ("es", "en")
 PAGE_FIELDS = ("page", "lang", "words", "lower", "suspect", "pct", "cls", "merged", "spaced",
-               "digit", "chaos", "junk_pct")
+               "digit", "chaos", "junk_pct", "cap_unknown_pct")
 
 
 class MeasureError(Exception):
@@ -774,19 +774,34 @@ def trial_pages(m, skip=()) -> list[int]:
     return sorted(worst | set(rest))
 
 
+def with_cap(pct, cap) -> float:
+    """suspect % + cap_unknown_pct: what the trial compares (Tesseract's reading of an
+    ornament is short foreign and capitalised junk that suspect % does not see)."""
+    return pct + (cap or 0.0)
+
+
+def ink_text(p) -> bool:
+    """A trial page without a text layer holds text: enough words, scored, and suspect %
+    + cap_unknown_pct below OCR_MISSING_SUSPECT."""
+    return (p["trial_words"] >= OCR_MISSING_WORDS and p["trial_pct"] is not None
+            and with_cap(p["trial_pct"], p.get("trial_cap")) < OCR_MISSING_SUSPECT)
+
+
 def verdict(pages) -> dict:
-    """rebuild_layer if the trial's median suspect % is <= 0.6 x the layer's on the same
-    pages and at least 1 point lower, over >= 4 pages scored on both sides."""
+    """rebuild_layer if the trial's median suspect % + cap_unknown_pct is <= 0.6 x the
+    layer's on the same pages and at least 1 point lower, over >= 4 pages scored on both
+    sides."""
     both = [p for p in pages if p["kind"] == "layer" and p["layer_pct"] is not None
             and p["trial_pct"] is not None]
     if len(both) < TRIAL_MIN_PAGES:
         return {"action": KEEP_TEXT, "pages": len(both), "layer_median": None,
                 "trial_median": None,
                 "why": f"trial: only {len(both)} page(s) scored on both sides: no clear gain"}
-    lm = statistics.median(p["layer_pct"] for p in both)
-    tm = statistics.median(p["trial_pct"] for p in both)
+    lm = statistics.median(with_cap(p["layer_pct"], p.get("layer_cap")) for p in both)
+    tm = statistics.median(with_cap(p["trial_pct"], p.get("trial_cap")) for p in both)
     gain = tm <= TRIAL_GAIN_RATIO * lm and lm - tm >= TRIAL_GAIN_POINTS
-    change = f"median suspect {lm:.1f}% -> {tm:.1f}% on {len(both)} pages"
+    change = (f"median suspect + cap-unknown {lm:.1f}% -> {tm:.1f}% on {len(both)} "
+              "pages")
     return {"action": REBUILD if gain else KEEP_TEXT, "pages": len(both),
             "layer_median": round(lm, 2), "trial_median": round(tm, 2),
             "why": f"trial: {change}" if gain else f"trial: no clear gain ({change})"}
@@ -815,7 +830,7 @@ def _plan(e) -> list[dict]:
         for p in trial_pages(m, skip):
             r = rows[p]
             plan.append({"page": p, "kind": "layer", "lang": r["lang"], "layer_pct": r["pct"],
-                         "layer_words": r["lower"]})
+                         "layer_cap": r.get("cap_unknown_pct"), "layer_words": r["lower"]})
     for p in m["no_text"]["ink"]:
         if p not in skip:
             plan.append({"page": p, "kind": "ink", "lang": m["language"]["lang"],
@@ -826,14 +841,12 @@ def _plan(e) -> list[dict]:
 def _finish_trial(e, pages, tess, langs) -> dict:
     m = e["measured"]
     ok = [p for p in pages if not p.get("error")]
-    ink_text = [p["page"] for p in ok if p["kind"] == "ink"
-                and p["trial_words"] >= OCR_MISSING_WORDS and p["trial_pct"] is not None
-                and p["trial_pct"] < OCR_MISSING_SUSPECT]
+    text_pages = [p["page"] for p in ok if p["kind"] == "ink" and ink_text(p)]
     trial = {"ran": True, "for": m["for"], "score_version": quality.SCORE_VERSION,
              "langs": langs, "tesseract": tess.version, "pages": pages,
-             "ink_text": ink_text,
+             "ink_text": text_pages,
              "pictures": [p["page"] for p in ok if p["kind"] == "ink"
-                          and p["page"] not in ink_text],
+                          and p["page"] not in text_pages],
              "failed": sum(bool(p.get("error")) for p in pages), "verdict": None,
              "note": TRIAL_NOTE}
     if m["scan"] and m["text_pages"] and rebuild_triggers(m["score"]):
@@ -913,8 +926,8 @@ def run_trials(files, result, enabled, jobs, tesseract_path) -> None:
             with pymupdf.open(f"{base}.pdf") as text_pdf:
                 text = text_pdf[0].get_text() if len(text_pdf) else ""
             s = quality.score_text(text, p["lang"], p["page"])
-            p.update({"trial_pct": s.pct, "trial_words": s.lower, "trial_class": s.cls,
-                      "text": text[:SAMPLE_CHARS]})
+            p.update({"trial_pct": s.pct, "trial_cap": s.cap_unknown_pct,
+                      "trial_words": s.lower, "trial_class": s.cls, "text": text[:SAMPLE_CHARS]})
             for ext in (".png", ".pdf", ".tsv"):
                 Path(f"{base}{ext}").unlink(missing_ok=True)
         for e, langs, pages in plans:

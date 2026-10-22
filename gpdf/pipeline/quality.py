@@ -39,6 +39,8 @@ LANG_MIN_VOTES = 30        # a page with fewer votes takes the file language
 LANG_SHARE_MIN = 10        # % of the votes for a language to be reported
 MIN_SCORED = 30            # lowercase words for a page to be scored
 FAIR, POOR, POOR_JUNK = 3.0, 8.0, 2.0       # suspect %, suspect %, junk %
+SHORT = 3                  # letters: a short word (cap_unknown_pct)
+SHORT_FOREIGN_GAP = 2.0    # zipf: how much more often another language has a short word
 GOOD, FAIR_CLASS, POOR_CLASS, UNSCORED = "good", "fair", "poor", "unscored"
 
 FUNCTION_WORDS = {
@@ -255,15 +257,34 @@ class PageScore:
     chars: int = 0             # non-space characters
     caps: int = 0              # capitalised words (not in the rate)
     caps_unknown: int = 0
+    cap_junk: int = 0          # capitalised unknown + short foreign words (cap_unknown_pct)
 
     @property
     def junk_pct(self) -> float:
         return 100 * self.junk / self.chars if self.chars else 0.0
 
+    @property
+    def cap_unknown_pct(self) -> float | None:
+        """cap_junk per 100 lowercase words: a rate of its own, never in suspect %."""
+        return round(100 * self.cap_junk / self.lower, 2) if self.pct is not None else None
+
     def row(self) -> dict:
         d = asdict(self)
         d["junk_pct"] = round(self.junk_pct, 2)
+        d["cap_unknown_pct"] = self.cap_unknown_pct
         return d
+
+
+def short_foreign(word: str, lang: str | None) -> bool:
+    """A word of <= 3 letters at home in another language, not the page's ("il", "AND",
+    "AT" on a Spanish page): another language of LANGS has it >= SHORT_FOREIGN_GAP zipf
+    more often. Tesseract's reading of an ornament is made of these."""
+    i = _INDEX.get(lang)
+    if i is None or len(word) > SHORT or not word.isalpha():
+        return False
+    z = zipfs(word.lower())
+    other = max(v for k, v in enumerate(z) if k != i)
+    return other >= KNOWN_OTHER_ZIPF and z[i] <= other - SHORT_FOREIGN_GAP
 
 
 def score_prepared(text: str, lang: str | None, page: int = 1, spaced: int = 0) -> PageScore:
@@ -282,9 +303,13 @@ def score_prepared(text: str, lang: str | None, page: int = 1, spaced: int = 0) 
             if not known(word, lang):
                 s.suspect += 1
                 s.merged += merged(word, lang)
+            else:
+                s.cap_junk += short_foreign(word, lang)
         else:
             s.caps += 1
-            s.caps_unknown += not known(word, lang)
+            unknown = not known(word, lang)
+            s.caps_unknown += unknown
+            s.cap_junk += (unknown and len(word) > SHORT) or short_foreign(word, lang)
     s.repeated = len(_REPEATED.findall(text))
     s.junk, s.chars = junk_count(text)
     if s.lower >= MIN_SCORED:
@@ -346,7 +371,6 @@ def summarise(pages: list[PageScore]) -> dict:
     words = sum(p.words for p in pages)
     lower = sum(p.lower for p in scored)
     chars = sum(p.chars for p in pages)
-    caps = sum(p.caps for p in pages)
 
     def rate(n):
         return round(1000 * n / words, 2) if words else 0.0
@@ -367,6 +391,6 @@ def summarise(pages: list[PageScore]) -> dict:
                      "chaos": rate(sum(p.chaos for p in pages)),
                      "repeated": rate(sum(p.repeated for p in pages))},
         "junk_pct": round(100 * sum(p.junk for p in pages) / chars, 3) if chars else 0.0,
-        "caps_unknown_pct": round(100 * sum(p.caps_unknown for p in pages) / caps, 2)
-        if caps else None,
+        "cap_unknown_pct": round(100 * sum(p.cap_junk for p in scored) / lower, 2)
+        if lower else None,
     }

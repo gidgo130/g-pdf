@@ -323,7 +323,9 @@
       [m.text_pct === undefined || m.text_pct === null ? "n/a" : m.text_pct, null, "num"],
       [scan], [(lang.lang || "") + (shares ? " (" + shares + ")" : "")],
       [e.measured ? pct(s.median) + " / " + pct(s.weighted) : "", null, "num"],
-      [e.measured ? (s.fair || 0) + " / " + (s.poor || 0) : "", null, "num"], [wf, e.working_file ? e.working_file.path : null],
+      [e.measured ? (s.fair || 0) + " / " + (s.poor || 0) : "", null, "num"],
+      [e.measured ? pct(s.cap_unknown_pct) : "", null, "num"],
+      [wf, e.working_file ? e.working_file.path : null],
       [group],
     ];
   }
@@ -373,7 +375,7 @@
       body.appendChild(tr);
       if (opened.has(e.id)) {
         const dtr = el("tr", { class: "detail" });
-        const td = el("td", { colspan: "13" });
+        const td = el("td", { colspan: "14" });
         td.appendChild(detail(e));
         dtr.appendChild(td);
         body.appendChild(dtr);
@@ -402,7 +404,7 @@
     return "p. " + o.page + " · " + (o.lang || "?") + " · " + o.words + " words (" + o.lower +
       " lowercase) · suspect " + pct(o.pct) + "% (" + o.cls + ") · merged " + o.merged +
       ", letter-spaced " + o.spaced + ", digit " + o.digit + ", case chaos " + o.chaos +
-      " · junk " + pct(o.junk_pct) + "%";
+      " · junk " + pct(o.junk_pct) + "% · cap-unknown " + pct(o.cap_unknown_pct) + "%";
   }
 
   function strip(e, box) {
@@ -457,11 +459,12 @@
     if (!t.ran) { wrap.appendChild(el("p", null, t.note || "trial not run")); return wrap; }
     const tab = el("table", { class: "mini small" });
     const head = el("tr");
-    ["page", "kind", "layer %", "trial %", "words layer / trial", ""].forEach((h) => head.appendChild(el("th", null, h)));
+    ["page", "kind", "layer %", "trial %", "cap-unknown % layer / trial", "words layer / trial", ""].forEach((h) => head.appendChild(el("th", null, h)));
     tab.appendChild(head);
     for (const p of t.pages || []) {
       const tr = el("tr");
-      [p.page, p.kind, pct(p.layer_pct), pct(p.trial_pct), (p.layer_words || 0) + " / " + (p.trial_words || 0),
+      [p.page, p.kind, pct(p.layer_pct), pct(p.trial_pct), pct(p.layer_cap) + " / " + pct(p.trial_cap),
+        (p.layer_words || 0) + " / " + (p.trial_words || 0),
         p.error ? "failed: " + p.error : ""].forEach((v) => tr.appendChild(el("td", null, v)));
       tab.appendChild(tr);
     }
