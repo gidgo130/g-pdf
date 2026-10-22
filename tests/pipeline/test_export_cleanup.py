@@ -131,8 +131,15 @@ def test_respace_on_a_fully_spaced_line_takes_the_pages_word_gap():
     assert c.respace(toks, gaps, "es", word_gap=2.5)[0] == ["del", "poema", "como", "canto,",
                                                             "desarrollo"]
     # the page's gap keeps the guard: ordinary word gaps on the line are not joined
-    toks = "el citado), o de la consideración".split()
-    assert c.respace(toks, [3.0, 7.0, 2.9, 3.1, 3.0], "es", word_gap=3.0)[0] == toks
+    toks = "el citado), o de la consideración fisiológica o sociológica del parque".split()
+    gaps = [3.0, 7.0, 2.9, 3.1, 3.0, 3.2, 2.9, 3.1, 3.0, 2.8]
+    assert c.respace(toks, gaps, "es", word_gap=3.0)[0] == toks
+    # a loosely justified line on the same page (p. 277 "a N o v o y a Pellicer": word gaps
+    # 4.3-5.3 pt, letter gaps 1.8) keeps its own, larger reference
+    toks = "rescata aquí a N o v o y a Pellicer, los dos condenados".split()
+    gaps = [4.4, 4.5, 4.9, 1.8, 1.8, 1.8, 5.3, 4.5, 4.7, 4.3, 4.4, 4.6]
+    assert c.respace(toks, gaps, "es", word_gap=2.5)[0] == (
+        "rescata aquí a Novo y a Pellicer, los dos condenados".split())
 
 
 def test_respace_veto_on_a_tiny_gap_between_real_words():

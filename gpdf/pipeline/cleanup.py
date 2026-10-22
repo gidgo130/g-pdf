@@ -288,10 +288,15 @@ def respace(tokens: list[str], gaps: list[float | None], lang: str | None,
 
     With gaps, inside a run plus one neighbouring token each side, the gaps split at their
     largest ratio jump (>= GAP_JUMP): spaces in the small cluster go, if they are also well
-    below the ordinary word gap (``word_gap``, the page's, measured on lines without runs;
-    else the line's median gap outside the runs; / WORD_GAP: on a line that is mostly
-    letter-spaced the line's own median is the letter gap, Mexico p. 277), and
-    never after sentence punctuation; unless ``nodict``, a join of pieces that are all words
+    below the ordinary word gap (/ WORD_GAP) and never after sentence punctuation. The
+    ordinary word gap is the larger of the line's (the median gap outside the runs) and
+    the page's ``word_gap`` (measured on lines without runs): a loosely justified line
+    keeps its own (Mexico p. 277 "a N o v o y a Pellicer", word gaps 4.3-5.3 pt where the
+    page's median is 2.5), a line whose other gaps are spoilt (the "m"-split glitch) gets
+    the page's; a line with a jump and no other gaps trusts the jump. When the gaps show
+    no jump (the run's word gaps shade into its letter gaps: a line that is mostly
+    letter-spaced, p. 277) the page's word gap decides alone. Unless ``nodict``, a join of
+    pieces that are all words
     by themselves into something that is not a word is undone (_veto). A run without a jump
     (evenly spaced: one word, or ordinary short words) and runs without gaps are joined
     only by the word list (never with ``nodict``). Returns (tokens, counts: geometry,
@@ -306,10 +311,8 @@ def respace(tokens: list[str], gaps: list[float | None], lang: str | None,
     near = {k for a, b in runs for k in range(max(a - 1, 0), min(b + 1, len(tokens)))}
     outside = [g for k, g in enumerate(gaps)
                if g is not None and k not in near and k + 1 not in near]
-    if word_gap is not None:
-        ref = word_gap / WORD_GAP
-    else:
-        ref = statistics.median(outside) / WORD_GAP if len(outside) >= 2 else None
+    ref = statistics.median(outside) / WORD_GAP if len(outside) >= 2 else None
+    page_ref = word_gap / WORD_GAP if word_gap is not None else None
     outcome = {}
     for a, b in runs:
         lo, hi = max(a - 1, 0), min(b + 1, len(tokens))
@@ -317,9 +320,9 @@ def respace(tokens: list[str], gaps: list[float | None], lang: str | None,
         measured = bool(span) and all(g is not None for g in span)
         cut = split_gaps(span) if measured else None
         if cut is not None and ref is not None:
-            cut = min(cut, ref)          # well below the ordinary word gap
-        elif cut is None and measured and word_gap is not None:
-            cut = ref                    # no jump (the run's word gaps shade into its letter
+            cut = min(cut, max(ref, page_ref or 0))   # well below the ordinary word gap
+        elif cut is None and measured and page_ref is not None:
+            cut = page_ref               # no jump (the run's word gaps shade into its letter
                                          # gaps): the page's word gap alone decides
         if cut is not None and any(g < cut for g in span):
             for k in range(lo, hi - 1):
