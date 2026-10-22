@@ -265,6 +265,21 @@ def test_suggestion_change_after_confirming_needs_reconfirm(layout):
     assert catalogue.decision_status(e, dec, {})[0] == catalogue.PENDING
 
 
+def test_no_dictionary_fixes_flag_does_not_change_the_status(layout):
+    assert survey_cli(layout, "A") == 0
+    e = by_rel(load(layout))["obra.pdf"]
+    d = {"action": "keep_text", "confirmed": True, "suggestion_action": "keep_text"}
+    write_decisions(layout, {e["id"]: d})
+    dec = catalogue.load_decisions(layout["cat"])
+    assert catalogue.decision_status(e, dec, {})[0] == catalogue.CONFIRMED
+    assert not catalogue.no_dictionary_fixes(dec["files"][e["id"]])     # missing: False
+    write_decisions(layout, {e["id"]: {**d, "no_dictionary_fixes": True}})
+    dec = catalogue.load_decisions(layout["cat"])
+    assert catalogue.decision_status(e, dec, {})[0] == catalogue.CONFIRMED
+    assert catalogue.no_dictionary_fixes(dec["files"][e["id"]])
+    assert not catalogue.no_dictionary_fixes(None)
+
+
 @pytest.mark.parametrize("text", ["{not json", '{"schema": 2, "files": {}}', '{"schema": 1}',
                                   '{"schema": 1, "files": {"x": 3}}'])
 def test_invalid_decisions_file_exits_1_and_is_not_touched(layout, text, capsys):

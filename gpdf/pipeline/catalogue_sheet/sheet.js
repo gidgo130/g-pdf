@@ -63,6 +63,7 @@
       reason: s.reason || null, duplicate_of: s.duplicate_of || null,
       title: m.suggested_title || name(e), author: m.author || "", year: null,
       page_offset: null, notes: "", confirmed: false, suggestion_action: null,
+      no_dictionary_fixes: false,
     };
   }
 
@@ -102,6 +103,17 @@
     const d = Object.assign({}, current(e));
     d[field] = value;
     d.confirmed = false;
+    d.path = e.path;
+    state[e.id] = d;
+    autosave();
+    updateRow(e);
+    renderTop();
+  }
+
+  function setFlag(e, field, value) {
+    // a setting that does not change what is decided: the status stays as it is
+    const d = Object.assign({}, current(e));
+    d[field] = value;
     d.path = e.path;
     state[e.id] = d;
     autosave();
@@ -358,6 +370,11 @@
       dtd.appendChild(el("span", { class: "badge differs", title: "the decision differs from the suggestion" },
         "-> " + decisionText(current(e))));
     }
+    if (current(e).no_dictionary_fixes) {
+      dtd.appendChild(document.createTextNode(" "));
+      dtd.appendChild(el("span", { class: "badge nodict", title: "no dictionary fixes: the text export uses layout rules only" },
+        "no dictionary fixes"));
+    }
     tr.appendChild(dtd);
     tr.classList.toggle("missing", e.status === "missing");
     tr.classList.toggle("open", opened.has(e.id));
@@ -538,6 +555,13 @@
     notes.addEventListener("change", () => setField(e, "notes", notes.value));
     form.appendChild(stop(notes));
 
+    const nodict = el("label", { class: "wide check" });
+    const check = stop(el("input", { type: "checkbox", class: "nodict" }));
+    check.checked = !!d.no_dictionary_fixes;
+    check.addEventListener("change", () => setFlag(e, "no_dictionary_fixes", check.checked));
+    nodict.append(check, document.createTextNode(" No dictionary fixes (the text export keeps invented words: layout rules only; does not change the confirmation)"));
+    form.appendChild(stop(nodict));
+
     const buttons = el("div", { class: "buttons wide" });
     const ok = stop(el("button", { type: "button", class: "primary confirm" }, "Confirm"));
     ok.addEventListener("click", () => { confirmEntry(e); autosave(); say("Confirmed " + e.rel + "."); renderAll(); });
@@ -545,7 +569,7 @@
     reset.addEventListener("click", () => {
       const keep = current(e);
       const fresh = defaults(e);
-      ["title", "author", "year", "page_offset", "notes"].forEach((k) => { fresh[k] = keep[k]; });
+      ["title", "author", "year", "page_offset", "notes", "no_dictionary_fixes"].forEach((k) => { fresh[k] = keep[k]; });
       state[e.id] = fresh;
       autosave();
       renderAll();

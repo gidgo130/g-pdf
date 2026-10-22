@@ -74,6 +74,7 @@ tr.detail > td { background: var(--panel); padding: 10px 12px 14px; }
 .badge.reconfirm { background: var(--poor); }
 .badge.pending { background: var(--unscored); }
 .badge.differs { background: var(--fair); }
+.badge.nodict { background: transparent; color: inherit; outline: 1px dashed currentColor; }
 @media (prefers-color-scheme: dark) { .badge { color: #111; } }
 .act { font-weight: 600; }
 
@@ -103,6 +104,7 @@ table.mini td, table.mini th { padding: 2px 8px 2px 0; text-align: left; border:
 .editor label { color: var(--muted); }
 .editor textarea { min-height: 60px; resize: vertical; }
 .editor .wide { grid-column: 1 / -1; }
+.editor label.check { color: inherit; }
 .editor .buttons { display: flex; gap: 6px; flex-wrap: wrap; }
 .warn { background: var(--warn-bg); padding: 4px 8px; border-radius: 6px; }
 .err { color: var(--error-fg); }

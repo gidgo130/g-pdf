@@ -159,6 +159,43 @@ def test_restore_unsaved_work_and_load_a_file(browser, sheet, tmp_path):
     assert page.errors == []
 
 
+def test_no_dictionary_fixes_checkbox_round_trips_without_unconfirming(browser, sheet, tmp_path):
+    lay, html, files = sheet
+    pdf = files["obra.pdf"]
+    page = open_sheet(browser, html, NO_PICKER)
+    row(page, pdf).click()
+    detail(page).locator("button.confirm").click()
+    assert page.evaluate(f"gpdfCatalogue.status('{pdf['id']}')") == "confirmed"
+    box = detail(page).locator("input.nodict")
+    assert not box.is_checked()
+    box.check()
+    assert page.evaluate(f"gpdfCatalogue.status('{pdf['id']}')") == "confirmed"
+    assert "no dictionary fixes" in row(page, pdf).inner_text()
+    assert page.inner_text("#progress") == "Confirmed 1 / 4"
+    detail(page).locator("button", has_text="Reset to suggestion").click()
+    assert decisions(page)["files"][pdf["id"]]["no_dictionary_fixes"] is True
+    detail(page).locator("button.confirm").click()
+    with page.expect_download() as dl:
+        page.click("#save")
+    saved = tmp_path / "saved.json"
+    dl.value.save_as(saved)
+    d = json.loads(saved.read_text("utf-8"))["files"][pdf["id"]]
+    assert d["no_dictionary_fixes"] is True and d["confirmed"] is True
+
+    shutil.copy(saved, lay["cat"] / catalogue.DECISIONS)
+    dec = catalogue.load_decisions(lay["cat"])
+    assert catalogue.decision_status(pdf, dec, {})[0] == catalogue.CONFIRMED
+    assert catalogue.no_dictionary_fixes(dec["files"][pdf["id"]])
+    catalogue.write_sheet(load(lay), dec, lay["cat"])
+    page = open_sheet(browser, html)                         # the rewritten sheet
+    row(page, pdf).click()
+    assert detail(page).locator("input.nodict").is_checked()
+    detail(page).locator("input.nodict").uncheck()
+    assert page.evaluate(f"gpdfCatalogue.status('{pdf['id']}')") == "confirmed"
+    assert decisions(page)["files"][pdf["id"]]["no_dictionary_fixes"] is False
+    assert page.errors == []
+
+
 def test_applied_decision_shows_applied_with_the_medians(browser, sheet):
     lay, html, files = sheet
     cat = load(lay)

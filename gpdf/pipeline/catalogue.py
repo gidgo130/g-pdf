@@ -255,6 +255,13 @@ def _pct(v) -> str:
     return "n/a" if v is None else f"{v:.1f}%"
 
 
+def no_dictionary_fixes(decision) -> bool:
+    """The owner's "no dictionary fixes" flag (missing: False): the text export then uses
+    layout rules only (a poet's invented words stay as printed). It is not part of what is
+    decided, so it never changes the decision status."""
+    return bool((decision or {}).get("no_dictionary_fixes"))
+
+
 def decision_status(entry, decisions, files) -> tuple[str, dict | None, str]:
     """(status, the decision that applies, why) for an entry: confirmed, applied (the
     entry's working file is this decision's output), needs re-confirm (the file changed,
