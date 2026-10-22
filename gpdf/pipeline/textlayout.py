@@ -35,6 +35,7 @@ HEADING_CHARS = 90
 CENTRED = 0.06              # x the column width: a centred line
 LONG_LINE = 30              # characters: a line that measures the column
 VERSE_MIN = 3               # hard-broken lines that make a verse unit
+SENTENCE_END = ".!?…»”\"’)"
 
 
 # ---------------------------------------------------------------------------- words, lines
@@ -354,13 +355,19 @@ def _pct(values, q):
 def column(lines: list[Line], fallback_width: float | None = None,
            page_width: float | None = None) -> Column | None:
     """The text column of a page: 10th percentile x0 to 90th percentile x1 of its lines
-    longer than LONG_LINE characters. A ragged page (few lines reach that right edge: verse)
+    longer than LONG_LINE characters, an edge that >= 2 lines (or a fifth) reach. A ragged
+    page (few lines reach that right edge: verse)
     gets ``fallback_width`` (the file's prose column) from its left edge when that is wider,
     or without one the right margin mirrored from the left (``page_width``)."""
     long_ = [ln for ln in lines if ln.chars > LONG_LINE] or lines
     if not long_:
         return None
     left, right = _pct([l.x0 for l in long_], 0.1), _pct([l.x1 for l in long_], 0.9)
+    need = max(2, -(-len(long_) // 5))
+    for x in sorted((l.x1 for l in long_), reverse=True):    # one line sticking out (Ariel)
+        if sum(l.x1 >= x - 3 for l in long_) >= need:           # does not set the edge
+            right = min(right, x)
+            break
     reach = sum(l.x1 >= right - 3 for l in long_)
     if reach < 3 or reach < 0.3 * len(long_):
         if fallback_width:
@@ -499,8 +506,12 @@ def _signal(i: int, flows: list[Flow], block: list[int], hard: list[bool],
     nxt = flows[i + 1] if i + 1 < len(flows) and block[i + 1] == block[i] else None
     em = INDENT_EM * cur.line.size
     d = _indent(cur) - _indent(prev)
-    if d > em and hard[i - 1] and (nxt is None or _indent(nxt) < _indent(cur) - em or hard[i]):
+    back = nxt is None or _indent(nxt) < _indent(cur) - em
+    if d > em and hard[i - 1] and (back or hard[i]):
         return True
+    if (d > em and back and not hard[i] and nxt is not None
+            and prev.line.text.rstrip()[-1:] in SENTENCE_END):
+        return True                  # the last line nearly full, but a sentence ended
     if d < -em and nxt is not None and _indent(nxt) > _indent(cur) + em:
         return True
     return hard[i - 1] and cleanup.speaker(cur.line.text)

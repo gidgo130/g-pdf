@@ -54,6 +54,7 @@ BOILER_PAGES = 3            # a bottom-band URL on this many pages is boilerplat
 MISREAD_LABEL = 4           # characters: an isolated line where a page number should be
 SMALL, SMALL_TESS = 0.9, 0.86            # x the body size: smaller type
 SMALL_PITCH = 0.85          # x the body pitch: a Tesseract line in smaller type
+SHORT_LINE = 15             # characters: a Tesseract line too short to judge by its size
 GIANT_BOX = 5.0             # x the body size and its own size: a box no text line has
 MARGIN_WORDS = 3
 INDEX_SHARE = 0.4           # lines ending in a page number or with a dot leader
@@ -193,7 +194,8 @@ def scan_junk(p: Page, fragments: list, nodict: bool) -> list:
     """On a scan layer, before fragments on one baseline are joined: symbol-only fragments
     (pencil marks: "|", "oo"-free "-", "_ ~") and fragments entirely outside the text column
     (10th percentile x0 to 90th percentile x1 of the fragments longer than LONG_LINE) with
-    <= MARGIN_WORDS words and no known word of >= 4 letters (with ``nodict``: no letter)."""
+    <= MARGIN_WORDS words, no digit (numbers are left to the page-number rules) and no known
+    word of >= 4 letters (with ``nodict``: no letter)."""
     long_ = [ln for ln in fragments if ln.chars > tl.LONG_LINE]
     col = tl.column(long_) if len(long_) >= 3 else None
     kept = []
@@ -201,7 +203,8 @@ def scan_junk(p: Page, fragments: list, nodict: bool) -> list:
         if cleanup.symbol_only(ln.text):
             p.drop(ln, "symbol_line")
         elif (col is not None and (ln.x1 < col.left or ln.x0 > col.right)
-              and len(ln.words) <= MARGIN_WORDS and not _real_word(ln.text, p.lang, nodict)):
+              and len(ln.words) <= MARGIN_WORDS and not any(c.isdigit() for c in ln.text)
+              and not _real_word(ln.text, p.lang, nodict)):
             p.drop(ln, "margin_junk")
         else:
             kept.append(ln)
@@ -288,21 +291,32 @@ def furniture(pages: list[Page], counts: dict) -> None:
             if cleanup.label_line(ln.text):
                 continue
             core, edge, inner = cleanup.head_parts(ln.text)
-            nums = edge + inner
-            if core and all(seq.fits(p.index + 1, v, k) for v, k, _ in nums):
-                cores.setdefault(p.index, []).append((ln, core, edge))
+            fit = all(seq.fits(p.index + 1, v, k) for v, k, _ in edge + inner)
+            if core:
+                cores.setdefault(p.index, []).append((ln, core, edge, inner, fit))
+
+    def repeats(index, core, numbered):
+        """Other pages within HEAD_WINDOW with a similar head whose numbers all fit (with
+        ``numbered``: that carries a fitting edge number)."""
+        return {q for q in range(index - HEAD_WINDOW, index + HEAD_WINDOW + 1)
+                if q != index and any(f and (e or not numbered) and cleanup.similar(core, c)
+                                      for _, c, e, _, f in cores.get(q, []))}
+
     for p in pages:
         top, bottom = bands[p.index]
-        for ln, core, edge in cores.get(p.index, []):
-            others = {q for q in range(p.index - HEAD_WINDOW, p.index + HEAD_WINDOW + 1)
-                      if q != p.index and any(cleanup.similar(core, c)
-                                              for _, c, _ in cores.get(q, []))}
-            if len(others) >= HEAD_REPEAT:
-                p.head = core if p.head is None else f"{p.head} | {core}"
+        for ln, core, edge, inner, fit in cores.get(p.index, []):
+            # guard 1: numbers in the head fit the page sequence, or (OCR misread the page
+            # number: Unruh "12" for 222) an edge number on a head that, nearby, carries
+            # fitting page numbers; guard 2: the window
+            misread = not fit and edge and not inner
+            if not (fit or misread) or len(repeats(p.index, core, misread)) < HEAD_REPEAT:
+                continue
+            p.head = core if p.head is None else f"{p.head} | {core}"
+            if fit:
                 for v, k, t in edge:
                     p.label = Label(v, k, t, FOUND)
-                p.lines.remove(ln)
-                p.drop(ln, "running_head")
+            p.lines.remove(ln)
+            p.drop(ln, "running_head")
         for ln in top + bottom:
             if ln not in p.lines:
                 continue
@@ -422,16 +436,23 @@ def page_kinds(pages: list[Page], total: int) -> None:
 # ---------------------------------------------------------------------------- notes
 def _small(p: Page, size: float, pitch: float) -> None:
     """Mark lines set in smaller type: born-digital by font size; Tesseract (sizes come
-    from the line boxes) by size, or by a tighter line pitch with a smaller size."""
+    from the line boxes) by size, or by a tighter line pitch with a smaller size; a short
+    Tesseract line ("cante.") by its size only with the tighter pitch. A born-digital page
+    whose text is mostly "smaller" than the file's body (the Mexico anthology states its
+    body at 8 pt on some pages) is measured against its own size, and by pitch."""
     lines = p.lines
+    own = tl.body_size(lines) if lines else size
+    unreliable = not p.tesseract and own < SMALL * size
+    ref = own if unreliable else size
     for k, ln in enumerate(lines):
-        if not p.tesseract:
-            ln.small = ln.size < SMALL * size
-            continue
         near = [abs(o.base - ln.base) for o in lines[max(0, k - 1):k + 2]
                 if o is not ln and o.col == ln.col and abs(o.base - ln.base) < 1.6 * pitch]
         tight = bool(near) and min(near) < SMALL_PITCH * pitch
-        ln.small = ln.size < SMALL_TESS * size or (tight and ln.size < 0.95 * size)
+        if not p.tesseract:
+            ln.small = ln.size < SMALL * ref or (unreliable and tight and ln.size <= ref)
+            continue
+        by_size = ln.size < SMALL_TESS * size and (ln.chars >= SHORT_LINE or tight)
+        ln.small = by_size or (tight and ln.size < 0.95 * size)
 
 
 def find_notes(p: Page, state: dict, rules: dict, nodict: bool) -> None:
@@ -449,7 +470,8 @@ def find_notes(p: Page, state: dict, rules: dict, nodict: bool) -> None:
     if not block or not any(not ln.small and ln.chars >= tl.LONG_LINE for ln in above):
         state["pending"] = None
         return
-    pitch = tl.pitch(block) if len(block) > 1 else block[0].size * 1.2
+    deltas = sorted(b.base - a.base for a, b in zip(block, block[1:]) if b.base > a.base)
+    pitch = deltas[len(deltas) // 4] if deltas else block[0].size * 1.2   # the notes' own
     pending = state.get("pending")
     start = None
     for j, ln in enumerate(block):
@@ -590,12 +612,13 @@ def _flows(pages, size, file_width) -> list[tl.Flow]:
             cols[c] = tl.column(mine, None if p.two_col else file_width,
                                 None if p.two_col else p.width)
         pitch = tl.pitch([ln for ln in lines if not ln.small] or lines)
+        hsize = max(size, tl.body_size([ln for ln in lines if not ln.small] or lines))
         for k, ln in enumerate(lines):
             same = [o for o in lines if o.col == ln.col]
             j = same.index(ln)
             above = ln.base - same[j - 1].base if j else None
             below = same[j + 1].base - ln.base if j + 1 < len(same) else None
-            ln.heading = tl.heading(ln, size, cols[ln.col], above, below, pitch, p.tesseract)
+            ln.heading = tl.heading(ln, hsize, cols[ln.col], above, below, pitch, p.tesseract)
             f = tl.Flow(ln, cols[ln.col], pitch, p.tesseract, p.lang, gap_before=above)
             f.cut_before = ("cut_before" in ln.marks or (k == 0 and (
                 prev is None or prev != p.index - 1)))

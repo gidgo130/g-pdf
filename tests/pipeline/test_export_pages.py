@@ -13,7 +13,7 @@ import pymupdf  # noqa: E402
 from gpdf.pipeline import export  # noqa: E402
 from gpdf.pipeline import textlayout as tl  # noqa: E402
 
-from .exportsynth import PITCH, X0, Sheet, job, save, width, words  # noqa: E402
+from .exportsynth import PITCH, X0, X1, Sheet, job, save, width, words  # noqa: E402
 
 
 def run(path, **kw):
@@ -385,16 +385,19 @@ def test_margin_junk_on_a_scan_layer_only(tmp_path, scan_font):
         for k in range(8):
             if k == 3:
                 s.text(12, s.y, "oo")              # left margin: no real word
-                s.text(375, s.y, "1234")           # right margin number
+                s.text(375, s.y, "hve")            # right margin
+            if k == 5:
+                s.text(12, s.y, "1234")            # a number: left to the number rules
             s.line(" ".join(words(800 + k, 7)), size=9)
         save(doc, path)
         records, rows, *_ = run(path, scan=scan)
         allt = " ".join(texts(records))
         dropped = {d["text"] for d in rows[0]["dropped"] if d["reason"] == "margin_junk"}
         if font == "cour":
-            assert dropped == {"oo", "1234"} and "oo" not in allt.split()
+            assert dropped == {"oo", "hve"} and "oo" not in allt.split()
         else:
-            assert not dropped and "1234" in allt
+            assert not dropped and "hve" in allt
+        assert "1234" in allt
 
 
 def test_unruh_artefacts(tmp_path, scan_font):
@@ -481,3 +484,103 @@ def test_txt_entry(tmp_path):
         "[Poema - Texto completo.]", "Rubén Darío", "https://ciudadseva.com/texto/a-roosevelt/",
         "– VIII –"}
     assert app == [] and "ciudadseva" not in txt
+
+
+# ---------------------------------------------------------------------------- calibration
+def test_running_head_with_a_misread_page_number(tmp_path):
+    # Unruh p. 237: "12 TALES OF LINGUISTIC ENCOUNTER" where the page is 222
+    path = tmp_path / "misread_head.pdf"
+    doc = pymupdf.open()
+    for i in range(8):
+        s = Sheet(doc)
+        n = 215 + i
+        s.text(X0, 40, f"{12 if i == 4 else n} TALES OF LINGUISTIC ENCOUNTER", 8)
+        body(s, 1100 + i, 70)
+    save(doc, path)
+    records, rows, *_ = run(path, lang="en")
+    assert rows[4]["head"] == "TALES OF LINGUISTIC ENCOUNTER"
+    assert rows[4]["label"] == "219" and rows[4]["label_status"] == "inferred"
+    assert not any("TALES" in t for t in texts(records))
+
+
+def test_short_tesseract_line_is_not_small_type_by_its_size(tmp_path, scan_font):
+    # Bürger p. 78: "insignif-" + "cante." (a one-word line OCR'd at a smaller size)
+    path = tmp_path / "cante.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc, font="cour")
+    for k in range(10):
+        s.line(" ".join(words(1200 + k, 7)), size=9)
+    s.line("de ordenación cuyo valor de conocimiento es insignif-", size=9)
+    s.line("cante.", size=7.5)
+    s.line(" ".join(words(1220, 7)), x=X0 + 15, size=9)
+    s.line(" ".join(words(1221, 7)), size=9)
+    save(doc, path)
+    records, *_ = run(path, scan=True)
+    t = " ".join(texts(records))
+    assert "insignifcante." in t                   # as OCR read it
+    assert not [r for r in records if r["kind"] == "quote"]
+
+
+def test_notes_by_pitch_where_the_layer_states_the_body_small(tmp_path):
+    # Mexico anthology p. 277: body and notes both stated at 8 pt; the notes are tighter;
+    # a marker glued to a quote ('47"La poesía')
+    path = tmp_path / "pitch.pdf"
+    doc = pymupdf.open()
+    for i in range(3):                              # the file's body: 10.5 pt
+        body(Sheet(doc), 1300 + i, 90)
+    s = Sheet(doc)
+    for k in range(14):
+        s.line(" ".join(words(1310 + k, 9)), size=8, pitch=12.2)
+    s.y += 20
+    s.line('47"La poesía actual de México", en Prosa, 178.', size=8, pitch=9.6)
+    s.line("48 Prosa, 181.", size=8, pitch=9.6)
+    save(doc, path)
+    records, *_ = run(path)
+    mine = [r for r in records if r["pages"][0] == 4]
+    assert [r["kind"] for r in mine].count("quote") == 0
+    assert [r["note"] for r in mine if r["kind"] == "note"] == [47, 48]
+
+
+def test_headings_need_more_than_the_page_body_size(tmp_path):
+    # Ariel: the file's body (10.5) is smaller than this page's (12.5): not all headings
+    path = tmp_path / "bigger.pdf"
+    doc = pymupdf.open()
+    for i in range(4):
+        body(Sheet(doc), 1400 + i, 120, size=9, pitch=11)
+    s = Sheet(doc)
+    s.text(150, 60, "I", 20)
+    body(s, 1410, 60, size=12.5, pitch=17)
+    save(doc, path)
+    records, *_ = run(path)
+    mine = [r for r in records if r["pages"][0] == 5]
+    assert [r["kind"] for r in mine] == ["heading", "prose"]
+
+
+def test_one_line_sticking_out_does_not_set_the_column_edge(tmp_path):
+    path = tmp_path / "edge.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    ws = words(1500, 80)
+    s.para(ws[:40], x1=300, last_full=True)
+    s.justify(ws[40:50], x0=X0, x1=360)              # wider than the column
+    s.para(ws[50:], indent=0, x1=300)
+    save(doc, path)
+    records, *_ = run(path)
+    assert len(records) == 1 and records[0]["text"] == " ".join(ws)
+
+
+def test_indent_after_a_nearly_full_line_that_ends_a_sentence(tmp_path):
+    # Manifiestos p. 51: "...acometido por la vida”." ends near the edge; "Habría..." indented
+    path = tmp_path / "nearly.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc)
+    s.para(words(1600, 40), last_full=True)
+    last = " ".join(words(1601, 30))
+    while width(last) > X1 - X0 - 12:
+        last = last.rsplit(" ", 1)[0]
+    s.line(last + ".")
+    b = s.para(words(1602, 40))
+    save(doc, path)
+    records, *_ = run(path)
+    assert len(records) == 2
+    assert records[1]["text"] == " ".join(w for ln in b for w in ln)

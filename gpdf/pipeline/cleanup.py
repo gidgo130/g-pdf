@@ -398,7 +398,7 @@ def msplit(tokens: list[str], gaps: list[float | None], lang: str | None) -> tup
 
 
 # ---------------------------------------------------------------------------- notes, markers
-_NOTE_START = re.compile(r"^(?:(\d{1,3})\.?|(\*{1,3})|([?!¡¿$%&§])(\d{0,2}))(?=\s)")
+_NOTE_START = re.compile(r"^(?:(\d{1,3})\.?|(\*{1,3})|([?!¡¿$%&§])(\d{0,2}))(?=\s|[\"«“])")
 _LOW = "a-zà-öø-ÿ"
 _P = re.escape(_CLOSE)
 _GLUED = re.compile(rf"(?:(?<=[{_LOW}])|(?<=[{_LOW}][{_P}])|(?<=[{_LOW}][{_P}][{_P}]))"
