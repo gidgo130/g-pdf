@@ -398,7 +398,7 @@ def msplit(tokens: list[str], gaps: list[float | None], lang: str | None) -> tup
 
 
 # ---------------------------------------------------------------------------- notes, markers
-_NOTE_START = re.compile(r"^(?:(\d{1,3})\.?|(\*{1,3})|([?!¡¿])(\d{1,2}))(?=\s)")
+_NOTE_START = re.compile(r"^(?:(\d{1,3})\.?|(\*{1,3})|([?!¡¿$%&§])(\d{0,2}))(?=\s)")
 _LOW = "a-zà-öø-ÿ"
 _P = re.escape(_CLOSE)
 _GLUED = re.compile(rf"(?:(?<=[{_LOW}])|(?<=[{_LOW}][{_P}])|(?<=[{_LOW}][{_P}][{_P}]))"
@@ -409,7 +409,8 @@ _ABBREV_BEFORE = re.compile(r"(?:^|[\s(])(?:p|pp|n|nº|vol|t|cap|núm|no|fol|f|c
 def note_start(text: str) -> tuple[int | None, str, bool] | None:
     """The marker a footnote starts with: (number, marker, misread). "24. B. Brecht" ->
     (24, "24.", False); "* Véase" -> (None, "*", False); "?1 El" -> (1, "?1", True): an
-    OCR-misread marker whose digits are only the last ones of the number."""
+    OCR-misread marker whose digits are only the last ones of the number ("$8", "%": the
+    digits lost, (None, "%", True))."""
     m = _NOTE_START.match(text)
     if not m:
         return None
@@ -417,7 +418,7 @@ def note_start(text: str) -> tuple[int | None, str, bool] | None:
         return int(m.group(1)), m.group(0), False
     if m.group(2):
         return None, m.group(2), False
-    return int(m.group(4)), m.group(0), True
+    return (int(m.group(4)) if m.group(4) else None), m.group(0), True
 
 
 def link_markers(text: str, numbers: set[int]) -> tuple[str, int, int]:

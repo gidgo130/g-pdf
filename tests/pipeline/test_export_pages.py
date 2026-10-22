@@ -152,6 +152,30 @@ def test_footnotes_markers_quotes_and_a_continued_note(tmp_path):
     assert kinds.index("verse") < kinds.index("note")       # notes after the page's body
 
 
+def test_ocr_damaged_note_markers_on_a_scan_layer(tmp_path, scan_font):
+    # Schwartz p. 73: indented note starts whose numbers OCR damaged ("8", "$8", "89", "%")
+    path = tmp_path / "damaged.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc, font="cour")
+    for k in range(14):
+        s.line(" ".join(words(950 + k, 8)), size=9)
+    s.y += 16
+    for marker, text in (("15", "Véase el libro."), ("8", "Ibidem, p. 12."),
+                         ("8", "Ibidem, p. 13."), ("$8", "Alfabeto syentifigo keshwa.")):
+        s.line(f"{marker} {text}", x=X0 + 10, size=7, pitch=8)
+    s.line("89 Cf. la bibliografía de Miguel Ángel Rodríguez Rea, Guía del", x=X0 + 10,
+           size=7, pitch=8)
+    s.line("Boletín, Lima, 1981.", size=7, pitch=8)
+    s.line("% Boletín Titikaka, núm. 17, p. 1.", x=X0 + 10, size=7, pitch=8)
+    save(doc, path)
+    records, *_ = run(path, scan=True)
+    notes = [r for r in records if r["kind"] == "note"]
+    assert [n["note"] for n in notes] == [15, 16, 17, 18, 19, 20]
+    assert notes[0]["flags"] == [] and all("marker_inferred" in n["flags"] for n in notes[1:])
+    assert notes[4]["text"] == "Cf. la bibliografía de Miguel Ángel Rodríguez Rea, Guía del " \
+        "Boletín, Lima, 1981."
+
+
 def test_superscript_ordinal_is_not_a_marker(tmp_path):
     path = tmp_path / "ordinal.pdf"
     doc = pymupdf.open()

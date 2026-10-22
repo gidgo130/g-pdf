@@ -105,6 +105,7 @@ class Note:
     number: int | None
     lines: list = field(default_factory=list)       # tl.Line
     editorial: bool = False
+    inferred: bool = False         # the number follows the previous note, not the marker
     text: str = ""
 
     @property
@@ -478,12 +479,18 @@ def find_notes(p: Page, state: dict, rules: dict, nodict: bool) -> None:
         if not cont:
             state["pending"] = None
         return
+    region = block[start:]
+    left = min(ln.x0 for ln in region)
     notes, cur = [], None
-    for ln in block[start:]:
+    for ln in region:
         m = cleanup.note_start(ln.text)
-        if m and (cur is None or _plausible(m, cur.number, state)):
-            n = _number(m, state)
-            cur = Note(n, [ln])
+        new = m is not None and (cur is None or (_plausible(m, cur.number, state)
+                                                 and not (m[2] and m[0] is None)))
+        forced = (not new and m is not None and cur is not None and ln.x0 > left
+                  + tl.INDENT_EM * ln.size and cur.lines[-1].text.rstrip()[-1:] in SENTENCE_END)
+        if new or forced:            # forced: an indented note start after a finished note
+            n, inferred = _number(m, state, p.tesseract, forced)   # (OCR damaged its number)
+            cur = Note(n, [ln], inferred=inferred)
             notes.append(cur)
             if n is not None:
                 state["last"] = n
@@ -504,14 +511,24 @@ def _plausible(m, last, state) -> bool:
     return prev is None or prev < n <= prev + 3
 
 
-def _number(m, state) -> int | None:
+def _number(m, state, guess: bool, forced: bool = False) -> tuple[int | None, bool]:
+    """(number, inferred). A misread marker, or on a Tesseract layer (``guess``) a number
+    that does not follow the last note, takes the last note's number + 1 when its digits
+    could be what is left of it ("?1" after 20, "89" after 18, "%"), or whatever they are
+    when only the indent made it a note start (``forced``: Schwartz's "8" for 16); a plain
+    "1" is a new count."""
     n, _, misread = m
-    if n is None:
-        return None
     last = state.get("last")
-    if misread and last is not None and (last + 1) % 10 ** len(str(n)) == n:
-        return last + 1
-    return n
+    if last is not None and (guess or misread):
+        if n is not None and last < n <= last + 3:
+            return n, False
+        if forced and guess and (misread or n != 1):
+            return last + 1, True
+        want = str(last + 1)
+        if n is None or ((misread or n != 1) and (want.endswith(str(n)) or (
+                len(str(n)) == len(want) and str(n)[-1] == want[-1]))):
+            return last + 1, True
+    return n, False
 
 
 def _note_text(lines, lang, nodict, number) -> str:
@@ -606,7 +623,8 @@ def _records(units, pages) -> list[Record]:
             if q <= index and q not in done:
                 done.add(q)
                 for n in by_index[q].notes:
-                    flags = ["editorial"] if n.editorial else []
+                    flags = (["editorial"] if n.editorial else []) + (
+                        ["marker_inferred"] if n.inferred else [])
                     out.append(Record(NOTE, n.text, n.pages, n.number, flags))
 
     for u in units:

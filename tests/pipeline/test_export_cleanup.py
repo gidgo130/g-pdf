@@ -170,6 +170,8 @@ def test_note_start():
     assert c.note_start("2 Conocida es la estructura") == (2, "2", False)
     assert c.note_start("* Véase el capítulo") == (None, "*", False)
     assert c.note_start("?1 El segundo texto") == (1, "?1", True)
+    assert c.note_start("$8 Fransisqo Chugiwanka") == (8, "$8", True)
+    assert c.note_start("% Boletín Titikaka") == (None, "%", True)
     assert c.note_start("1925, p. 1. Ver también") is None
     assert c.note_start("Martín Fierro, 3") is None
 
