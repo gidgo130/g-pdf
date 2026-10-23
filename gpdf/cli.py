@@ -14,7 +14,8 @@
                                                     # apply the confirmed decisions
     gpdf-cli export --catalogue DIR --out OUTDIR [--dry-run]
                                                     # clean, citable text per entry
-    gpdf-cli structure --text DIR --out OUTDIR      # parts, sections, authors and roles
+    gpdf-cli structure --text DIR --out OUTDIR [--decisions FILE]
+                                                    # parts, sections, authors and roles
                                                     # of every exported entry
     gpdf-cli backup --to DIR [--source PATH]        # copy the review decisions to DIR
 
@@ -184,6 +185,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="folder for the sections files (created if missing)")
     t.add_argument("--only", metavar="TEXT", nargs="+", default=[],
                    help="only entries whose id starts with TEXT or whose name contains it")
+    t.add_argument("--decisions", metavar="FILE", type=Path,
+                   help="your review decisions to apply over the detection (default: "
+                        "OUTDIR/structure.decisions.json if it exists; never written)")
     b = sub.add_parser("backup", help="copy your review decisions to a dated backup folder",
                        description="Copy the files only you can make (*.decisions.json and "
                                    "their *.bak.json backups) from the source tree to "
@@ -498,7 +502,7 @@ def _structure_main(args) -> int:
     from gpdf.pipeline import sections
 
     try:
-        res = sections.run(args.text, args.out, args.only)
+        res = sections.run(args.text, args.out, args.only, args.decisions)
     except (sections.StructureError, OSError) as e:
         print(f"gpdf-cli: error: {e}", file=sys.stderr)
         return EXIT_ERROR

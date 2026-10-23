@@ -15,6 +15,7 @@ collapses into it (the play, a single essay).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -141,6 +142,7 @@ class Entry:
     lang: str | None = None
     rel: str = ""
     flags: dict = field(default_factory=dict)
+    units_sha: str = ""              # sha256 of <stem>.jsonl: the export the seqs refer to
 
 
 def _jsonl(path: Path) -> list[dict]:
@@ -170,6 +172,7 @@ def load_entry(text_dir, id_: str, rec: dict) -> Entry:
     rows = _jsonl(text_dir / f"{stem}.pages.jsonl")
     app_path = text_dir / f"{stem}.apparatus.jsonl"
     apparatus = _jsonl(app_path) if app_path.is_file() else []
+    units_sha = hashlib.sha256((text_dir / f"{stem}.jsonl").read_bytes()).hexdigest()
     kind = "txt" if str(rec["input"]).lower().endswith(".txt") else "pdf"
     toc, count, meta = [], 0, {}
     if kind == "pdf" and os.path.isfile(rec["input"]):
@@ -184,7 +187,7 @@ def load_entry(text_dir, id_: str, rec: dict) -> Entry:
                  kind=kind, units=units, rows=rows, apparatus=apparatus, toc=toc,
                  page_count=count or len(rows), metadata=meta,
                  lang=langs.most_common(1)[0][0] if langs else None, rel=rec.get("rel", ""),
-                 flags=rec.get("flags", {}))
+                 flags=rec.get("flags", {}), units_sha=units_sha)
 
 
 # ---------------------------------------------------------------------------- sections
@@ -215,6 +218,7 @@ class Section:
     rel: int | None = None
     run_last: int | None = None
     page: int = 0
+    owner: bool = False              # added or changed by the owner's decisions
 
     def to_json(self) -> dict:
         d = {"id": self.id, "parent": self.parent, "level": self.level, "title": self.title,
@@ -224,6 +228,8 @@ class Section:
              "sources": list(self.sources), "chars": self.chars}
         if self.lines is not None:
             d["lines"] = self.lines
+        if self.owner:
+            d["owner"] = True
         return d
 
 
@@ -239,13 +245,16 @@ class Structure:
     kind: str = "monograph"
     default_role: str = PRIMARY
     checks: dict = field(default_factory=dict)
+    detected: list = field(default_factory=list)    # the sections before the decisions
+    decisions: dict | None = None                   # structure_decisions.summary
 
     def to_json(self) -> dict:
         e = self.entry
         return {"schema": SCHEMA, "tool_version": __version__, "made": catalogue.now(),
                 "entry": e.id, "stem": e.stem, "input": e.input, "input_sha256": e.input_sha,
                 "kind": e.kind, "book_kind": self.kind, "pages": e.page_count,
-                "units": len(e.units), "lang": e.lang, "metadata": self.metadata,
+                "units": len(e.units), "units_sha256": e.units_sha, "lang": e.lang,
+                "metadata": self.metadata, "decisions": self.decisions,
                 "sections": [s.to_json() for s in self.sections],
                 "outline": {
                     "junk": self.outline.junk,
@@ -1495,13 +1504,7 @@ def _finish(secs: list[Section], units: list, e: Entry, s: Structure) -> None:
     """Ends, nesting, collapse of single-child implicit parts, ids, page ranges, roles
     inherited, language, characters, invariants."""
     n = len(units)
-    for i, x in enumerate(secs):
-        end = n
-        for y in secs[i + 1:]:
-            if y.level <= x.level:
-                end = y.start
-                break
-        x.end = end
+    _ends(secs, n)
     kept = []
     for x in secs:
         if x.end > x.start:
@@ -1527,15 +1530,7 @@ def _finish(secs: list[Section], units: list, e: Entry, s: Structure) -> None:
                 break
     if s.kind == "texts":
         _editor_intros(secs, units, s)
-    stack: list[Section] = []
-    for k, x in enumerate(secs, 1):
-        x.id = f"s{k:03d}"
-        while stack and (stack[-1].level >= x.level or stack[-1].end <= x.start):
-            stack.pop()
-        x.parent = stack[-1].id if stack else None
-        if stack and not x.role_fixed and x.level > 1 and x.role == s.default_role:
-            x.role = stack[-1].role
-        stack.append(x)
+    _nest(secs, s.default_role)
     first = secs[0] if secs else None
     if first is not None and first.implicit and first.role != FRONT:
         kids = [y for y in secs if y.level == 2 and first.start <= y.start < first.end]
@@ -1550,24 +1545,64 @@ def _finish(secs: list[Section], units: list, e: Entry, s: Structure) -> None:
     for x in secs:
         if x.author and entry_author and ratio(x.author, entry_author) >= 0.9:
             x.author = None
-        x.first, x.last = x.start + 1, x.end
-        span = units[x.start:x.end]
-        pages = [p for u in span for p in (u.get("pages") or [])]
-        x.pdf_pages = [min(pages), max(pages)] if pages else None
-        labels = [lab for u in span for lab in (u.get("labels") or []) if lab]
-        x.printed = [labels[0], labels[-1]] if labels else None
-        if e.kind == "txt":
-            lines = [p for u in span for p in (u.get("lines") or [])]
-            x.lines = [min(lines), max(lines)] if lines else None
-        langs = Counter(u.get("lang") for u in span if u.get("lang"))
-        x.lang = langs.most_common(1)[0][0] if langs else e.lang
-        x.chars = sum(len(u["text"]) for u in span)
+        _span(x, units, e)
         if not x.sources:
             x.sources = ["implicit"]
             x.evidence = x.evidence or ["implicit part: the units before the first section"
                                         if x.role == FRONT else "implicit part"]
             x.confidence = HIGH if x.start == 0 else x.confidence
     _check_tiling(secs, n)
+
+
+def _ends(secs: list[Section], n: int) -> None:
+    """A section ends where the next one of its level or above starts."""
+    for i, x in enumerate(secs):
+        x.end = next((y.start for y in secs[i + 1:] if y.level <= x.level), n)
+
+
+def _nest(secs: list[Section], default_role: str | None = None) -> None:
+    """Ids in order and parents; with ``default_role``, a section left at the book's
+    default role takes its parent's."""
+    stack: list[Section] = []
+    for k, x in enumerate(secs, 1):
+        x.id = f"s{k:03d}"
+        while stack and (stack[-1].level >= x.level or stack[-1].end <= x.start):
+            stack.pop()
+        x.parent = stack[-1].id if stack else None
+        if (default_role and stack and not x.role_fixed and x.level > 1
+                and x.role == default_role):
+            x.role = stack[-1].role
+        stack.append(x)
+
+
+def _span(x: Section, units: list, e: Entry) -> None:
+    """Seqs, pages, printed labels (or lines), language and size of a section."""
+    x.first, x.last = x.start + 1, x.end
+    span = units[x.start:x.end]
+    pages = [p for u in span for p in (u.get("pages") or [])]
+    x.pdf_pages = [min(pages), max(pages)] if pages else None
+    labels = [lab for u in span for lab in (u.get("labels") or []) if lab]
+    x.printed = [labels[0], labels[-1]] if labels else None
+    if e.kind == "txt":
+        lines = [p for u in span for p in (u.get("lines") or [])]
+        x.lines = [min(lines), max(lines)] if lines else None
+    langs = Counter(u.get("lang") for u in span if u.get("lang"))
+    x.lang = langs.most_common(1)[0][0] if langs else e.lang
+    x.chars = sum(len(u["text"]) for u in span)
+
+
+def refresh(s: Structure) -> None:
+    """Ends, ids, parents, spans and checks again after the owner's decisions changed the
+    sections (no collapse, no role inheritance: the owner's roles stand)."""
+    secs, units = s.sections, s.entry.units
+    secs.sort(key=lambda y: (y.start, y.level))
+    _ends(secs, len(units))
+    _nest(secs)
+    for x in secs:
+        _span(x, units, s.entry)
+    _check_tiling(secs, len(units))
+    s.by_id = {x.id: x for x in secs}
+    s.checks = _checks(s)
 
 
 def _editor_intros(secs: list[Section], units: list, s: Structure) -> None:
@@ -1682,6 +1717,9 @@ class RunResult:
     written: list = field(default_factory=list)
     seconds: float = 0.0
     log: Path | None = None
+    text_dir: Path | None = None
+    decisions_path: Path | None = None              # the decisions file read, if any
+    unknown: list = field(default_factory=list)     # its entry ids not in the export
 
 
 def plan_dirs(text_dir, outdir, export: dict) -> None:
@@ -1697,11 +1735,25 @@ def plan_dirs(text_dir, outdir, export: dict) -> None:
 
 
 def run(text_dir, outdir, only=(), decisions=None) -> RunResult:
+    """Detect every exported entry (matching ``only``) and apply the owner's decisions:
+    the file ``decisions``, else OUTDIR/structure.decisions.json if there is one."""
+    from gpdf.pipeline import structure_decisions as sd
+
     t0 = time.perf_counter()
     export = load_export(text_dir)
     plan_dirs(text_dir, outdir, export)
-    res = RunResult()
+    res = RunResult(text_dir=Path(text_dir))
     outdir = Path(outdir)
+    if decisions is not None and not Path(decisions).is_file():
+        raise StructureError(f"no decisions file {decisions}")
+    path = Path(decisions) if decisions is not None else outdir / sd.DECISIONS
+    try:
+        dec = sd.load(path)
+    except sd.DecisionsError as err:
+        raise StructureError(str(err)) from None
+    if path.is_file():
+        res.decisions_path = path
+        res.unknown = sorted(set(dec["entries"]) - set(export["entries"]))
     outdir.mkdir(parents=True, exist_ok=True)
     items = sorted(export["entries"].items(), key=lambda kv: kv[1].get("stem", "").lower())
     for id_, rec in items:
@@ -1710,7 +1762,10 @@ def run(text_dir, outdir, only=(), decisions=None) -> RunResult:
             continue
         try:
             e = load_entry(text_dir, id_, rec)
-            s = detect(e, decisions)
+            s = detect(e)
+            s.detected = [x.to_json() for x in s.sections]
+            mine = dec["entries"].get(id_)
+            s.decisions = sd.summary(sd.apply(s, mine), res.decisions_path, mine is not None)
             res.written.append(write_sections(s, outdir))
             res.structures.append(s)
         except (StructureError, OSError, ValueError, KeyError) as err:
@@ -1730,9 +1785,18 @@ def write_log(outdir, res: RunResult) -> Path:
         entries[s.entry.id] = {"stem": s.entry.stem, "input_sha256": s.entry.input_sha,
                                "book_kind": s.kind, "sections": len(s.sections),
                                "units": len(s.entry.units), "checks": s.checks,
-                               "notes": s.notes, "file": f"{s.entry.stem}{SUFFIX}"}
+                               "notes": s.notes, "file": f"{s.entry.stem}{SUFFIX}",
+                               "decisions": {k: v for k, v in (s.decisions or {}).items()
+                                             if k != "results"}}
+    dec = [s.decisions for s in res.structures if s.decisions]
     data = {"schema": SCHEMA, "tool_version": __version__, "made": catalogue.now(),
-            "seconds": round(res.seconds, 2), "entries": entries,
+            "seconds": round(res.seconds, 2),
+            "text": str(res.text_dir) if res.text_dir else None,
+            "decisions": {"file": str(res.decisions_path) if res.decisions_path else None,
+                          **{k: sum(d[k] for d in dec) for k in ("applied", "stale",
+                                                                  "unmatched")},
+                          "entries_not_in_export": res.unknown},
+            "entries": entries,
             "errors": [{"stem": a, "error": b} for a, b in res.errors],
             "totals": {"chars_by_role": dict(totals), "entries": len(res.structures)}}
     catalogue.write_text(path, json.dumps(data, indent=1, ensure_ascii=False) + "\n")
@@ -1789,6 +1853,15 @@ def report(res: RunResult) -> str:
             out.append(f"    out of order: {oo}")
         for note in s.notes:
             out.append(f"  note: {note}")
+        d = s.decisions or {}
+        if d.get("record"):
+            out.append(f"  decisions: {d['applied']} applied, {d['stale']} stale, "
+                       f"{d['unmatched']} unmatched")
+            for r in d["results"]:
+                if r["status"] != "applied":
+                    where = (f" at unit {r['seq']} (level {r['level']})"
+                             if r.get("seq") is not None else "")
+                    out.append(f"    {r['status']}: {r['op']}{where}: {r['why']}")
         out.append("  invariants: every unit in exactly one section; sections in order; none "
                    "empty: ok")
     for stem, err in res.errors:
@@ -1801,6 +1874,20 @@ def report(res: RunResult) -> str:
     out.append("corpus: characters by role: " + ", ".join(
         f"{r} {totals.get(r, 0)} ({_pct(totals.get(r, 0), grand)})" for r in st.ROLES
         if totals.get(r)))
+    recs = [s.decisions for s in res.structures if s.decisions and s.decisions["record"]]
+    if res.decisions_path is None:
+        out.append("decisions: none (no structure.decisions.json in the output folder)")
+    elif not recs:
+        out.append(f"decisions: none for these entries in {res.decisions_path}")
+    else:
+        out.append(f"decisions: {sum(d['applied'] for d in recs)} applied, "
+                   f"{sum(d['stale'] for d in recs)} stale, "
+                   f"{sum(d['unmatched'] for d in recs)} unmatched, for {len(recs)} "
+                   f"entr{'y' if len(recs) == 1 else 'ies'} ({res.decisions_path})")
+    if res.unknown:
+        n = len(res.unknown)
+        out.append(f"  {n} entr{'y' if n == 1 else 'ies'} not in the export (decisions kept, "
+                   "not applied): " + ", ".join(k[:12] for k in res.unknown))
     out.append(f"wrote {len(res.written)} sections file(s), {len(res.errors)} error(s) "
                f"({res.seconds:.1f} s); run log: {res.log}")
     return "\n".join(out)
