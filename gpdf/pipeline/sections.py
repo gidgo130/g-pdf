@@ -654,6 +654,8 @@ def _title_between(title: str, lo: int, hi: int, on: dict, strong: bool = False)
             text = u["text"]
             if u["kind"] != "heading" and not (len(text) <= 80 and "\n" not in text
                                                and text.strip().isupper()):
+                if len(text) <= 80 and "\n" not in text and st._heading_score(title, text) >= 1:
+                    return pg                          # a short unit that is the title
                 continue
             if len(fold(title)) < 8:                 # "Eta" is not "Beta": short titles
                 if st._starts_with(title, text) and st.same_numerals(title, text):
@@ -969,7 +971,39 @@ def _merge(g: _Group, units: list, not_authors: set, heads: set = frozenset(),
     return g
 
 
+_STOP = {"the", "and", "los", "las", "del", "por", "con", "une", "des", "una", "the", "for"}
+
+
+def _rank(g: _Group) -> int:
+    return min((_SOURCE_RANK.get(c.source, 9) for c, _ in g.claims if c.source != "header"),
+               default=9)
+
+
+def _titled(g: _Group) -> bool:
+    """Some claim of the group is anchored at its title, not at a page's first unit."""
+    return any(how.startswith(("heading", "title")) for _, how in g.claims)
+
+
+def _abridges(head: str, title: str) -> bool:
+    """The head's words all appear in the longer title: a running head abridging the
+    chapter's title ("THE VAGABOND EYE/I" for "2. Outward Turns of the Vagabond Eye/I:
+    The Vanguards' Portraits of the Artist")."""
+    hw = [w for w in st.words(head, 3) if w not in _STOP]
+    tw = st.words(title, 3)
+    return bool(hw) and len(tw) > len(hw) and all(st.word_in(w, tw) for w in hw)
+
+
+def _head_within(a: _Group, b: _Group) -> bool:
+    head, full = (a, b) if a.sources == {"head"} else (b, a)
+    return _abridges(head.title, full.title)
+
+
 def _absorb(into: _Group, g: _Group) -> None:
+    if _rank(g) < _rank(into) or (_rank(g) == _rank(into) and "contents" in g.sources
+                                  and len(g.title) > len(into.title)):
+        into.title = g.title                  # the better source names the section
+    if _titled(g) and not _titled(into):
+        into.idx, into.page = g.idx, g.page   # it starts where its title is
     into.claims += g.claims
     into.sources |= g.sources
     into.evidence += [x for x in g.evidence if x not in into.evidence]
@@ -983,8 +1017,6 @@ def _absorb(into: _Group, g: _Group) -> None:
     into.sub = into.sub and g.sub
     if g.confidence == HIGH or (into.confidence == LOW and g.confidence == MEDIUM):
         into.confidence = g.confidence
-    if len(g.title) > len(into.title) and "contents" in g.sources and "contents" not in into.sources:
-        into.title = g.title
 
 
 def _fold_duplicates(merged: list[_Group]) -> list[_Group]:
@@ -1001,7 +1033,9 @@ def _fold_duplicates(merged: list[_Group]) -> list[_Group]:
                 (prev.page == g.page and st.match_score(prev.title, g.title) > 0)
                 or (abs(prev.page - g.page) <= 2 and st.match_score(prev.title, g.title) >= 1)
                 or (head_only and abs(prev.page - g.page) <= (6 if claimed else 2)
-                    and st.match_score(prev.title, g.title) > 0))):
+                    and st.match_score(prev.title, g.title) > 0)
+                or (head_only and claimed and abs(prev.page - g.page) <= 5
+                    and _head_within(prev, g)))):
             _absorb(prev, g)
             continue
         out.append(g)
@@ -1019,7 +1053,8 @@ def _attach_authors(merged: list[_Group], author_only: list[Claim], heads: set =
         own = next((g for g in merged if not g.part_like and abs(g.page - c.page) <= 2
                     and ratio(g.title, c.author) >= 0.75), None)
         if own is not None:
-            if "bookmark" not in own.sources and own.title.upper() != own.title:
+            if ("bookmark" not in own.sources and own.title.upper() != own.title
+                    and not _abridges(c.author, own.title)):
                 own.evidence.append(f"title from the running head «{c.author}» (the contents "
                                     f"read «{own.title[:40]}»)")
                 own.title = c.author

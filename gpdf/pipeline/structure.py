@@ -1187,9 +1187,10 @@ def _heading_score(title: str, text: str) -> float:
     score = match_score(title, text)
     if score:
         return score
-    head, _, sub = title.partition(". ")           # "YO. Fragmento": the heading "YO"
-    if sub and len(head) >= 2 and fold(head) == fold(text) and same_numerals(head, text):
-        return 1.0
+    for sep in (". ", ": "):           # "YO. Fragmento", "Introduction: Contentious
+        head, _, sub = title.partition(sep)        # Encounters": the heading "YO",
+        if sub and len(head) >= 2 and fold(head) == fold(text) and same_numerals(head, text):
+            return 1.0                             # the unit "Introduction"
     return 0.0
 
 
@@ -1232,7 +1233,8 @@ def anchor(claim: Claim, units: list[dict], on: dict[int, list[dict]],
             how = f"heading unit on p{pg}" + (", after the author lines" if j < k else "")
             return j, how
     for u in on.get(page, []):
-        if _starts_with(claim.title, u["text"]) and same_numerals(claim.title, u["text"][:40]):
+        if (_starts_with(claim.title, u["text"]) and same_numerals(claim.title, u["text"][:40])
+                or (len(u["text"]) <= 80 and _heading_score(claim.title, u["text"]) >= 1)):
             return pos[id(u)], f"title at the start of a unit on p{page}"
     for u in on.get(page, []):
         if u["kind"] != "note" and title_match(claim.title, u["text"][:200]) and len(

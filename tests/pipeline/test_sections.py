@@ -512,3 +512,40 @@ def test_a_contents_page_continues_on_the_body_page_after_it():
     assert 11 in s.contents["in_body_pages"]
     tres = by_title["3. sub tres"]
     assert any("between" in ev for ev in tres.evidence), tres.evidence
+
+
+def test_a_contents_claim_and_a_head_run_for_one_chapter_merge_under_the_full_title():
+    """Unruh: chapter 2 is claimed by the contents at its title page and by the running
+    head "THE VAGABOND EYE/I" pages later: one section, titled by the contents,
+    starting where the title is, the head kept in the evidence. The introduction's
+    contents entry (no number) is found by its "Introduction:" prefix on the page."""
+    heads = {4: "CONSTRUCTING THINGS", 5: "CONSTRUCTING THINGS"}
+    heads.update({p: "THE VAGABOND EYE" for p in (8, 9, 10, 11, 12)})
+    units = [unit(0, 1, "Vanguards of Test", "heading"), unit(0, 1, "AUTHOR TEST"),
+             unit(0, 2, "Introduction"), unit(0, 2, "Alpha and Beta"),
+             unit(0, 2, "In the novel the vanguards meet their public."),
+             unit(0, 3, "Constructing Things", "heading"), unit(0, 3, "Sub"),
+             unit(0, 3, "It is necessary to undertake the conquest of the public."),
+             unit(0, 4, "The manifestos perform."), unit(0, 5, "They perform again."),
+             unit(0, 6, "Outward Turns of the Vagabond Eye", "heading"), unit(0, 6, "Portraits"),
+             unit(0, 6, "Distant voices reach my ears."), unit(0, 7, "The garden metaphor."),
+             unit(0, 8, "The artist hero unfolds."), unit(0, 9, "Many documents speak."),
+             unit(0, 10, "Isolated artists."), unit(0, 11, "Antiromanticism."),
+             unit(0, 12, "The end of the chapter.")]
+    rows = rows_for(13, heads, kinds={13: "contents"})
+    apparatus = [{"entry": "e" * 64, "page": 13, "label": None, "kind": "contents", "columns": 1,
+                  "lines": ["Contents", "Introduction: Alpha and Beta", "1. Constructing Things: Sub 3",
+                            "2. Outward Turns of the Vagabond Eye: Portraits 6"]}]
+    e = entry(units, rows, apparatus, [], stem="unruh6",
+              meta={"title": "Vanguards of Test", "author": "Author Test"})
+    s = sc.detect(e)
+    check_invariants(s, e.units)
+    chapters = [x for x in s.sections if x.level == 2]
+    assert [x.title for x in chapters] == ["Introduction: Alpha and Beta", "1. Constructing Things: Sub",
+                                           "2. Outward Turns of the Vagabond Eye: Portraits"]
+    assert [x.pdf_pages[0] for x in chapters] == [2, 3, 6]
+    assert all("contents" in x.sources for x in chapters)
+    eye = chapters[2]
+    assert "head" in eye.sources and eye.pdf_pages == [6, 12]
+    assert any("THE VAGABOND EYE" in ev for ev in eye.evidence), eye.evidence
+    assert "head" in chapters[1].sources
