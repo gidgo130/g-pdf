@@ -417,3 +417,62 @@ def test_authors_are_cleaned_of_heads_and_titles_and_must_read_as_person_names()
     somos = by_title["Somos"]
     assert somos.author is None and somos.confidence == "low"
     assert any("person names" in ev for ev in somos.evidence)
+
+
+def test_index_entries_without_numbers_and_with_damaged_numbers_are_placed_by_title_in_order():
+    """A body page between two index pages holds index entries whose number column was
+    lost (Manifiestos p. 450): each is placed by its title among the headings between the
+    anchored neighbours, in order; an index line whose number resolves to no page (an
+    OCR error) is placed the same way; leader junk is stripped from titles."""
+    names = ["ALFA", "BETA", "GAMMA", "DELTA", "EPSILON", "ZETA", "ETA", "OMEGA"]
+    units = [unit(0, 1, "Las vanguardias de prueba", "heading"), unit(0, 1, "EDITORA PRUEBA")]
+    for k, n in enumerate(names):
+        units.append(unit(0, k + 2, n, "heading"))
+        if n in ("GAMMA", "DELTA", "EPSILON", "ZETA"):
+            units.append(unit(0, k + 2, "AUTOR " + n.title()))
+        units.append(unit(0, k + 2, f"Texto de {n.title()} que sigue."))
+    units.append(unit(0, 10, "Sigue hasta el final."))
+    for n in ("GAMMA", "DELTA", "EPSILON", "ZETA"):             # p12: the number column
+        units.append(unit(0, 12, n))                             # was lost in the export
+        units.append(unit(0, 12, "Autor " + n.title()))
+    rows = rows_for(13, kinds={11: "index", 13: "index"})
+    apparatus = [{"entry": "e" * 64, "page": 11, "label": None, "kind": "index", "columns": 1,
+                  "lines": ["ÍNDICE", "Alfa 2", "Beta 3"]},
+                 {"entry": "e" * 64, "page": 13, "label": None, "kind": "index", "columns": 1,
+                  "lines": ["Eta ...oooccooscccnnncnn 0", "Omega ..<.o ooo ocooorrrs 9"]}]
+    e = entry(units, rows, apparatus, [], stem="textos4",
+              meta={"title": "Las vanguardias de prueba", "author": "Editora Prueba"})
+    s = sc.detect(e)
+    check_invariants(s, e.units)
+    by_title = {st.fold(x.title): x for x in s.sections}
+    for k, n in enumerate(names):
+        x = by_title[n.lower()]
+        assert x.pdf_pages[0] == k + 2, (n, x.pdf_pages, x.evidence)
+        assert x.sources == ["contents"], n
+    for n in ("Gamma", "Delta", "Epsilon", "Zeta"):
+        assert by_title[n.lower()].author == "Autor " + n, n
+        assert any("between" in ev for ev in by_title[n.lower()].evidence), n
+    eta = by_title["eta"]
+    assert any("number 0" in ev and "between" in ev for ev in eta.evidence), eta.evidence
+    assert 12 in s.contents["in_body_pages"]
+
+
+def test_author_lines_glued_authors_and_author_lists_with_a_revista_or_an_et_al():
+    assert sc._author_line("[Alberto Rojas Jiménez - Martín Bunster]") == \
+        "Alberto Rojas Jiménez, Martín Bunster"
+    assert sc._author_line("Jorge Luis Borges ·") == "Jorge Luis Borges"
+    assert sc._author_line("ANATOMIA DE MI ULTRA") is None            # a title in capitals
+    assert sc._glued_author("PALABRAS PRELIMINARES A GALERAS DE PAFOS Otilio Vigil-Díaz") == \
+        ("PALABRAS PRELIMINARES A GALERAS DE PAFOS", "Otilio Vigil-Díaz")
+    assert sc._glued_author("LA POESIA") == ("LA POESIA", None)
+    heads, titles = {"la raza cosmica"}, {"identidades"}
+    assert sc.clean_author("revista de avance, Alejo Carpentier, Martí Casanovas", "x",
+                           heads, titles)[0] == "Alejo Carpentier, Martí Casanovas"
+    assert sc.clean_author("Samuel R. Quiñones, Emilio R. Delgado y otros noístas", "x",
+                           heads, titles)[0] == "Samuel R. Quiñones, Emilio R. Delgado et al."
+    assert sc.clean_author("IDENTIDADES La raza cósmica José Vasconcelos", "La raza cósmica",
+                           heads, titles)[0] == "José Vasconcelos"
+    assert st._number_at_end("Guillermo de Torre: “Madrid, meridiano intelectual”, 594 o")[1] == "594"
+    assert sc._author_line("Jorge Luis Borges ¬") == "Jorge Luis Borges"
+    assert sc.clean_author("Ortelli y Gasset [Jorge Luis Borges y Carlos Mastronardi]", "x",
+                           heads, titles)[0] == "Jorge Luis Borges y Carlos Mastronardi"

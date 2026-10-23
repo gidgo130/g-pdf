@@ -388,6 +388,17 @@ def inbody_contents_pages(on: dict, page_count: int) -> set[int]:
     return out
 
 
+def _between_apparatus(e: Entry, on: dict) -> set[int]:
+    """Pages with units lying between two contents or index pages near the file's ends:
+    a contents page the export classed as body (Manifiestos p. 450, its number column
+    lost)."""
+    total = e.page_count or len(e.rows)
+    app = {a["page"] for a in e.apparatus if a.get("kind") in ("contents", "index")
+           and not (APPARATUS_EDGE < a["page"] / max(1, total) < 1 - APPARATUS_EDGE)}
+    return {pg for pg in on if pg not in app
+            and any(q in app for q in (pg - 1, pg - 2)) and any(q in app for q in (pg + 1, pg + 2))}
+
+
 def _contents_pages(e: Entry, on: dict, inbody: set, stats: dict) -> list[tuple[int, int, list]]:
     """(page, columns, lines) of every contents page: apparatus pages of kind contents or
     index that are not name indexes nor in-text indexes, and in-body contents pages."""
@@ -419,13 +430,16 @@ def _contents_pages(e: Entry, on: dict, inbody: set, stats: dict) -> list[tuple[
 def _contents_claims(e: Entry, lm: st.LabelMap, on: dict, grouping: set, stats: dict,
                      inbody: set) -> list[Claim]:
     """Claims from the contents and index pages: entries resolved to PDF pages in order
-    (labelled ones first; items without a page are found by their heading between the
-    labelled neighbours); headers get the page of their first child but look for their
-    own text just before it. Levels: a header's children one deeper than it."""
+    (labelled ones first; an item without a number, or whose number resolves to no page
+    or breaks the sequence (an OCR error), is found by its title among the headings
+    between its placed neighbours, in order; a numbered item whose page does not carry
+    its title moves to the page between its neighbours that does); headers get the page
+    of their first child but look for their own text just before it. Levels: a header's
+    children one deeper than it."""
     claims = []
     grouping_names = {fold(g) for g in grouping}
     headers = set(SERIES_NAMES) | set(PART_NAMES) | grouping_names
-    prev_page = 0
+    parsed: list[tuple[int, list, list]] = []
     for page_no, columns, lines in _contents_pages(e, on, inbody, stats):
         entries = st.parse_contents(lines, columns, headers)
         if not entries:
@@ -434,35 +448,16 @@ def _contents_claims(e: Entry, lm: st.LabelMap, on: dict, grouping: set, stats: 
                                        else "(nothing parsed)"))
             continue
         for en in entries:                        # "México" alone under a header: a grouping
-            if (not en.header and not en.label and not en.comma
+            if (not en.header and not en.label and not en.comma and not en.author
                     and len(en.title.split()) <= 2):
                 en.header = True
         plain = [en for en in entries if not en.header]
         stats["pages"].append(page_no)
         stats["parsed"] += len(plain)
-        # pass 1: labelled entries, in order
-        for en in plain:
-            if not en.label:
-                continue
-            page = lm.page(en.label, after=prev_page)
-            if page is not None and page < prev_page - 2:
-                stats["out_of_order"].append(
-                    f"«{en.title[:40]}» {en.label} -> p{page} after p{prev_page}")
-                page = None
-            if page is None:
-                stats["unresolved"].append(f"«{en.title[:40]}» {en.label}")
-                continue
-            en.page = page
-            prev_page = max(prev_page, page)
-        # pass 2: items without a label, between their labelled neighbours
-        for k, en in enumerate(plain):
-            if en.label or en.page:
-                continue
-            before = [x for x in plain[:k] if x.page]
-            after = [x for x in plain[k + 1:] if x.page]
-            lo = before[-1].page if before else 1
-            hi = after[0].page if after else lo + 60
-            en.page = _heading_between(en.title, lo, hi, on)
+        parsed.append((page_no, entries, plain))
+    plain_all = [en for _, _, plain in parsed for en in plain]
+    notes = _place_entries(plain_all, lm, on, e.units, stats)
+    for page_no, entries, plain in parsed:
         if page_no in inbody:
             placed = [en for en in plain if en.page]
             if len(placed) < 2 or len(placed) < 0.5 * len(plain):
@@ -471,7 +466,13 @@ def _contents_claims(e: Entry, lm: st.LabelMap, on: dict, grouping: set, stats: 
                 stats["inbody"].remove(page_no)
                 stats["pages"].remove(page_no)
                 stats["parsed"] -= len(plain)
-                continue
+                for en in plain:
+                    en.page = None
+    for page_no, entries, plain in parsed:
+        if page_no not in stats["pages"]:
+            continue
+        prev_page = max((x.page for q, _, pl in parsed if q <= page_no for x in pl if x.page),
+                        default=0)
         # claims, with the header context for the levels
         ctx: list[tuple[int, int]] = []            # (relative level, absolute level)
         pending: list[ContentsEntry] = []
@@ -501,10 +502,11 @@ def _contents_claims(e: Entry, lm: st.LabelMap, on: dict, grouping: set, stats: 
                 ctx.pop()
             level = (ctx[-1][1] + (en.level - ctx[-1][0])) if ctx else (1 + en.level)
             level = max(2, min(3, level))
+            evidence = [f"contents p{page_no}: «{en.title[:60]}» {en.label or ''} -> p{en.page}"]
+            if id(en) in notes:
+                evidence.append(notes[id(en)])
             c = Claim(en.title, en.page, "contents", level=level, author=en.author,
-                      evidence=[f"contents p{page_no}: «{en.title[:60]}» "
-                                f"{en.label or ''} -> p{en.page}"],
-                      key=str(page_no), label=en.label)
+                      evidence=evidence, key=str(page_no), label=en.label)
             c.rel = en.level
             c.by_phrase = en.by_phrase
             claims.append(c)
@@ -515,11 +517,110 @@ def _contents_claims(e: Entry, lm: st.LabelMap, on: dict, grouping: set, stats: 
     return claims
 
 
-def _heading_between(title: str, lo: int, hi: int, on: dict) -> int | None:
-    """The first page in [lo, hi) with a heading that carries ``title``."""
+def _author_line(title: str) -> str | None:
+    """The names when an unnumbered index line is only a list of person names (the
+    authors of the text above, in a TITLE / Author layout), else None."""
+    t = re.sub(r"[^\w\s.'’-]", " ", title).strip(" .,;:-–")     # "[...]", "·", "¬"
+    if t.isupper():
+        return None                               # "ANATOMIA DE MI ULTRA": a title
+    parts = [x.strip() for x in _NAME_SEP.split(t) if x.strip()]
+    if parts and all(name_like(x) for x in parts):
+        return ", ".join(parts)
+    return None
+
+
+def _glued_author(title: str) -> tuple[str, str | None]:
+    """"PALABRAS PRELIMINARES A GALERAS DE PAFOS Otilio Vigil-Díaz": a title in capitals
+    with its author glued on (the number column lost) is split."""
+    toks = title.split()
+    for k in range(len(toks) - 1, 1, -1):
+        head, tail = " ".join(toks[:k]), " ".join(toks[k:])
+        if head.isupper() and len(toks[:k]) >= 2 and not tail.isupper() and name_like(tail):
+            return head, tail
+        if toks[k - 1].isupper():
+            break
+    return title, None
+
+
+def _window(plain: list, k: int) -> tuple[int, int]:
+    """[lo, hi) for the title search of plain[k]: the pages of its placed neighbours."""
+    before = [x for x in plain[:k] if x.page]
+    after = [x for x in plain[k + 1:] if x.page]
+    lo = before[-1].page if before else 1
+    hi = after[0].page if after else lo + 60
+    return lo, hi
+
+
+def _place_entries(plain: list, lm: st.LabelMap, on: dict, units: list, stats: dict) -> dict:
+    """Pages for the entries, in three passes (see _contents_claims); {id(entry): note}
+    for the entries placed by their title."""
+    notes, why = {}, {}
+    prev_page = 0
+    for en in plain:                              # pass 1: the numbers, in order
+        if not en.label:
+            continue
+        page = lm.page(en.label, after=prev_page)
+        if page is not None and page < prev_page - 2:
+            stats["out_of_order"].append(
+                f"«{en.title[:40]}» {en.label} -> p{page} after p{prev_page}")
+            why[id(en)] = f"the number {en.label} (p{page}) breaks the sequence after p{prev_page}"
+            page = None
+        elif page is None:
+            why[id(en)] = f"the number {en.label} resolves to no page"
+        if page is None:
+            continue
+        en.page = page
+        prev_page = max(prev_page, page)
+    pos = {id(u): i for i, u in enumerate(units)}
+    for k, en in enumerate(plain):                # pass 2: no usable number: the title,
+        if en.page:                               # between the placed neighbours
+            continue
+        if not en.label and not en.author:
+            names = _author_line(en.title)        # "[Alberto Rojas Jiménez - Martín
+            if names:                             # Bunster]": the authors of the entry
+                owner = next((x for x in reversed(plain[:k]) if x.page), None)   # before
+                if owner is not None and not owner.author:
+                    owner.author = names
+                stats["unresolved"].append(f"«{en.title[:40]}» (an author line)")
+                continue
+            en.title, en.author = _glued_author(en.title)
+        lo, hi = _window(plain, k)
+        pg = _title_between(en.title, lo, hi, on)
+        if pg is None:
+            stats["unresolved"].append(f"«{en.title[:40]}» {en.label or '(no number)'}")
+            continue
+        en.page = pg
+        notes[id(en)] = (why.get(id(en)) or "no page number in the index") + \
+            f"; title found on p{pg} between p{lo} and p{hi}"
+    for k, en in enumerate(plain):                # pass 3: a number whose page does not
+        if not en.page or not en.label or id(en) in notes or len(st.words(en.title, 1)) < 1:
+            continue                              # carry the title: an OCR error
+        _, how = st.anchor(Claim(en.title, en.page, "contents"), units, on, pos)
+        if not how.startswith(("first unit", "last unit")):
+            continue
+        lo, hi = _window(plain, k)
+        pg = _title_between(en.title, lo, hi, on, strong=True)
+        if pg is not None and pg != en.page:
+            notes[id(en)] = (f"the number {en.label} gives p{en.page}, which does not carry "
+                             f"the title; title found on p{pg} between p{lo} and p{hi}")
+            en.page = pg
+    return notes
+
+
+def _title_between(title: str, lo: int, hi: int, on: dict, strong: bool = False) -> int | None:
+    """The first page in [lo, hi) with a heading, or a short unit in capitals, that
+    carries ``title`` (``strong``: the same title, not only its words)."""
+    need = 1.0 if strong else 0.5
     for pg in sorted(q for q in on if lo <= q < hi):
         for u in on[pg]:
-            if u["kind"] == "heading" and st._heading_matches(title, u["text"]):
+            text = u["text"]
+            if u["kind"] != "heading" and not (len(text) <= 80 and "\n" not in text
+                                               and text.strip().isupper()):
+                continue
+            if len(fold(title)) < 8:                 # "Eta" is not "Beta": short titles
+                if st._starts_with(title, text) and st.same_numerals(title, text):
+                    return pg                          # open the unit, no fuzzy ratio
+            elif st._heading_score(title, text) >= need:
                 return pg
     return None
 
@@ -705,7 +806,7 @@ _NOT_PERSON = {"movimiento", "grupo", "revista", "vanguardia", "manifiesto", "ar
                "circulo", "taller", "teatro", "poetas", "pintores", "artistas", "escritores",
                "anonimo", "anonymous", "varios", "autores", "estridentista", "estridentistas",
                "ultraista", "ultraistas", "creacionista", "surrealista", "surrealistas"}
-_NAME_SEP = re.compile(r"\s*(?:,|;|\by\b|\be\b|\bet al\.?|\band\b|/|\s\.\s)\s*")
+_NAME_SEP = re.compile(r"\s*(?:,|;|\by\b|\be\b|\bet al\.?|\band\b|/|\s\.\s|\s[-–]\s)\s*")
 
 
 def clean_author(author: str | None, title: str, heads: set, titles: set) -> tuple[str | None, str | None]:
@@ -716,13 +817,22 @@ def clean_author(author: str | None, title: str, heads: set, titles: set) -> tup
         return None, None
     a = author.strip()
     m = re.search(r"\[([^\]]+)\]", a)
-    if m and len(a[:m.start()].split()) <= 1 and not a[m.end():].strip(" ,."):
-        a = m.group(1).strip()                        # "Proa [Jorge Luis Borges]"
-    a = re.sub(r"[\[\]]", "", a).strip()
+    if m and len(a[:m.start()].split()) <= 3 and not a[m.end():].strip(" ,."):
+        a = m.group(1).strip()        # "Proa [Jorge Luis Borges]": a revista's editors;
+    a = re.sub(r"[\[\]]", "", a).strip()   # "Ortelli y Gasset [J. L. Borges]": a pseudonym
+    m = re.match(r"^(?P<caps>[A-ZÁÉÍÓÚÑÜ][A-ZÁÉÍÓÚÑÜ\s.,:;-]*?)\s+(?=[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü])", a)
+    if m and any(len(w.strip(".,:;-")) >= 4 for w in m.group("caps").split()):
+        a = a[m.end():].strip()       # "IDENTIDADES La raza cósmica José V.": a header
+    et_al = re.search(r"\s*,?\s*\b(?:y|e|and|et)\s+(?:otros|outros|others|al)\b.*$", a)
+    if et_al and et_al.start() > 0:
+        a = a[:et_al.start()].strip(" ,")                    # "... y otros noístas"
     fa = fold(a)
-    for h in sorted(heads | titles, key=len, reverse=True):
-        if len(h) >= 4 and fa.startswith(h + " ") and len(fa) > len(h) + 3:
-            a, fa = a[len(h):].strip(" ,.:;-"), fa[len(h) + 1:]     # "Surrealismo Alejo ..."
+    for _ in range(3):                            # "IDENTIDADES La raza cósmica José V.":
+        for h in sorted(heads | titles | {fold(title)}, key=len, reverse=True):
+            if len(h) >= 4 and fa.startswith(h + " ") and len(fa) > len(h) + 3:
+                a, fa = a[len(h):].strip(" ,.:;-"), fa[len(h) + 1:]   # a header, a head
+                break                                                 # and the title
+        else:
             break
     if any(len(h) >= 4 and (ratio(fa, h) >= 0.75 or fa == h) for h in heads | titles) or \
             ratio(fa, fold(title)) >= 0.75:
@@ -734,8 +844,13 @@ def clean_author(author: str | None, title: str, heads: set, titles: set) -> tup
             st._INITIAL.match(tok.strip("'’\"“”()")) or tok in st._PARTICLES
             or (tok[:1].isupper() and tok.lower() not in st._NOT_NAMES
                 and fold(tok) not in _NOT_PERSON) for tok in toks)
+    if len(parts) >= 2 and not person(parts[0]) and all(person(p) for p in parts[1:]):
+        a = ", ".join(p.strip(" .") for p in parts[1:])     # "revista de avance, Alejo
+        parts = parts[1:]                                   # Carpentier, ...": its editors
     if not parts or not all(person(p) for p in parts) or len(a) > 160:
         return None, f"«{author[:50]}» does not read as a list of person names"
+    if et_al and et_al.start() > 0:
+        a += " et al."
     return a, None
 
 
@@ -912,6 +1027,7 @@ def detect(e: Entry, decisions: dict | None = None) -> Structure:
     front_pages = {r["page"] for r in e.rows if r.get("kind") == "front" and "page" in r}
     has_contents = any(a.get("kind") == "contents" for a in e.apparatus)
     inbody = set() if has_contents else inbody_contents_pages(on, page_count)
+    inbody |= _between_apparatus(e, on)
     skip = front_pages | inbody | contents_like_pages(on, page_count)
     stats = {"pages": [], "parsed": 0, "matched": 0, "skipped": [], "out_of_order": [],
              "unresolved": [], "inbody": []}
@@ -981,7 +1097,7 @@ def detect(e: Entry, decisions: dict | None = None) -> Structure:
     # 3. merge the claims of each unit; authors from author-only heads; duplicates
     head_keys = {fold(h) for parts in st.heads_of(e.rows).values() for h in parts
                  if not name_like(h)}                   # contributor heads are authors
-    contents_titles = {fold(c.title) for c in c_claims if c.source == "contents"
+    contents_titles = {fold(c.title) for c in c_claims if c.source in ("contents", "header")
                        and (len(c.title.split()) >= 2 or len(c.title) >= 6)}
     merged = [_merge(g, units, not_authors, head_keys, contents_titles) for g in groups.values()]
     dropped_groupings = {fold(c.title) for c, why in s.outline.dropped if "grouping" in why}

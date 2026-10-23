@@ -139,14 +139,14 @@ _INDEX_HEAD = re.compile(r"^\W*(í|i)ndice( general)?\W*$|^\W*(sumario|contents|
 _NUM_ONLY = re.compile(r"^\s*(\d{1,4}|[ivxlc]{1,8}|[IVXLC]{1,8})\s*$")
 _SPACED = re.compile(r"(?<![\d\s])\s(\d(?:\s\d){1,3})\s*$")
 _TRAIL = re.compile(r"^(?P<title>.*?)(?P<lead>\s*(?:[…·]|\.\s*){1,}\s*|\s+|,\s*)"
-                    r"(?P<num>\d{1,4}|[ivxlc]{1,8}|[IVXLC]{1,8})\s*[-+xX*.]?\s*$")
+                    r"(?P<num>\d{1,4}|[ivxlc]{1,8}|[IVXLC]{1,8})\s*[-+xX*.o]?\s*$")
 _LEADER = re.compile(r"(?:\.\s*){3,}|…")
 _ORDINAL = re.compile(r"^(?P<n>\d{1,2}|[ivx]{1,5}|[IVX]{1,5}|ni|nl|lll|ll|il)\.\s+(?P<rest>.+)$")
 _INLINE_SEP = re.compile(r"\s*\.\s*[—–]+\s*(?=\S)|\s*\.\s*-[–-]+\s*(?=[A-ZÁÉÍÓÚÑ“(])"
                          r"|\s*[—–]{1,2}\s*(?=[A-ZÁÉÍÓÚÑ“(])")
 _AFTER_NUM = re.compile(r"(?<=\d)\s*[;,]\s+(?!\d)")
-_QUOTED = re.compile(r"^[“\"](?P<title>[^”\"]+)[”\"]\s*(?:\[(?P<author>[^\]]+)\])?\s*$")
-_COLON = re.compile(r"^(?P<author>[^:“”\"]+?):\s*(?P<title>.+)$")
+_QUOTED = re.compile(r"^[“\"«](?P<title>[^”\"»]+)[”\"»]\s*(?:\[(?P<author>[^\]]+)\])?\s*$")
+_COLON = re.compile(r"^(?P<author>[^:“”\"«»]+?):\s*(?P<title>.+)$")
 
 
 def _strip_junk(title: str) -> str:
@@ -156,9 +156,11 @@ def _strip_junk(title: str) -> str:
     t = re.sub(r"(?:…|(?:\.\s*){3,})\s*$", "", t).strip()
     toks = t.split()
     while toks and (re.fullmatch(r"[A-Z]", toks[-1]) and toks[-1] not in "IVX"
-                    or (len(toks) > 1 and (re.fullmatch(r"[o0c.«»+]+", toks[-1]) or (
-                        len(toks[-1]) >= 6 and len(set(toks[-1].replace(".", ""))) <= 3)))):
-        toks.pop()                                    # "E", "0...", "ooooccorcnancaa"
+                    or (len(toks) > 1 and (re.fullmatch(r"[o0c.«»+<>]+", toks[-1]) or (
+                        len(toks[-1]) >= 6 and len(set(toks[-1].replace(".", ""))) <= 3) or (
+                        len(toks[-1]) >= 5 and re.fullmatch(r"[o0Oc.«»+<>snrñ·]+", toks[-1])
+                        and ("oo" in toks[-1] or ".." in toks[-1]))))):
+        toks.pop()                   # "E", "0...", "ooooccorcnancaa", "...oooccooscccnnncnn"
     t = " ".join(toks).strip(" .:,;·-–—>")
     if t.startswith("“") and "”" not in t:
         t = t[1:]                                     # an opening quote the OCR left alone
@@ -822,13 +824,17 @@ def units_on(units: list[dict]) -> dict[int, list[dict]]:
     return out
 
 
+def _letters(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", fold(text))
+
+
 def match_score(title: str, text: str) -> float:
     """1.0: the same title (fuzzy) or the text opens with it; 0.5: the title's words are
     in the text and the text's in the title; 0: no match. Numerals must agree."""
     if not same_numerals(title, text):
         return 0.0
-    if ratio(title, text) >= 0.85:
-        return 1.0
+    if ratio(title, text) >= 0.85 and (len(fold(title)) >= 8 or _letters(title) == _letters(text)):
+        return 1.0                                 # "Eta" is not "Beta": short titles, exactly
     if title_match(title, text) and title_match(text, title):
         return 0.5
     return 0.0
@@ -1175,7 +1181,13 @@ def _starts_with(title: str, text: str) -> bool:
 def _heading_score(title: str, text: str) -> float:
     if _starts_with(title, text) and same_numerals(title, text):
         return 1.0
-    return match_score(title, text)
+    score = match_score(title, text)
+    if score:
+        return score
+    head, _, sub = title.partition(". ")           # "YO. Fragmento": the heading "YO"
+    if sub and len(head) >= 2 and fold(head) == fold(text) and same_numerals(head, text):
+        return 1.0
+    return 0.0
 
 
 def _heading_matches(title: str, text: str) -> bool:
