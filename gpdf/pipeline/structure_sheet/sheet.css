@@ -93,9 +93,8 @@ table.tree th, table.tree td {
   text-align: left; padding: 3px 5px; border-bottom: 1px solid var(--line); vertical-align: top;
 }
 table.tree th { font-weight: 600; background: var(--bg); }
-table.tree tr.sec.lvl1 td.title { padding-left: 4px; font-weight: 600; }
-table.tree tr.sec.lvl2 td.title { padding-left: 22px; }
-table.tree tr.sec.lvl3 td.title { padding-left: 40px; }
+table.tree tr.sec td.title { padding-left: calc(4px + var(--depth, 0) * 18px); }   /* any depth */
+table.tree tr.sec[data-level="1"] td.title { font-weight: 600; }
 table.tree tr.sec.lowconf { background: var(--warn-bg); }
 table.tree input.t { width: 100%; min-width: 180px; }
 table.tree input.a { width: 100%; min-width: 120px; }

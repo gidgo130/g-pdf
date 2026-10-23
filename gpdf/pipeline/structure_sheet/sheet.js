@@ -568,7 +568,6 @@
     };
     const seqIn = stop(el("input", { type: "number", class: "seq", min: "1", max: String(e.units.length), value: String(seq) }));
     const level = stop(el("select", { class: "split-level" }));
-    [1, 2, 3].forEach((l) => { const o = el("option", { value: String(l) }, "level " + l); if (l === x.level) o.selected = true; level.appendChild(o); });
     const u0 = unit(e, seq);
     const title = stop(el("input", { type: "text", class: "split-title", placeholder: "title", value: u0 && u0.kind === "heading" ? u0.text.slice(0, 120) : "" }));
     const author = stop(el("input", { type: "text", class: "split-author", placeholder: "author", value: x.author || "" }));
@@ -579,8 +578,11 @@
       const s = Number(seqIn.value);
       const u = unit(e, s);
       preview.textContent = u ? unitLabel(e, s) : "no unit " + seqIn.value;
-      const at = u ? inner(s) : null;
-      if (at) level.value = String(at.level);
+      // levels 1 to one below the deepest section at the unit, that one's level chosen
+      const at = u ? inner(s) : x;
+      level.textContent = "";
+      for (let l = 1; l <= at.level + 1; l++) level.appendChild(el("option", { value: String(l) }, "level " + l));
+      level.value = String(at.level);
     };
     seqIn.addEventListener("input", showPreview);
     showPreview();
@@ -607,7 +609,8 @@
       .forEach((h) => head.appendChild(el("th", null, h)));
     tab.appendChild(head);
     view.secs.forEach((x, i) => {
-      const tr = el("tr", { class: "sec lvl" + x.level + (x.confidence === "low" ? " lowconf" : ""), "data-key": keyOf(x), "data-first": String(x.start + 1) });
+      const tr = el("tr", { class: "sec" + (x.confidence === "low" ? " lowconf" : ""), "data-key": keyOf(x), "data-first": String(x.start + 1),
+        "data-level": String(x.level), style: "--depth: " + (x.level - 1) });
       const ttd = el("td", { class: "title" });
       const t = stop(el("input", { type: "text", class: "t", value: x.title, "aria-label": "title" }));
       t.addEventListener("change", () => editSection(e, x, "title", t.value.trim()));

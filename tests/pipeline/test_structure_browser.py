@@ -154,6 +154,39 @@ def test_deep_sections_replay_as_in_python(browser, out, text_dir, capsys):
     assert page.errors == []
 
 
+def test_split_form_offers_one_level_below_the_deepest_and_the_tree_indents_by_level(
+        browser, out, text_dir):
+    e = anthology()
+    dec = {"schema": 1, "entries": {ID: {"ops": deep_ops(e)[:2]}}}     # Cuba 4, Madrid 5
+    (out / sd.DECISIONS).write_text(json.dumps(dec), "utf-8")
+    assert cli.main(["structure", "--text", str(text_dir), "--out", str(out)]) == 0
+    page = open_sheet(browser, out / sd.SHEET)
+    page.locator(f'tr.entry[data-id="{ID}"]').click()
+    pads = [sec(page, first, level).locator("td.title").evaluate(
+        "td => parseFloat(getComputedStyle(td).paddingLeft)")
+        for first, level in ((15, 1), (21, 2), (25, 3), (26, 4), (27, 5))]
+    assert all(b - a >= 12 for a, b in zip(pads, pads[1:])), pads
+    assert pads[-1] <= 100                                    # readable at depth 5
+    sec(page, 27, 5).locator("button.split").click()
+    form = page.locator("tr.splitrow")
+    levels = form.locator("select.split-level option")
+    fill(form.locator("input.seq"), "27")
+    form.locator("input.seq").dispatch_event("input")
+    assert levels.all_inner_texts() == [f"level {k}" for k in range(1, 7)]
+    assert form.locator("select.split-level").input_value() == "5"
+    fill(form.locator("input.seq"), "23")
+    form.locator("input.seq").dispatch_event("input")
+    assert levels.all_inner_texts() == ["level 1", "level 2", "level 3"]
+    fill(form.locator("input.seq"), "27")
+    form.locator("input.seq").dispatch_event("input")
+    form.locator("select.split-level").select_option("6")
+    form.locator("input.split-title").fill("Nota")
+    form.locator("button.add-split").click()
+    assert (27, 27, 6, "Nota", "Otro", "primary") in js_tree(page)
+    assert sec(page, 27, 6).count() == 1
+    assert page.errors == []
+
+
 def test_stale_decisions_are_shown_refused_ops_say_why_and_unsaved_work_restores(
         browser, out, text_dir):
     dec = {"schema": 1, "entries": {ID: {"ops": [
