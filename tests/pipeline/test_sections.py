@@ -549,3 +549,33 @@ def test_a_contents_claim_and_a_head_run_for_one_chapter_merge_under_the_full_ti
     assert "head" in eye.sources and eye.pdf_pages == [6, 12]
     assert any("THE VAGABOND EYE" in ev for ev in eye.evidence), eye.evidence
     assert "head" in chapters[1].sources
+
+
+def test_a_bracketed_list_of_names_in_the_running_head_is_the_essays_author_not_a_section():
+    """Caribe: the last essay is signed "Sin autor" with the attributed names in the
+    running head "[F. Mieses Burgos, F. Gatón Arce, Manuel Llanes et al.]": one section,
+    its author those names, starting at the "Sin autor" line."""
+    heads = {3: "Autor Uno", 4: "Autor Uno",
+             6: "[F. Mieses Burgos, F. Gatón Arce, Manuel Llanes et al.]",
+             7: "Sin autor [F. Mieses Burgos, F. Gatón Arce, Manuel Llanes et al.]"}
+    units = [unit(0, 1, "Las vanguardias en el Caribe", "heading"), unit(0, 1, "EDITORA PRUEBA"),
+             unit(0, 2, "Autor Uno"), unit(0, 2, "Primer ensayo", "heading"),
+             unit(0, 2, "El primer ensayo empieza aquí."), unit(0, 3, "Sigue el primero."),
+             unit(0, 4, "Y acaba el primero."),
+             unit(0, 5, "Sin autor", "heading"), unit(0, 5, "La Poesía Sorprendida y el Postumismo*", "heading"),
+             unit(0, 5, "Ha llegado una hora de visiones."), unit(0, 6, "Sentido de escuela."),
+             unit(0, 7, "La posición de los Postumistas.")]
+    rows = rows_for(7, heads)
+    toc = [[1, "Primer ensayo", 2], [1, "La Poesía Sorprendida y el Postumismo", 5]]
+    e = entry(units, rows, [], toc, stem="caribe7",
+              meta={"title": "Las vanguardias en el Caribe", "author": "Editora Prueba"})
+    s = sc.detect(e)
+    check_invariants(s, e.units)
+    essays = [x for x in s.sections if not x.implicit]
+    assert [x.title for x in essays] == ["Primer ensayo", "La Poesía Sorprendida y el Postumismo"], \
+        [(x.title, x.pdf_pages) for x in s.sections]
+    first, last = essays
+    assert first.author == "Autor Uno"
+    assert last.author == "F. Mieses Burgos, F. Gatón Arce, Manuel Llanes et al."
+    assert last.first == 8 and last.pdf_pages == [5, 7]              # from the "Sin autor" line
+    assert last.confidence == "high" and "head" in last.sources

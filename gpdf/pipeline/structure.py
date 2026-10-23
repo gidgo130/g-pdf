@@ -89,6 +89,31 @@ _NOT_NAMES = {"an", "the", "of", "and", "to", "in", "on", "for", "or", "with", "
 _INITIAL = re.compile(r"^[A-ZÁÉÍÓÚÑÜ]\.?$")
 
 
+_ANON = ("sin autor", "anonimo", "anonymous", "anon.")
+
+
+def names_list(text: str) -> str | None:
+    """"[F. Mieses Burgos, F. Gatón Arce, Manuel Llanes et al.]", "Sin autor [...]": a
+    list of person names (brackets, "et al." and an anonymity note allowed), joined by
+    ", " with the "et al."; else None."""
+    t = text.strip()
+    ft = fold(t)
+    for pre in _ANON:
+        if ft.startswith(pre):
+            t = t[len(pre):].strip(" :.,")
+            break
+    t = re.sub(r"[\[\]]", " ", t).strip()
+    m = re.search(r"\s*,?\s*\b(?:et al\.?|y otros|e outros|and others)\s*$", t, re.I)
+    et_al = bool(m) and m.start() > 0
+    if et_al:
+        t = t[:m.start()]
+    parts = [p.strip(" .") for p in re.split(r"\s*(?:,|;|\by\b|\be\b|\band\b|/)\s*", t)
+             if p.strip(" .")]
+    if parts and all(name_like(p) for p in parts):
+        return ", ".join(parts) + (" et al." if et_al else "")
+    return None
+
+
 def name_like(text: str) -> bool:
     """A person's name (or two): 2-6 tokens, each a capitalised word, an initial or a
     particle; no digits, no colon, no sentence end."""
@@ -1128,8 +1153,8 @@ def head_boundaries(rows: list[dict], units: list[dict]) -> list[Claim]:
             k += 1
             group.append(runs[k])
         k += 1
-        names = [r for r in group if name_like(r.text)]
-        others = [r for r in group if not name_like(r.text)]
+        names = [r for r in group if name_like(r.text) or names_list(r.text)]
+        others = [r for r in group if r not in names]
         enclosing = None
         if len(others) > 1:
             longest = max(others, key=lambda r: r.last)
@@ -1206,7 +1231,8 @@ def _author_lines_before(units: list[dict], k: int, page: int, author: str | Non
         t = units[j - 1]["text"].strip()
         short = len(t) <= 60 and "\n" not in t and not t.endswith((".", ":", ";", ","))
         if short and (name_like(t) or (author and ratio(t, author) >= 0.8)
-                      or re.match(r"^nota extensa \d+", fold(t))):
+                      or re.match(r"^nota extensa \d+", fold(t))
+                      or fold(t).strip(" .:") in _ANON or names_list(t)):
             j -= 1
         else:
             break

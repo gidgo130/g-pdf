@@ -1169,7 +1169,7 @@ def detect(e: Entry, decisions: dict | None = None) -> Structure:
         s.notes.append(f"claim «{c.title[:50]}» ({c.source}) dropped: {why}")
     # 3. merge the claims of each unit; authors from author-only heads; duplicates
     head_keys = {fold(h) for parts in st.heads_of(e.rows).values() for h in parts
-                 if not name_like(h)}                   # contributor heads are authors
+                 if not name_like(h) and not st.names_list(h)}   # contributor heads
     contents_titles = {fold(c.title) for c in c_claims if c.source in ("contents", "header")
                        and (len(c.title.split()) >= 2 or len(c.title) >= 6)}
     merged = [_merge(g, units, not_authors, head_keys, contents_titles) for g in groups.values()]
