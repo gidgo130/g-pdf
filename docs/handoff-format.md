@@ -82,7 +82,7 @@ document order, then one `para` line per unit of text in reading order.
 | `type` | `"section"` | |
 | `id` | string | `"s001"`, `"s002"`, … unique within the file |
 | `parent` | string or null | id of the enclosing section |
-| `level` | 1, 2 or 3 | 1 part, 2 section (essay, text, chapter), 3 subsection |
+| `level` | int, 1 or more | 1 part, 2 section (essay, text, chapter), 3 subsection, 4 and deeper as the owner nests them (e.g. the texts of a group inside a part). Detection gives 1-3 |
 | `title` | string | |
 | `author` | string or null | the author of this text, e.g. the critic who wrote an essay in an anthology or the author of a manifesto. Null when it is the book's author or unknown |
 | `role` | string | see [Roles](#roles) |
@@ -139,7 +139,10 @@ instead of `pdf_pages`, `printed` and `printed_inferred`. In its `file` line,
    `section` gives its id.
 4. Sections tile the file. They come in document order. The first one starts
    at seq 1 at level 1. A section covers `first..last`, and its parent's range
-   contains its own. Every seq falls in at least one section.
+   contains its own. Every seq falls in at least one section. Levels have no
+   upper limit: a section runs to the next section of the same or a smaller
+   level, and its parent is the nearest enclosing section of a smaller level
+   (normally one level up).
 5. A para's role is the role of its section (`section` → `role`), the deepest
    one; an enclosing section's role does not override it.
 6. Citations: section `author` and `title`, then the para's `printed` label,

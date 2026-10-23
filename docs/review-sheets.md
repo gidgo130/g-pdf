@@ -201,7 +201,11 @@ first.
 - A **section** is a start point: the unit it starts at and its **level**.
   Level 1 is a part (front matter, an anthology's critical part, the
   bibliography, the plates), level 2 a section (an essay, a text, a chapter,
-  an act), level 3 a subsection. There are only three levels.
+  an act), level 3 a subsection. The detector stops at level 3; you can nest
+  deeper (level 4, 5, ...), for example the texts of a group inside a part.
+  A section is at most one level deeper than the section around it (its
+  parent): a level-4 section sits inside a level-3 one, never directly inside
+  a level 2.
 - A section runs until the next section of the same level or a higher one
   (a smaller number). A level-2 section ends at the next level-2 or level-1
   start.
@@ -256,8 +260,8 @@ whether the metadata is confirmed.
   when it does not apply. **Remove** deletes one decision. Later decisions
   then replay without it, so check that they still apply.
 
-**Sections**: the tree after your decisions. Level-2 and level-3 titles are
-indented. Rows detected with low confidence are shaded. Columns:
+**Sections**: the tree after your decisions. Titles are indented one step per
+level, at any depth. Rows detected with low confidence are shaded. Columns:
 
 - **Title**, **Author**, **Role**: edit them in place. Each change adds an
   edit decision; several changes in a row to the same section go into one
@@ -277,12 +281,15 @@ indented. Rows detected with low confidence are shaded. Columns:
   that starts at the same unit as its parent; move the parent instead.
 - **Merge** (not on the first section): removes this boundary. Its units join
   the section before, and its title, author and role are gone. Sections
-  inside it stay.
+  inside it stay. If they now sit two levels below their new parent, change
+  their level too (merge and split them, see below).
 - **Split…**: starts a new section at a unit inside this one. Fill in the
   unit number (it starts at the next heading, and the line below shows that
   unit's text), the level, the title, the author and the role, then **Add
   split**. The level is set to that of the deepest section at that unit;
-  change it if needed.
+  change it if needed. The list offers levels 1 down to one below that
+  deepest section; a split that would land two levels below the section
+  around it is refused.
 
 A decision is tried before it is added. If it would not apply (the section is
 gone, or a move would empty a section), the sheet refuses it and says why.
@@ -294,10 +301,9 @@ gone, or a move would empty a section), the sheet refuses it and says why.
 - **Cut inside a unit.** Sections start at units. If a heading is glued to the
   end of the paragraph before it, start the section at the nearer unit
   boundary.
-- **A fourth level.** Fold the deepest headings into level 3, or make them
-  part of the level above.
-- **Put two sections of the same level at one unit.** One part, one section
-  and one subsection may start at the same unit.
+- **Put two sections of the same level at one unit.** Sections of different
+  levels may start at the same unit (a part, its first section, that one's
+  first subsection, ...).
 
 ### Stale and unmatched
 
@@ -305,8 +311,9 @@ Each decision names a unit by its number and a short hash of its text.
 
 - A decision is **stale** when that unit's text has changed, which means the
   book was exported again. It is not applied. Remove it and decide again.
-- A decision is **unmatched** when the section it names no longer exists, or
-  when it would break the order of sections. It is not applied either.
+- A decision is **unmatched** when the section it names no longer exists,
+  when it would break the order of sections, or when a split would start a
+  section two or more levels below the section around it. It is not applied either.
 
 `gpdf-cli structure` prints how many decisions applied and how many are stale
 or unmatched. `handoff` marks an entry's structure as confirmed only when it

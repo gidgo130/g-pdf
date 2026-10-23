@@ -10,7 +10,8 @@ Levels: 1 = part (front matter, a bibliography, an anthology's critical part, no
 plates, index, back), 2 = section (an essay, a text, a chapter, a canto, an act, a
 country block), 3 = subsection (listed by a contents page or a bookmark, or a bibliography
 or notes heading inside an essay). An implicit part that holds exactly one section
-collapses into it (the play, a single essay).
+collapses into it (the play, a single essay). Detection stops at level 3; the owner's
+decisions may nest deeper (structure_decisions), so code past detection takes any level.
 """
 
 from __future__ import annotations
