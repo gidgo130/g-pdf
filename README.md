@@ -278,11 +278,75 @@ fixes** for an entry in the review sheet to turn the word lists off for it,
 for a poet's invented words. `--only TEXT` and `--pages 74-75` (with
 `--only`) are for quick checks; an existing output needs `--force`.
 
+### Structure and handoff
+
+`structure` divides each exported entry into parts, sections (an essay, a
+text, a chapter) and subsections. Each one gets a title, its own author (the
+critic of an anthology essay, the manifesto's author), a role (front,
+editorial, primary, criticism, notes, bibliography, index, back, other), its
+pages, and a confidence with the evidence behind it. You check this in a
+review sheet. `handoff` then writes the files your search app reads, one per
+working file, named by that file's sha256 (the format is in
+[docs/handoff-format.md](docs/handoff-format.md)). The text folder, the
+working files and the catalogue folder are only read.
+
+1. Detect, and write the review sheet:
+
+   ```powershell
+   gpdf-cli structure --text private\book-prep\text --out private\book-prep\structure
+   ```
+
+   Then open `private\book-prep\structure\structure.review.html` in a
+   browser. It works offline, straight from the file.
+2. Review. Entries with low-confidence sections come first; click a row to
+   open it. In the section tree you can:
+   - edit a title, author or role in place;
+   - use **Move…** to move where a section starts (pick from the units around
+     it);
+   - use **Merge** to merge a section into the one before it;
+   - use **Split…** to start a new section at a unit, with its title, author
+     and role.
+
+   Check the authors and roles. For example, mark Carpentier's "Prólogo a El
+   reino de este mundo" in the Caribe anthology as primary if you want it
+   counted as a period text, and split Ariel's sections V and VI. **Role of
+   every section** sets one role for a whole entry. Fill in each entry's
+   metadata (title, author or editor, year, publisher) and click **Confirm
+   metadata**. Tick **Structure reviewed** for an entry that needs no
+   changes. Click **Save decisions** and move the downloaded
+   `structure.decisions.json` into `private\book-prep\structure`. The sheet
+   keeps unsaved work in the browser and offers to restore it when you
+   reopen it.
+3. Run step 1's command again. It applies your decisions and reports how many
+   were applied and how many are stale. The sheet should show your changes,
+   with no stale decisions. A decision is **stale** when the text of the unit
+   it names has changed since you made it (the export was redone); it is not
+   applied, and the sheet marks it. Remove it and decide again. An
+   **unmatched** decision names a section that no longer exists. `--decisions
+   FILE` reads another decisions file; the tool never writes one.
+4. Write the handoff files:
+
+   ```powershell
+   gpdf-cli handoff --structure private\book-prep\structure --to private\book-prep\handoff
+   ```
+
+   For every exported entry that is not excluded in the catalogue, this writes
+   `<sha256>.gpdf.jsonl` and `handoff.json`, the index. Each file holds the
+   entry's metadata, its sections and every paragraph, verse, quote and note
+   in reading order. An entry is skipped (exit code 2) when its export changed
+   since `structure` ran (run step 3 again) or its working file changed since
+   the export (export it again). Nothing in the folder is deleted. Files whose
+   working file has changed are listed as no longer current; remove them
+   yourself.
+5. Back up:
+   `gpdf-cli backup --to "$env:OneDriveCommercial\g-pdf-backups"`. The backup
+   now includes `structure.decisions.json`.
+
 ### Backing up your review work
 
 Your review decisions can't be regenerated: the split `*_split.decisions.json`
-files, `catalogue\catalogue.decisions.json` and any `*.bak.json` backups of
-them. Everything else (PDFs, exports, caches, `catalogue.json`) the pipeline
+files, `catalogue\catalogue.decisions.json`, `structure\structure.decisions.json`
+and any `*.bak.json` backups of them. Everything else (PDFs, exports, caches, `catalogue.json`) the pipeline
 writes again. `backup` copies only the decision files to a dated folder,
 `g-pdf-backup-YYYYmmdd-HHMMSS`, keeping their paths. It adds `manifest.json`
 (sizes, sha256 hashes) and checks every copy against its source. It never
@@ -295,11 +359,12 @@ changes the source or earlier backups. `--source` defaults to
 2. Make a backup folder there once:
    `mkdir "$env:OneDriveCommercial\g-pdf-backups"`.
 3. Run `gpdf-cli backup --to "$env:OneDriveCommercial\g-pdf-backups"`. Expect
-   4 files today (3 split decisions + catalogue decisions) plus any `.bak.json`.
+   4 files (3 split decisions + catalogue decisions), 5 once you have saved the
+   structure review, plus any `.bak.json`.
 4. Check the new dated folder appears in OneDrive (File Explorer: the cloud
    icon turns green).
 5. Repeat after every review session: split review, saving the catalogue
-   sheet, and later the structure review.
+   sheet, saving the structure sheet.
 
 To restore, copy the files from the dated folder back to the same relative
 paths under `private\book-prep`.

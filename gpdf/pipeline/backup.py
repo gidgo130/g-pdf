@@ -17,7 +17,7 @@ from pathlib import Path
 from gpdf import __version__
 
 # Owner-made files only. Later steps add their own decision files to this list.
-PATTERNS = ("*.decisions.json",    # split review, catalogue sheet
+PATTERNS = ("*.decisions.json",    # split review, catalogue and structure sheets
             "*.bak.json")          # decision backups (split --dry-run --force)
 DEFAULT_SOURCE = Path("private/book-prep")
 MANIFEST = "manifest.json"
