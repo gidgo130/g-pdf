@@ -35,8 +35,8 @@ def make_source(tmp_path):
     return src
 
 
-def run(src, to):
-    return cli.main(["backup", "--to", str(to), "--source", str(src)])
+def run(src, to, *extra):
+    return cli.main(["backup", "--to", str(to), "--source", str(src), *extra])
 
 
 def test_only_decision_files_are_copied_with_their_paths_and_a_manifest(tmp_path, capsys):
@@ -63,7 +63,7 @@ def test_a_second_backup_leaves_the_first_alone(tmp_path):
     assert run(src, to) == 0
     [first] = list(to.iterdir())
     kept = snapshot(first)
-    assert run(src, to) == 0                               # same second: a new folder
+    assert run(src, to, "--always") == 0                   # same second: a new folder
     assert len(list(to.iterdir())) == 2 and snapshot(first) == kept
 
 
@@ -96,3 +96,55 @@ def test_a_copy_that_differs_from_its_source_fails(tmp_path, monkeypatch, capsys
     assert run(src, to) == 1
     err = capsys.readouterr().err
     assert "catalogue/catalogue.decisions.json" in err and "differs" in err
+
+
+def test_an_unchanged_second_backup_makes_no_folder(tmp_path, capsys):
+    src, to = make_source(tmp_path), tmp_path / "backups"
+    assert run(src, to) == 0
+    [first] = list(to.iterdir())
+    capsys.readouterr()
+    assert run(src, to) == 0
+    assert list(to.iterdir()) == [first]
+    assert f"unchanged since {first.name}" in capsys.readouterr().out
+
+
+def test_a_changed_or_added_file_makes_a_new_folder(tmp_path):
+    src, to = make_source(tmp_path), tmp_path / "backups"
+    assert run(src, to) == 0
+    (src / "catalogue" / "catalogue.decisions.json").write_text("{}", "utf-8")
+    assert run(src, to) == 0
+    assert len(list(to.iterdir())) == 2
+    (src / "structure").mkdir()
+    (src / "structure" / "structure.decisions.json").write_text("{}", "utf-8")
+    assert run(src, to) == 0
+    newest = sorted(to.iterdir(), key=backup._order)[-1]
+    assert (newest / "structure" / "structure.decisions.json").is_file()
+    assert len(list(to.iterdir())) == 3
+
+
+def test_always_makes_a_new_folder(tmp_path):
+    src, to = make_source(tmp_path), tmp_path / "backups"
+    assert run(src, to) == 0
+    assert run(src, to, "--always") == 0
+    assert len(list(to.iterdir())) == 2
+
+
+def test_a_corrupt_or_missing_earlier_manifest_counts_as_changed(tmp_path):
+    src, to = make_source(tmp_path), tmp_path / "backups"
+    assert run(src, to) == 0
+    [first] = list(to.iterdir())
+    (first / backup.MANIFEST).write_text("{not json", "utf-8")
+    assert run(src, to) == 0
+    assert len(list(to.iterdir())) == 2
+    newest = sorted(to.iterdir(), key=backup._order)[-1]
+    (newest / backup.MANIFEST).unlink()
+    assert run(src, to) == 0
+    assert len(list(to.iterdir())) == 3
+
+
+def test_the_newest_folder_is_compared_even_within_one_second(tmp_path):
+    to = tmp_path / "backups"
+    for name in ("g-pdf-backup-20261022-101010", "g-pdf-backup-20261022-101010-2",
+                 "g-pdf-backup-20261022-101010-10", "g-pdf-backup-20261021-235959-3"):
+        (to / name).mkdir(parents=True)
+    assert backup.latest(to).name == "g-pdf-backup-20261022-101010-10"

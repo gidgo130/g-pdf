@@ -2,7 +2,8 @@
 """gpdf-cli backup: copy the owner's review work, the files nothing can regenerate, to
 DIR/g-pdf-backup-YYYYmmdd-HHMMSS/<path under the source>, with manifest.json (sizes,
 sha256, source mtimes). Each copy is hashed again against its source. Nothing in the
-source or in earlier backups is changed. PDFs, exports, caches, catalogue.json,
+source or in earlier backups is changed. When the files and their hashes match the newest
+earlier backup's manifest, no folder is made (unless ``always``). PDFs, exports, caches, catalogue.json,
 applied.json and reports are left out: the pipeline writes them again."""
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ class Backup:
     dest: Path
     files: list[dict] = field(default_factory=list)     # as in the manifest
     differs: list[str] = field(default_factory=list)    # copies that fail the re-hash
+    unchanged: bool = False                              # dest is the earlier backup
 
     @property
     def total(self) -> int:
@@ -54,7 +56,34 @@ def find(source: Path) -> list[Path]:
     return sorted(found, key=lambda p: p.relative_to(source).as_posix().lower())
 
 
-def run(source: Path, to: Path) -> Backup:
+def _order(folder: Path):
+    """Sort key for backup folders: their stamp, then the -k suffix as a number."""
+    rest = folder.name.removeprefix(PREFIX)            # YYYYmmdd-HHMMSS[-k]
+    stamp, k = rest[:15], rest[16:]
+    return stamp, int(k) if k.isdigit() else 1
+
+
+def latest(to: Path) -> Path | None:
+    """The newest g-pdf-backup-* folder in ``to``, or None."""
+    if not to.is_dir():
+        return None
+    found = [p for p in to.glob(PREFIX + "*") if p.is_dir()]
+    return max(found, key=_order, default=None)
+
+
+def _recorded(folder: Path) -> set[tuple[str, str]] | None:
+    """(path, sha256) of every file in the folder's manifest; None if it is missing,
+    unreadable or recorded a copy that differed."""
+    try:
+        man = json.loads((folder / MANIFEST).read_text("utf-8"))
+        if man.get("differs"):
+            return None
+        return {(f["path"], f["sha256"]) for f in man["files"]}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def run(source: Path, to: Path, always: bool = False) -> Backup:
     if not source.is_dir():
         raise BackupError(f"no such folder: {source} (run from the repo root, or pass "
                           "--source)")
@@ -64,6 +93,9 @@ def run(source: Path, to: Path) -> Backup:
     files = find(src)
     if not files:
         raise BackupError(f"no decision files under {source} ({', '.join(PATTERNS)})")
+    digests = {f.relative_to(src).as_posix(): sha256(f) for f in files}
+    if not always and (prev := latest(to)) is not None             and _recorded(prev) == set(digests.items()):
+        return Backup(source, prev, unchanged=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     dest, k = to / f"{PREFIX}{stamp}", 2
     to.mkdir(parents=True, exist_ok=True)
@@ -76,7 +108,7 @@ def run(source: Path, to: Path) -> Backup:
     result = Backup(source, dest)
     for f in files:
         rel = f.relative_to(src)
-        st, digest = f.stat(), sha256(f)
+        st, digest = f.stat(), digests[rel.as_posix()]
         copy = dest / rel
         copy.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(f, copy)

@@ -19,7 +19,9 @@
                                                     # of every exported entry
     gpdf-cli handoff --structure DIR [--to OUTDIR]  # gpdf-handoff/1 files for the search
                                                     # app, named by the working file's sha256
-    gpdf-cli backup --to DIR [--source PATH]        # copy the review decisions to DIR
+    gpdf-cli backup --to DIR [--source PATH] [--always]
+                                                    # copy the review decisions to DIR
+                                                    # (nothing if unchanged since the last)
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
 reviewed (or spreads could not be split), OCR failed on some pages, the survey could
@@ -217,11 +219,14 @@ def build_parser() -> argparse.ArgumentParser:
                                    "DIR/g-pdf-backup-YYYYmmdd-HHMMSS/, keeping their paths, "
                                    "with manifest.json. Each copy is checked against its "
                                    "source. Nothing in the source or in earlier backups is "
-                                   "changed.")
+                                   "changed. If the files match the newest backup's "
+                                   "manifest, no new folder is made.")
     b.add_argument("--to", metavar="DIR", type=Path, required=True,
                    help="backup folder, outside the source (created if missing)")
     b.add_argument("--source", metavar="PATH", type=Path, default=Path("private/book-prep"),
                    help="folder holding the decisions (default: private/book-prep)")
+    b.add_argument("--always", action="store_true",
+                   help="make a new dated folder even if nothing changed")
     return p
 
 
@@ -505,10 +510,13 @@ def _backup_main(args) -> int:
     from gpdf.pipeline import backup
 
     try:
-        res = backup.run(args.source, args.to)
+        res = backup.run(args.source, args.to, always=args.always)
     except (backup.BackupError, OSError) as e:
         print(f"gpdf-cli: error: {e}", file=sys.stderr)
         return EXIT_ERROR
+    if res.unchanged:
+        print(f"unchanged since {res.dest.name}: no new backup (pass --always to make one)")
+        return EXIT_OK
     print(f"copied {len(res.files)} file(s), {res.total / 1e3:.1f} KB:")
     for f in res.files:
         print(f"  {f['path']}")
