@@ -229,17 +229,24 @@ first.
 
 ### The entry list
 
-- top bar: **Reviewed x / y** and how many entries have stale or unmatched
-  decisions;
+- top bar: **Reviewed x / y** and how many entries have problems;
 - filters: **All**, **Low confidence** (entries with sections detected with
-  low confidence), **Not reviewed**, **Stale or unmatched**;
+  low confidence), **Not reviewed**, **Problems**;
 - columns: file, kind (pdf or txt, and monograph, anthology or texts), number of
   sections, low-confidence sections, metadata (confirmed or not, with title,
   author and year), number of decisions, and status:
-  - **not reviewed**: no decisions at all;
-  - **reviewed**: at least one decision (an edit, confirmed metadata, a
-    role or the Structure reviewed tick), all of them applied;
-  - **stale / unmatched**: at least one decision does not apply.
+  - **not reviewed**: you have not ticked **Structure reviewed**. Hover the
+    badge for the reason: "no decisions yet", or "N decisions, not ticked"
+    when there are decisions (from you or a loaded draft) but no tick;
+  - **reviewed**: you ticked **Structure reviewed**, every decision applies
+    and no section is too deep;
+  - **problems**: at least one decision is stale or unmatched, or a section
+    sits more than one level below its parent (see "Too deep" below). Hover
+    the badge for the reason.
+
+Decisions alone never make an entry reviewed: a draft that fills in every
+entry's metadata and sections still shows **Reviewed 0 / y** until you tick
+each entry. Confirming the metadata is separate (**Confirm metadata**).
 
 ### An open entry
 
@@ -253,8 +260,10 @@ whether the metadata is confirmed.
 - **Role of every section**: one role for the whole entry, applied before the
   other decisions. Use it for a single text or essay. "(as detected, per
   section)" removes it.
-- **Structure reviewed**: tick it when you have looked and nothing needs
-  changing. It counts as reviewed.
+- **Structure reviewed**: tick it once you have checked this entry's
+  sections, whether you changed anything or not. Only this tick makes the
+  entry reviewed, and only a ticked entry's structure is confirmed to the
+  search app.
 - **Decisions**: every decision for this entry, in the order it is applied,
   each with a badge (**applied**, **stale**, **unmatched**) and the reason
   when it does not apply. **Remove** deletes one decision. Later decisions
@@ -281,8 +290,9 @@ level, at any depth. Rows detected with low confidence are shaded. Columns:
   that starts at the same unit as its parent; move the parent instead.
 - **Merge** (not on the first section): removes this boundary. Its units join
   the section before, and its title, author and role are gone. Sections
-  inside it stay. If they now sit two levels below their new parent, change
-  their level too (merge and split them, see below).
+  inside it stay. If they now sit two levels below their new parent, the
+  sheet marks them **too deep** (see below); change their level (merge and
+  split them, see below).
 - **Split…**: starts a new section at a unit inside this one. Fill in the
   unit number (it starts at the next heading, and the line below shows that
   unit's text), the level, the title, the author and the role, then **Add
@@ -315,15 +325,29 @@ Each decision names a unit by its number and a short hash of its text.
   when it would break the order of sections, or when a split would start a
   section two or more levels below the section around it. It is not applied either.
 
-`gpdf-cli structure` prints how many decisions applied and how many are stale
-or unmatched. `handoff` marks an entry's structure as confirmed only when it
-has decisions and none is stale or unmatched.
+### Too deep
+
+A split is refused if it would start a section two or more levels below its
+parent, but a merge can still leave one there: when a level-2 section is
+merged, its level-3 sections may end up directly under a level-1 part. The
+merge stays applied. The sheet marks each such section **too deep** with the
+reason, for example "level 3 under a level 1 parent: change its level (merge,
+then split at the same unit)", and the entry counts as **problems** until it
+is fixed. To fix it, merge the section, then split at the same unit with a
+level one below its parent.
+
+`gpdf-cli structure` prints, per entry, how many decisions applied and how
+many are stale or unmatched, each section that is too deep (its title and
+unit), and whether the structure is confirmed. `handoff` marks an entry's
+structure as confirmed only when you ticked **Structure reviewed**, no
+decision is stale or unmatched, and no section is too deep.
 
 ### A draft decisions file
 
 To review a prepared draft (for example
 `structure.decisions.draft.json`), open the sheet, use **Load decisions...**
-and pick the draft. Review it, then **Save decisions**: the file is saved as
+and pick the draft. Every entry starts as **not reviewed**: check each one and
+tick **Structure reviewed**. Then **Save decisions**: the file is saved as
 `structure.decisions.json`, the name `structure` reads, and the draft stays as
 it was. You can also apply a draft without the sheet:
 `gpdf-cli structure ... --decisions <draft>`.

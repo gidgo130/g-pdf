@@ -70,7 +70,7 @@ document order, then one `para` line per unit of text in reading order.
 | `title`, `author`, `year`, `publisher` | string or null | the book's metadata (`author` may be an editor) |
 | `metadata_confirmed` | bool | the owner checked and confirmed the four fields above |
 | `lang` | string or null | main language (ISO 639-1, e.g. `"es"`) |
-| `structure_confirmed` | bool | the owner reviewed this entry's sections: decisions exist for it, and none is stale or unmatched |
+| `structure_confirmed` | bool | the owner ticked "Structure reviewed" for this entry in the structure sheet, no decision is stale or unmatched, and no section is more than one level below its parent. Decisions alone (for example a loaded draft) do not confirm it |
 | `made_with` | string | e.g. `"g-pdf 0.2.0"` |
 | `made` | string | ISO 8601 time the file was written |
 | `apparatus_pages` | list of int | PDF pages of contents and index pages, which are not in the text |
