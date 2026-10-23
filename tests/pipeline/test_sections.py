@@ -476,3 +476,39 @@ def test_author_lines_glued_authors_and_author_lists_with_a_revista_or_an_et_al(
     assert sc._author_line("Jorge Luis Borges ¬") == "Jorge Luis Borges"
     assert sc.clean_author("Ortelli y Gasset [Jorge Luis Borges y Carlos Mastronardi]", "x",
                            heads, titles)[0] == "Jorge Luis Borges y Carlos Mastronardi"
+
+
+def test_a_contents_page_continues_on_the_body_page_after_it():
+    """Bürger: the Sumario's last entries sit on the page after the index page, exported
+    as one glued body line ("IV. Vanguardia y compromiso . 151 l. El debate ... . 151
+    2. Nota final sobre Hegel"); a number that breaks the sequence (1 after 3) is an OCR
+    error and the entry is placed by its title between its neighbours."""
+    units = [unit(0, 1, "Teoría de prueba", "heading"), unit(0, 1, "AUTOR PRUEBA"),
+             unit(0, 2, "INTRODUCCIÓN", "heading"), unit(0, 2, "Reflexiones previas."),
+             unit(0, 3, "I. UNO", "heading"), unit(0, 3, "1. SUB UNO"), unit(0, 3, "Texto uno."),
+             unit(0, 4, "2. SUB DOS"), unit(0, 4, "Texto dos."),
+             unit(0, 5, "3. SUB TRES"), unit(0, 5, "Texto tres."),
+             unit(0, 6, "II. DOS", "heading"), unit(0, 6, "Texto del dos."), unit(0, 7, "Sigue."),
+             unit(0, 8, "III. TRES", "heading"), unit(0, 8, "l. SUB A"), unit(0, 8, "Texto a."),
+             unit(0, 9, "2. SUB B"), unit(0, 9, "Texto b."), unit(0, 9, "EPÍLOGO", "heading"),
+             unit(0, 9, "Texto del epílogo."),
+             unit(0, 11, "III. Tres . 8 l. Sub a . 8 2. Sub b . 9 Epílogo . 9")]
+    rows = rows_for(12, kinds={10: "index", 12: "blank"})
+    apparatus = [{"entry": "e" * 64, "page": 10, "label": None, "kind": "index", "columns": 1,
+                  "lines": ["Sumario", "Introducción 2", "I. Uno 3", "1. Sub uno 3", "2. Sub dos",
+                            "3. Sub tres . 1", "II. Dos 6"]}]
+    e = entry(units, rows, apparatus, [], stem="teoria5",
+              meta={"title": "Teoría de prueba", "author": "Autor Prueba"})
+    s = sc.detect(e)
+    check_invariants(s, e.units)
+    by_title = {st.fold(x.title): x for x in s.sections}
+    want = {"introduccion": (2, 2), "i. uno": (2, 3), "1. sub uno": (3, 3), "2. sub dos": (3, 4),
+            "3. sub tres": (3, 5), "ii. dos": (2, 6), "iii. tres": (2, 8), "l. sub a": (3, 8),
+            "2. sub b": (3, 9), "epilogo": (2, 9)}
+    for t, (level, page) in want.items():
+        x = by_title[t]
+        assert (x.level, x.pdf_pages[0]) == (level, page), (t, x.level, x.pdf_pages, x.evidence)
+    assert all("contents" in by_title[t].sources for t in want)
+    assert 11 in s.contents["in_body_pages"]
+    tres = by_title["3. sub tres"]
+    assert any("between" in ev for ev in tres.evidence), tres.evidence

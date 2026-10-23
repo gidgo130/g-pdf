@@ -75,6 +75,8 @@ SEQ_LEVEL = {"acto": 2, "cuadro": 3, "canto": 2, "capitulo": 2, "parte": 2, "lib
 _ROMAN_HEADING = re.compile(r"^[IVXLC]{1,6}$|^[ivxlc]{1,6}$")
 _NUM_LINE = re.compile(r"(^|\s)(\d{1,4}|[ivxlc]{1,6}|[IVXLC]{1,6})\s*$")
 _PLATES = re.compile(r"l[áa]minas|ilustraciones|im[áa]genes", re.I)
+_GLUED = re.compile(r"(\.\s*\d{1,4})\s+(?=(?:[IVXLivxl]{1,5}|\d{1,2})\.\s+[A-ZÁÉÍÓÚÑ]"
+                    r"|[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}\b)")               # ". 151 l. El", ". 165 Epílogo"
 
 
 class StructureError(Exception):
@@ -399,6 +401,42 @@ def _between_apparatus(e: Entry, on: dict) -> set[int]:
             and any(q in app for q in (pg - 1, pg - 2)) and any(q in app for q in (pg + 1, pg + 2))}
 
 
+def _page_lines(on: dict, pg: int) -> list[str]:
+    """The lines of a page's units; a line gluing several contents entries ("IV. ... .
+    151 l. El debate ... . 151 2. Nota final") is split before each ordinal."""
+    out = []
+    for u in on[pg]:
+        for ln in u["text"].split("\n"):
+            if not ln.strip():
+                continue
+            at = 0
+            for m in _GLUED.finditer(ln):
+                out.append(ln[at:m.end(1)].strip())
+                at = m.end(1)
+            if ln[at:].strip():
+                out.append(ln[at:].strip())
+    return out
+
+
+def _continuation_pages(e: Entry, on: dict) -> set[int]:
+    """Pages right after a contents or index page near the file's ends whose lines are
+    contents-shaped (mostly ending in a number): the contents continue there although
+    the export classed the page as body (Bürger's Sumario, p. 193)."""
+    total = e.page_count or len(e.rows)
+    app = {a["page"] for a in e.apparatus if a.get("kind") in ("contents", "index")
+           and not (APPARATUS_EDGE < a["page"] / max(1, total) < 1 - APPARATUS_EDGE)}
+    out = set()
+    for pg in sorted(app):
+        for q in (pg + 1, pg + 2):
+            if q in app or q not in on or q in out:
+                continue
+            lines = _page_lines(on, q)
+            numbered = sum(bool(_NUM_LINE.search(ln.strip())) for ln in lines)
+            if len(lines) >= 2 and numbered >= 2 and numbered >= 0.5 * len(lines):
+                out.add(q)
+    return out
+
+
 def _contents_pages(e: Entry, on: dict, inbody: set, stats: dict) -> list[tuple[int, int, list]]:
     """(page, columns, lines) of every contents page: apparatus pages of kind contents or
     index that are not name indexes nor in-text indexes, and in-body contents pages."""
@@ -417,7 +455,7 @@ def _contents_pages(e: Entry, on: dict, inbody: set, stats: dict) -> list[tuple[
             continue
         pages.append((a["page"], a.get("columns", 1), lines))
     for pg in sorted(inbody):
-        lines = [ln for u in on[pg] for ln in u["text"].split("\n") if ln.strip()]
+        lines = _page_lines(on, pg)
         tail = 0
         while tail < len(lines) and re.fullmatch(r"[\divxlcIVXLC ]+", lines[-1 - tail].strip()):
             tail += 1
@@ -1027,7 +1065,7 @@ def detect(e: Entry, decisions: dict | None = None) -> Structure:
     front_pages = {r["page"] for r in e.rows if r.get("kind") == "front" and "page" in r}
     has_contents = any(a.get("kind") == "contents" for a in e.apparatus)
     inbody = set() if has_contents else inbody_contents_pages(on, page_count)
-    inbody |= _between_apparatus(e, on)
+    inbody |= _between_apparatus(e, on) | _continuation_pages(e, on)
     skip = front_pages | inbody | contents_like_pages(on, page_count)
     stats = {"pages": [], "parsed": 0, "matched": 0, "skipped": [], "out_of_order": [],
              "unresolved": [], "inbody": []}

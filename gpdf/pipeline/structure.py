@@ -141,7 +141,7 @@ _SPACED = re.compile(r"(?<![\d\s])\s(\d(?:\s\d){1,3})\s*$")
 _TRAIL = re.compile(r"^(?P<title>.*?)(?P<lead>\s*(?:[…·]|\.\s*){1,}\s*|\s+|,\s*)"
                     r"(?P<num>\d{1,4}|[ivxlc]{1,8}|[IVXLC]{1,8})\s*[-+xX*.o]?\s*$")
 _LEADER = re.compile(r"(?:\.\s*){3,}|…")
-_ORDINAL = re.compile(r"^(?P<n>\d{1,2}|[ivx]{1,5}|[IVX]{1,5}|ni|nl|lll|ll|il)\.\s+(?P<rest>.+)$")
+_ORDINAL = re.compile(r"^(?P<n>\d{1,2}|[ivx]{1,5}|[IVX]{1,5}|ni|nl|lll|ll|il|l)\.\s+(?P<rest>.+)$")
 _INLINE_SEP = re.compile(r"\s*\.\s*[—–]+\s*(?=\S)|\s*\.\s*-[–-]+\s*(?=[A-ZÁÉÍÓÚÑ“(])"
                          r"|\s*[—–]{1,2}\s*(?=[A-ZÁÉÍÓÚÑ“(])")
 _AFTER_NUM = re.compile(r"(?<=\d)\s*[;,]\s+(?!\d)")
@@ -254,6 +254,8 @@ def _numbered_prefix(title: str) -> tuple[str, int | None]:
     if n.isdigit():
         return "arabic", int(n)
     low = n.lower()
+    if low == "l":
+        return "arabic", 1                         # "l. El debate": the OCR's 1
     fake = {"ni": 3, "nl": 3, "lll": 3, "ll": 2, "il": 2}
     if low in fake:
         return "roman", fake[low]
@@ -681,7 +683,8 @@ def _levels(entries: list[ContentsEntry]) -> list[ContentsEntry]:
                     goes_on, last_num = True, n
                 elif kind == "":
                     goes_on = (_shares_pattern(sub_first.title, e.title)
-                               or (sub_kind == "roman" and e.label != parent.label)
+                               or (sub_kind == "roman" and e.label != parent.label
+                                   and _numbered_prefix(sub_first.title)[0] == "")
                                or (sub_kind == "numbered" and sub_first.title.strip().isdigit()
                                    and e.title.strip().isdigit()))
                     if sub_kind == "page" and e.label is not None and e.label == parent.label:
