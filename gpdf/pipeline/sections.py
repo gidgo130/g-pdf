@@ -1773,8 +1773,9 @@ def run(text_dir, outdir, only=(), decisions=None) -> RunResult:
             s.detected = [x.to_json() for x in s.sections]
             s.detected_metadata = dict(s.metadata)
             mine = dec["entries"].get(id_)
-            s.decisions = sd.summary(sd.apply(s, mine), res.decisions_path, mine is not None,
-                                     bool((mine or {}).get("reviewed")))
+            results = sd.apply(s, mine)
+            s.decisions = sd.summary(results, res.decisions_path, mine is not None,
+                                     bool((mine or {}).get("reviewed")), sd.level_gaps(s))
             res.written.append(write_sections(s, outdir))
             res.structures.append(s)
         except (StructureError, OSError, ValueError, KeyError) as err:
@@ -1875,6 +1876,8 @@ def report(res: RunResult) -> str:
                     where = (f" at unit {r['seq']} (level {r['level']})"
                              if r.get("seq") is not None else "")
                     out.append(f"    {r['status']}: {r['op']}{where}: {r['why']}")
+        for w in d.get("level_warnings") or []:
+            out.append(f"    level: «{w['title'][:60]}» at unit {w['seq']}: {w['why']}")
         ok, why = sd.confirmed(d)
         out.append("  structure: confirmed" if ok else f"  structure: not confirmed ({why})")
         out.append("  invariants: every unit in exactly one section; sections in order; none "

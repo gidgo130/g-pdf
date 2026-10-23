@@ -158,24 +158,32 @@
     secs.forEach((x, k) => {
       x.id = "s" + String(k + 1).padStart(3, "0");
       while (stack.length && (stack[stack.length - 1].level >= x.level || stack[stack.length - 1].end <= x.start)) stack.pop();
-      x.parent = stack.length ? stack[stack.length - 1].id : null;
+      const p = stack.length ? stack[stack.length - 1] : null;
+      x.parent = p ? p.id : null;
+      // as structure_decisions.level_gaps: a merge may leave a section too deep (not refused)
+      x.gap = p && x.level > p.level + 1
+        ? "level " + x.level + " under a level " + p.level + " parent: change its level (merge, then split at the same unit)" : null;
       stack.push(x);
     });
-    return { secs: secs, results: results };
+    return { secs: secs, results: results, gaps: secs.filter((x) => x.gap) };
   }
 
   function entryStatus(e) {
     // as structure_decisions.confirmed: reviewed only when the owner ticked "Structure
-    // reviewed" and nothing is stale or unmatched; decisions alone (a draft) are pending
+    // reviewed", nothing is stale or unmatched and no section is too deep; decisions
+    // alone (a draft) are pending
     const r = state[e.id] || {};
-    const results = replay(e).results;
-    const bad = results.filter((x) => x.status !== "applied").length;
-    if (bad) return ["problems", bad + " stale or unmatched decision" + (bad === 1 ? "" : "s")];
+    const view = replay(e), results = view.results;
+    const bad = results.filter((x) => x.status !== "applied").length, gaps = view.gaps.length;
+    const why = [];
+    if (bad) why.push(bad + " stale or unmatched decision" + (bad === 1 ? "" : "s"));
+    if (gaps) why.push(gaps + " section" + (gaps === 1 ? "" : "s") + " more than one level below " + (gaps === 1 ? "its" : "their") + " parent");
+    if (why.length) return ["problems", why.join("; ")];
     if (r.reviewed) return ["reviewed", "Structure reviewed ticked"];
     if (results.length) return ["pending", results.length + " decision" + (results.length === 1 ? "" : "s") + ", not ticked"];
     return ["pending", "no decisions yet"];
   }
-  const STATUS_TEXT = { pending: "not reviewed", problems: "stale / unmatched", reviewed: "reviewed" };
+  const STATUS_TEXT = { pending: "not reviewed", problems: "problems", reviewed: "reviewed" };
 
   function metaNow(e) {
     const r = state[e.id] || {};
@@ -613,13 +621,18 @@
       .forEach((h) => head.appendChild(el("th", null, h)));
     tab.appendChild(head);
     view.secs.forEach((x, i) => {
-      const tr = el("tr", { class: "sec" + (x.confidence === "low" ? " lowconf" : ""), "data-key": keyOf(x), "data-first": String(x.start + 1),
+      const tr = el("tr", { class: "sec" + (x.confidence === "low" ? " lowconf" : "") + (x.gap ? " levelgap" : ""), "data-key": keyOf(x), "data-first": String(x.start + 1),
         "data-level": String(x.level), style: "--depth: " + (x.level - 1) });
       const ttd = el("td", { class: "title" });
       const t = stop(el("input", { type: "text", class: "t", value: x.title, "aria-label": "title" }));
       t.addEventListener("change", () => editSection(e, x, "title", t.value.trim()));
       ttd.appendChild(t);
       if (x.owner) { ttd.appendChild(document.createTextNode(" ")); ttd.appendChild(badge("owner", "yours")); }
+      if (x.gap) {
+        ttd.appendChild(document.createTextNode(" "));
+        ttd.appendChild(badge("problems", "too deep", x.gap));
+        ttd.appendChild(el("div", { class: "small gap-why" }, x.gap));
+      }
       tr.appendChild(ttd);
       const atd = el("td");
       const a = stop(el("input", { type: "text", class: "a", value: x.author || "", "aria-label": "author" }));
@@ -690,7 +703,7 @@
       if (st === "reviewed") done++;
       if (st === "problems") bad++;
     }
-    $("progress").textContent = "Reviewed " + done + " / " + ENTRIES.length + (bad ? " (" + bad + " with stale or unmatched decisions)" : "");
+    $("progress").textContent = "Reviewed " + done + " / " + ENTRIES.length + (bad ? " (" + bad + " with problems)" : "");
     document.querySelectorAll("[data-filter]").forEach((b) => {
       b.setAttribute("aria-pressed", String(b.dataset.filter === filter));
     });
@@ -748,6 +761,7 @@
     decisionsText: decisionsText,
     tree: (id) => replay(BY_ID[id]).secs.map((x) => [x.start + 1, x.end, x.level, x.title, x.author, x.role]),
     results: (id) => replay(BY_ID[id]).results.map((r) => r.status),
+    levelGaps: (id) => replay(BY_ID[id]).gaps.map((x) => [x.start + 1, x.level, x.gap]),
     status: (id) => entryStatus(BY_ID[id])[0],
     dirty: dirty,
   });

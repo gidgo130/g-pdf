@@ -167,6 +167,48 @@ def test_structure_is_confirmed_only_when_ticked_and_no_decision_is_stale_or_unm
     assert confirmed({"reviewed": True}) == (True, "")
 
 
+GAP_WHY = ("level 3 under a level 1 parent: change its level (merge, then split at the "
+           "same unit)")
+
+
+def gap_merge(e):
+    """Merging "Cinco prefacios" (level 2) leaves "La vanguardia en telegrama" (level 3)
+    directly under "Front matter" (level 1)."""
+    return {"op": "merge", "seq": 4, "level": 2, "hash": h(e, 4)}
+
+
+def test_a_section_left_more_than_one_level_below_its_parent_is_flagged_not_refused():
+    e, s = detected()
+    assert sd.level_gaps(s) == []
+    results = sd.apply(s, {"reviewed": True, "ops": [gap_merge(e)]})
+    assert [r["status"] for r in results] == ["applied"]
+    assert (5, 7, 3, "La vanguardia en telegrama", None, "editorial") in tree(s)
+    check_invariants(s, e.units)
+    gaps = sd.level_gaps(s)
+    assert gaps == [{"title": "La vanguardia en telegrama", "seq": 5, "level": 3,
+                     "parent": "Front matter", "parent_level": 1, "why": GAP_WHY}]
+    summary = sd.summary(results, None, True, True, gaps)
+    assert sd.confirmed(summary) == (False, "1 section more than one level below its parent")
+    assert sd.confirmed(dict(summary, stale=1)) == (
+        False, "1 stale or unmatched decision; 1 section more than one level below its parent")
+
+
+def test_cli_structure_reports_level_gaps_per_entry(text_dir, tmp_path, capsys):
+    out = tmp_path / "structure"
+    rec = {"reviewed": True, "ops": [gap_merge(anthology())]}
+    out.mkdir()
+    (out / sd.DECISIONS).write_text(json.dumps({"schema": 1, "entries": {"e" * 64: rec}}),
+                                    "utf-8")
+    assert cli.main(["structure", "--text", str(text_dir), "--out", str(out)]) == 0
+    outp = capsys.readouterr().out
+    assert "decisions: 1 applied, 0 stale, 0 unmatched" in outp
+    assert f"    level: «La vanguardia en telegrama» at unit 5: {GAP_WHY}" in outp
+    assert "structure: not confirmed (1 section more than one level below its parent)" in outp
+    data = json.loads((out / "libro.sections.json").read_text("utf-8"))
+    assert data["decisions"]["level_warnings"][0]["seq"] == 5
+    assert data["structure_confirmed"] is False
+
+
 def test_decisions_file_is_validated_and_only_read(tmp_path):
     path = tmp_path / sd.DECISIONS
     assert sd.load(path) == {"schema": 1, "entries": {}}
@@ -187,7 +229,8 @@ def test_cli_structure_applies_the_decisions_file_in_out_by_default(text_dir, tm
     assert "decisions: none" in capsys.readouterr().out
     first = json.loads((out / "libro.sections.json").read_text("utf-8"))
     assert first["decisions"] == {"file": None, "record": False, "reviewed": False,
-                                  "applied": 0, "stale": 0, "unmatched": 0, "results": []}
+                                  "applied": 0, "stale": 0, "unmatched": 0,
+                                  "level_warnings": [], "results": []}
     assert first["structure_confirmed"] is False
     assert len(first["units_sha256"]) == 64
     e = anthology()

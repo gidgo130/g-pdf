@@ -22,7 +22,9 @@ JavaScript (structure_sheet/sheet.js); keep the two in step.
 
 A level is any whole number from 1 up (detection gives 1-3; the owner may go deeper), and a
 section is at most one level deeper than its parent: a split that would start a section
-further below the section around it is unmatched.
+further below the section around it is unmatched. A merge can still leave a section more
+than one level below its new parent: it stays applied, is reported (level_gaps), and the
+entry's structure is not confirmed until its level is changed.
 
 Moving a section's start moves the sections of deeper levels that start at the same unit
 with it; merging removes the boundary (the units join the section before them); a split
@@ -233,23 +235,47 @@ def apply(s, rec: dict | None) -> list[dict]:
     return results
 
 
-def summary(results: list[dict], path, record: bool, reviewed: bool = False) -> dict:
+def level_gaps(s) -> list[dict]:
+    """Sections more than one level below their parent once the decisions are replayed.
+    A split refuses that, but a merge can leave one (its children move under a shallower
+    section): reported, not refused; the decisions stay applied."""
+    by_id = {x.id: x for x in s.sections}
+    out = []
+    for x in s.sections:
+        p = by_id.get(x.parent)
+        if p is not None and x.level > p.level + 1:
+            out.append({"title": x.title, "seq": x.first, "level": x.level, "parent": p.title,
+                        "parent_level": p.level,
+                        "why": f"level {x.level} under a level {p.level} parent: change its "
+                               "level (merge, then split at the same unit)"})
+    return out
+
+
+def summary(results: list[dict], path, record: bool, reviewed: bool = False,
+            level_warnings: list | None = None) -> dict:
     return {"file": str(path) if path else None, "record": record, "reviewed": reviewed,
             "applied": sum(r["status"] == APPLIED for r in results),
             "stale": sum(r["status"] == STALE for r in results),
             "unmatched": sum(r["status"] == UNMATCHED for r in results),
-            "results": results}
+            "level_warnings": list(level_warnings or []), "results": results}
 
 
 def confirmed(summary: dict | None) -> tuple[bool, str]:
     """(structure confirmed, why not) from an entry's ``summary``: the owner ticked
-    "Structure reviewed" and none of its decisions is stale or unmatched. Decisions
-    alone (a planner's draft) do not confirm anything. The sheet's entryStatus uses the
-    same rule."""
+    "Structure reviewed", none of its decisions is stale or unmatched and no section is
+    more than one level below its parent. Decisions alone (a planner's draft) do not
+    confirm anything. The sheet's entryStatus uses the same rule."""
     d = summary or {}
+    why = []
     bad = d.get("stale", 0) + d.get("unmatched", 0)
     if bad:
-        return False, f"{bad} stale or unmatched decision{'s' if bad != 1 else ''}"
+        why.append(f"{bad} stale or unmatched decision{'s' if bad != 1 else ''}")
+    gaps = len(d.get("level_warnings") or [])
+    if gaps:
+        why.append(f"{gaps} section{'s' if gaps != 1 else ''} more than one level below "
+                   f"{'their' if gaps != 1 else 'its'} parent")
+    if why:
+        return False, "; ".join(why)
     if not d.get("reviewed"):
         return False, "'Structure reviewed' not ticked"
     return True, ""

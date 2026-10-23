@@ -96,6 +96,7 @@ table.tree th { font-weight: 600; background: var(--bg); }
 table.tree tr.sec td.title { padding-left: calc(4px + var(--depth, 0) * 18px); }   /* any depth */
 table.tree tr.sec[data-level="1"] td.title { font-weight: 600; }
 table.tree tr.sec.lowconf { background: var(--warn-bg); }
+table.tree tr.sec.levelgap td.title { box-shadow: inset 3px 0 var(--poor); }
 table.tree input.t { width: 100%; min-width: 180px; }
 table.tree input.a { width: 100%; min-width: 120px; }
 table.tree td.pages { white-space: nowrap; }

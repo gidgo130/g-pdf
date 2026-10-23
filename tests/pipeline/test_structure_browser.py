@@ -16,7 +16,7 @@ from gpdf import cli  # noqa: E402
 from gpdf.pipeline import structure_decisions as sd  # noqa: E402
 
 from .test_sections import anthology, text_dir  # noqa: E402, F401
-from .test_structure_decisions import DEEP_STATUS, deep_ops  # noqa: E402
+from .test_structure_decisions import DEEP_STATUS, GAP_WHY, deep_ops, gap_merge  # noqa: E402
 
 NO_PICKER = "delete Window.prototype.showSaveFilePicker; delete window.showSaveFilePicker;"
 ID = "e" * 64
@@ -196,6 +196,30 @@ def test_split_form_offers_one_level_below_the_deepest_and_the_tree_indents_by_l
     assert page.errors == []
 
 
+def test_a_section_left_too_deep_by_a_merge_is_marked_and_makes_the_entry_a_problem(
+        browser, out, text_dir, capsys):
+    dec = {"schema": 1, "entries": {ID: {"reviewed": True, "ops": [gap_merge(anthology())]}}}
+    (out / sd.DECISIONS).write_text(json.dumps(dec), "utf-8")
+    assert cli.main(["structure", "--text", str(text_dir), "--out", str(out)]) == 0
+    capsys.readouterr()
+    tree, data = py_tree(out)
+    page = open_sheet(browser, out / sd.SHEET)
+    assert js_tree(page) == tree
+    assert page.evaluate(f"gpdfStructure.results('{ID}')") == ["applied"]
+    assert page.evaluate(f"gpdfStructure.levelGaps('{ID}')") == [
+        [w["seq"], w["level"], w["why"]] for w in data["decisions"]["level_warnings"]]
+    assert page.evaluate(f"gpdfStructure.status('{ID}')") == "problems"
+    assert page.inner_text("#progress") == "Reviewed 0 / 1 (1 with problems)"
+    assert page.locator(f'tr.entry[data-id="{ID}"] .badge.problems').get_attribute(
+        "title") == "1 section more than one level below its parent"
+    page.click('[data-filter="problems"]')
+    assert page.locator("tr.entry").count() == 1
+    page.locator(f'tr.entry[data-id="{ID}"]').click()
+    assert page.locator("tr.sec.levelgap").count() == 1
+    assert GAP_WHY in sec(page, 5, 3).inner_text()
+    assert page.errors == []
+
+
 def test_stale_decisions_are_shown_refused_ops_say_why_and_unsaved_work_restores(
         browser, out, text_dir):
     dec = {"schema": 1, "entries": {ID: {"reviewed": True, "ops": [
@@ -204,7 +228,7 @@ def test_stale_decisions_are_shown_refused_ops_say_why_and_unsaved_work_restores
     assert cli.main(["structure", "--text", str(text_dir), "--out", str(out)]) == 0
     page = open_sheet(browser, out / sd.SHEET)
     assert page.evaluate(f"gpdfStructure.status('{ID}')") == "problems"
-    assert "1 with stale" in page.inner_text("#progress")
+    assert "1 with problems" in page.inner_text("#progress")
     page.click('[data-filter="problems"]')
     assert page.locator("tr.entry").count() == 1
     page.locator(f'tr.entry[data-id="{ID}"]').click()
