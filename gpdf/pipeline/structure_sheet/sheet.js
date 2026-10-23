@@ -74,12 +74,18 @@
     const kind = op.op, seq = op.seq, level = op.level, n = e.units.length;
     if (OPS.indexOf(kind) < 0) return ["unmatched", "unknown decision " + JSON.stringify(kind)];
     if (!okHash(e, seq, op.hash)) return ["stale", "unit " + seq + " is not the text it was when the decision was made (the export changed)"];
-    if ([1, 2, 3].indexOf(level) < 0) return ["unmatched", "level " + JSON.stringify(level) + " is not 1, 2 or 3"];
+    if (!(Number.isInteger(level) && level >= 1)) return ["unmatched", "level " + JSON.stringify(level) + " is not a whole number from 1 up"];
     const start = seq - 1;
     const hasRole = Object.prototype.hasOwnProperty.call(op, "role");
     if (hasRole && ROLES.indexOf(op.role) < 0) return ["unmatched", "role " + JSON.stringify(op.role) + " is not one of " + ROLES.join(", ")];
     if (kind === "split") {
       if (secs.some((x) => x.start === start && x.level === level)) return ["unmatched", "a level-" + level + " section already starts at unit " + seq];
+      let parent = null;
+      secs.forEach((x) => { if (x.start <= start && start < x.end && x.level < level && (!parent || x.level > parent.level)) parent = x; });
+      if (parent && level > parent.level + 1) {
+        return ["unmatched", "«" + (clean(op.title) || "(untitled)").slice(0, 40) + "» (level " + level + ") would be " + (level - parent.level) +
+          " levels below its parent «" + parent.title.slice(0, 40) + "» (level " + parent.level + "): a section is at most one level deeper than its parent"];
+      }
       let inner = null;
       secs.forEach((x) => { if (x.start <= start && start < x.end && (!inner || x.level > inner.level)) inner = x; });
       secs.push({ start: start, level: level, title: clean(op.title) || "(untitled)", author: clean(op.author) || null,

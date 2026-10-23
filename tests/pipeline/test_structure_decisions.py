@@ -95,6 +95,59 @@ def test_stale_and_unmatched_decisions_are_reported_and_never_applied():
     check_invariants(s, e.units)
 
 
+def deep_ops(e):
+    """Level 4 and 5 under essay two's Bibliografía (level 3 at unit 25), refused splits two
+    and three levels below their parent, a move and merges with deep sections at the same
+    unit (a merge may leave a deeper section below a shallower parent for a while: the
+    split after it changes the level back), malformed levels."""
+    return [
+        {"op": "split", "seq": 26, "level": 4, "hash": h(e, 26), "title": "Cuba",
+         "author": "", "role": "bibliography"},
+        {"op": "split", "seq": 27, "level": 5, "hash": h(e, 27), "title": "Madrid",
+         "author": "Otro", "role": "primary"},
+        {"op": "split", "seq": 23, "level": 4, "hash": h(e, 23), "title": "Salto",
+         "role": "primary"},
+        {"op": "split", "seq": 22, "level": 5, "hash": h(e, 22), "title": "", "role": "primary"},
+        {"op": "split", "seq": 25, "level": 4, "hash": h(e, 25), "title": "Lista",
+         "role": "bibliography"},
+        {"op": "move", "seq": 25, "level": 3, "hash": h(e, 25), "to": 24, "to_hash": h(e, 24)},
+        {"op": "merge", "seq": 24, "level": 4, "hash": h(e, 24)},
+        {"op": "merge", "seq": 24, "level": 3, "hash": h(e, 24)},
+        {"op": "split", "seq": 24, "level": 3, "hash": h(e, 24), "title": "Bibliografía citada",
+         "role": "bibliography"},
+        {"op": "split", "seq": 20, "level": 0, "hash": h(e, 20), "title": "x"},
+        {"op": "edit", "seq": 26, "level": True, "hash": h(e, 26), "title": "x"},
+        {"op": "edit", "seq": 26, "level": "4", "hash": h(e, 26), "title": "x"}]
+
+
+DEEP_STATUS = ["applied", "applied", "unmatched", "unmatched", "applied", "applied",
+               "applied", "applied", "applied", "unmatched", "unmatched", "unmatched"]
+
+
+def test_sections_nest_to_any_depth_one_level_below_their_parent():
+    e, s = detected()
+    results = sd.apply(s, {"ops": deep_ops(e)})
+    assert [r["status"] for r in results] == DEEP_STATUS
+    whys = [r["why"] for r in results]
+    assert whys[2] == ("«Salto» (level 4) would be 2 levels below its parent «Ensayo dos "
+                       "sobre el choteo» (level 2): a section is at most one level deeper "
+                       "than its parent")
+    assert whys[3].startswith("«(untitled)» (level 5) would be 3 levels below")
+    assert whys[9:] == ["level 0 is not a whole number from 1 up",
+                        "level true is not a whole number from 1 up",
+                        'level "4" is not a whole number from 1 up']
+    check_invariants(s, e.units)
+    assert tree(s)[-4:-1] == [(24, 27, 3, "Bibliografía citada", None, "bibliography"),
+                              (26, 27, 4, "Cuba", None, "bibliography"),
+                              (27, 27, 5, "Madrid", "Otro", "primary")]
+    by = {x.title: x for x in s.sections}
+    assert by["Madrid"].parent == by["Cuba"].id
+    assert by["Cuba"].parent == by["Bibliografía citada"].id
+    assert "Lista" not in by and "Salto" not in by
+    assert by["Ensayo dos sobre el choteo"].last == 27
+    assert s.checks["sections_by_level"][5] == 1
+
+
 def test_decisions_file_is_validated_and_only_read(tmp_path):
     path = tmp_path / sd.DECISIONS
     assert sd.load(path) == {"schema": 1, "entries": {}}

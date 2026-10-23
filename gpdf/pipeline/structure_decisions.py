@@ -19,6 +19,10 @@ stale and is not applied. A decision whose section is gone (or that would break 
 tiling) is unmatched and not applied either. The review sheet replays the same rules in
 JavaScript (structure_sheet/sheet.js); keep the two in step.
 
+A level is any whole number from 1 up (detection gives 1-3; the owner may go deeper), and a
+section is at most one level deeper than its parent: a split that would start a section
+further below the section around it is unmatched.
+
 Moving a section's start moves the sections of deeper levels that start at the same unit
 with it; merging removes the boundary (the units join the section before them); a split
 starts a new section at a unit.
@@ -106,8 +110,8 @@ def _apply_op(secs: list, units: list, op: dict, new_section) -> tuple[str, str]
     if not _ok_hash(units, seq, op.get("hash")):
         return STALE, (f"unit {seq} is not the text it was when the decision was made "
                        "(the export changed)")
-    if level not in (1, 2, 3):
-        return UNMATCHED, f"level {level!r} is not 1, 2 or 3"
+    if not (isinstance(level, int) and not isinstance(level, bool) and level >= 1):
+        return UNMATCHED, f"level {json.dumps(level)} is not a whole number from 1 up"
     start = seq - 1
     role = op.get("role")
     if "role" in op and role not in st.ROLES:
@@ -115,6 +119,14 @@ def _apply_op(secs: list, units: list, op: dict, new_section) -> tuple[str, str]
     if kind == "split":
         if any(x.start == start and x.level == level for x in secs):
             return UNMATCHED, f"a level-{level} section already starts at unit {seq}"
+        parent = max((x for x in secs if x.start <= start < x.end and x.level < level),
+                     key=lambda x: x.level, default=None)
+        if parent is not None and level > parent.level + 1:
+            title = str(op.get("title") or "").strip() or "(untitled)"
+            return UNMATCHED, (f"«{title[:40]}» (level {level}) would be "
+                               f"{level - parent.level} levels below its parent "
+                               f"«{parent.title[:40]}» (level {parent.level}): a section is "
+                               "at most one level deeper than its parent")
         inner = max((x for x in secs if x.start <= start < x.end), key=lambda x: x.level)
         x = new_section(level=level, title=str(op.get("title") or "").strip() or "(untitled)",
                         author=str(op.get("author") or "").strip() or None,

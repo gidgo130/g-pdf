@@ -15,7 +15,8 @@ sync_api = pytest.importorskip("playwright.sync_api")
 from gpdf import cli  # noqa: E402
 from gpdf.pipeline import structure_decisions as sd  # noqa: E402
 
-from .test_sections import text_dir  # noqa: E402, F401
+from .test_sections import anthology, text_dir  # noqa: E402, F401
+from .test_structure_decisions import DEEP_STATUS, deep_ops  # noqa: E402
 
 NO_PICKER = "delete Window.prototype.showSaveFilePicker; delete window.showSaveFilePicker;"
 ID = "e" * 64
@@ -132,6 +133,24 @@ def test_edit_move_merge_split_and_metadata_saved_and_applied_by_the_next_run(
     page = open_sheet(browser, out / sd.SHEET)               # the rewritten sheet
     assert js_tree(page) == shown
     assert page.inner_text("#progress") == "Reviewed 1 / 1"
+    assert page.errors == []
+
+
+def test_deep_sections_replay_as_in_python(browser, out, text_dir, capsys):
+    e = anthology()
+    dec = {"schema": 1, "entries": {ID: {"ops": deep_ops(e)}}}
+    (out / sd.DECISIONS).write_text(json.dumps(dec), "utf-8")
+    assert cli.main(["structure", "--text", str(text_dir), "--out", str(out)]) == 0
+    assert "decisions: 7 applied, 0 stale, 5 unmatched" in capsys.readouterr().out
+    tree, data = py_tree(out)
+    page = open_sheet(browser, out / sd.SHEET)
+    assert js_tree(page) == tree
+    assert (27, 27, 5, "Madrid", "Otro", "primary") in tree
+    assert page.evaluate(f"gpdfStructure.results('{ID}')") == DEEP_STATUS
+    page.locator(f'tr.entry[data-id="{ID}"]').click()
+    shown = page.locator("ul.ops li").all_inner_texts()
+    for line, r in zip(shown, data["decisions"]["results"], strict=True):
+        assert r["why"] in line
     assert page.errors == []
 
 
