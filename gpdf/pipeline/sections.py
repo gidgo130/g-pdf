@@ -874,8 +874,11 @@ def clean_author(author: str | None, title: str, heads: set, titles: set) -> tup
                 break                                                 # and the title
         else:
             break
-    if any(len(h) >= 4 and (ratio(fa, h) >= 0.75 or fa == h) for h in heads | titles) or \
-            ratio(fa, fold(title)) >= 0.75:
+    person_like = not a.isupper() and (name_like(a) or bool(st.names_list(a)))
+    if any(len(h) >= 4 and (ratio(fa, h) >= 0.75 or fa == h) for h in heads) or \
+            any(len(h) >= 4 and (fa == h or (not person_like and ratio(fa, h) >= 0.75))
+                for h in titles) or \
+            (not person_like and ratio(fa, fold(title)) >= 0.75) or fa == fold(title):
         return None, f"«{author[:50]}» is a running head or a section title, not an author"
     parts = [p for p in _NAME_SEP.split(a) if p and p.strip()]
     def person(p):

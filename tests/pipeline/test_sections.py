@@ -474,6 +474,9 @@ def test_author_lines_glued_authors_and_author_lists_with_a_revista_or_an_et_al(
                            heads, titles)[0] == "José Vasconcelos"
     assert st._number_at_end("Guillermo de Torre: “Madrid, meridiano intelectual”, 594 o")[1] == "594"
     assert sc._author_line("Jorge Luis Borges ¬") == "Jorge Luis Borges"
+    assert sc.clean_author("Rubén Darío", "Marinetti y el futurismo", set(),
+                           {"oda a ruben dario"})[0] == "Rubén Darío"      # a person, not the ode
+    assert sc.clean_author("NEGRISMO Y NEGRITUD", "x", set(), {"negrismo y negritud"})[0] is None
     assert sc.clean_author("Ortelli y Gasset [Jorge Luis Borges y Carlos Mastronardi]", "x",
                            heads, titles)[0] == "Jorge Luis Borges y Carlos Mastronardi"
 
