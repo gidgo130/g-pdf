@@ -68,6 +68,9 @@ In `cmd.exe`, use `.venv\Scripts\activate.bat` instead.
 
 ## Book prep (gpdf-cli)
 
+The three review sheets (split, catalogue, structure) are explained control by
+control in [docs/review-sheets.md](docs/review-sheets.md).
+
 `gpdf-cli split` turns two-page spread scans into single pages. It writes a new
 file and never changes the original. It needs the `prep` extra (numpy, Pillow):
 
@@ -214,9 +217,10 @@ a file moves, and flag them for re-confirming when a file changes.
   tried too: text or picture.
   `--no-trial` skips the trial.
 
-Open the sheet in a browser. Check each file, change the action or add a
-title, author, year, page offset or notes, and press **Confirm** (or
-**Confirm all shown**). Then press **Save decisions** and keep
+Open the sheet in a browser (its controls are explained in
+[docs/review-sheets.md](docs/review-sheets.md)). Check each file, change the
+action or add a title, author, year, page offset or notes, and press
+**Confirm** (or **Confirm all shown**). Then press **Save decisions** and keep
 `catalogue.decisions.json` in the catalogue folder. The survey reads that
 file but never writes it. A re-run only hashes unchanged files; use
 `--remeasure` to measure everything again, and `--sheet-only` to rewrite
@@ -297,7 +301,9 @@ working files and the catalogue folder are only read.
    ```
 
    Then open `private\book-prep\structure\structure.review.html` in a
-   browser. It works offline, straight from the file.
+   browser. It works offline, straight from the file. Every control, and how
+   a book is divided into units and sections, is explained in
+   [docs/review-sheets.md](docs/review-sheets.md).
 2. Review. Entries with low-confidence sections come first; click a row to
    open it. In the section tree you can:
    - edit a title, author or role in place;
