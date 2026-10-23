@@ -27,6 +27,10 @@ Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they wer
 reviewed (or spreads could not be split), OCR failed on some pages, the survey could
 not read a file or run a trial page, apply or export refused a file, or handoff
 skipped an entry; 1 error (for backup, also a copy that does not match its source).
+
+With GPDF_BACKUP_DIR set, the commands that read your decisions (split --decisions or
+--sheet-only, survey, apply, export, structure, handoff) first back up private/book-prep
+there, if it changed; GPDF_NO_AUTO_BACKUP=1 turns that off.
 """
 
 from __future__ import annotations
@@ -238,6 +242,7 @@ def main(argv: list[str] | None = None) -> int:
             pass
     parser = build_parser()
     args = parser.parse_args(argv)
+    _auto_backup(args)
     if args.command == "ocr":
         return _ocr_main(args, parser)
     if args.command == "survey":
@@ -529,6 +534,43 @@ def _backup_main(args) -> int:
     print("checked:   every copy matches its source (sha256)")
     print(f"restore:   copy the files back to the same relative paths under {args.source}")
     return EXIT_OK
+
+
+READS_DECISIONS = ("survey", "apply", "export", "structure", "handoff")
+BACKUP_TIP = ("tip: set GPDF_BACKUP_DIR to back up your review decisions automatically "
+              "(README: Backing up your review work)")
+
+
+def _auto_backup(args):
+    """Before a command that reads the owner's decisions: back up private/book-prep to
+    $GPDF_BACKUP_DIR (nothing if unchanged). One line on stderr; never stops the command.
+    GPDF_NO_AUTO_BACKUP=1 turns it off."""
+    reads = args.command in READS_DECISIONS or (
+        args.command == "split" and (args.decisions or args.sheet_only))
+    if not reads or os.environ.get("GPDF_NO_AUTO_BACKUP") == "1":
+        return
+    from gpdf.pipeline import backup
+
+    if not backup.DEFAULT_SOURCE.is_dir():
+        return
+    to = os.environ.get("GPDF_BACKUP_DIR")
+    if not to:
+        print(BACKUP_TIP, file=sys.stderr)
+        return
+    try:
+        res = backup.run(backup.DEFAULT_SOURCE, Path(to))
+    except Exception as e:  # noqa: BLE001 - the backup must never block the pipeline
+        print(f"gpdf-cli: warning: automatic backup failed ({e}); continuing without it",
+              file=sys.stderr)
+        return
+    if res.differs:
+        print(f"gpdf-cli: warning: automatic backup failed (the copy of {res.differs[0]} "
+              f"differs from its source, in {res.dest}); continuing without it",
+              file=sys.stderr)
+    elif res.unchanged:
+        print(f"backup: unchanged since {res.dest.name}", file=sys.stderr)
+    else:
+        print(f"backup: {len(res.files)} files -> {res.dest}", file=sys.stderr)
 
 
 def _structure_main(args) -> int:

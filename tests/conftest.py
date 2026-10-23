@@ -27,6 +27,15 @@ def no_unexpected_message_boxes(monkeypatch):
         monkeypatch.setattr(QMessageBox, name, refuse)
 
 
+@pytest.fixture(autouse=True)
+def no_auto_backup(monkeypatch):
+    """gpdf-cli backs up private/book-prep before pipeline commands when GPDF_BACKUP_DIR is
+    set: never from the suite, which may run where the owner's real decisions live. The
+    tests of that backup undo this."""
+    monkeypatch.setenv("GPDF_NO_AUTO_BACKUP", "1")
+    monkeypatch.delenv("GPDF_BACKUP_DIR", raising=False)
+
+
 @pytest.fixture
 def make_pdf(tmp_path):
     """Factory: make_pdf("name.pdf", sizes=[(w, h), ...]) -> Path."""

@@ -148,3 +148,98 @@ def test_the_newest_folder_is_compared_even_within_one_second(tmp_path):
                  "g-pdf-backup-20261022-101010-10", "g-pdf-backup-20261021-235959-3"):
         (to / name).mkdir(parents=True)
     assert backup.latest(to).name == "g-pdf-backup-20261022-101010-10"
+
+
+# Automatic backup before the commands that read the owner's decisions.
+
+def auto_env(tmp_path, monkeypatch, backup_dir=None):
+    """A repo-like cwd with private/book-prep holding decisions; the env as the owner sets
+    it. Returns the backup folder."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "private" / "book-prep"
+    src.mkdir(parents=True)
+    (src / "a_split.decisions.json").write_text('{"pages": []}', "utf-8")
+    (src / "catalogue").mkdir()
+    monkeypatch.delenv("GPDF_NO_AUTO_BACKUP")
+    to = backup_dir or tmp_path / "onedrive" / "g-pdf-backups"
+    monkeypatch.setenv("GPDF_BACKUP_DIR", str(to))
+    return to
+
+
+def sheet_only(tmp_path):
+    """A cheap pipeline command: its own error shows it ran."""
+    return cli.main(["survey", "--sheet-only", "--catalogue",
+                     str(tmp_path / "private" / "book-prep" / "catalogue")])
+
+
+def test_a_pipeline_command_backs_up_once_then_reports_unchanged(tmp_path, monkeypatch, capsys):
+    to = auto_env(tmp_path, monkeypatch)
+    assert sheet_only(tmp_path) == 1
+    [dest] = list(to.iterdir())
+    assert (dest / "a_split.decisions.json").is_file()
+    err = capsys.readouterr().err
+    assert f"backup: 1 files -> {dest}" in err and "run the survey first" in err
+    assert sheet_only(tmp_path) == 1
+    assert list(to.iterdir()) == [dest]
+    err = capsys.readouterr().err
+    assert f"backup: unchanged since {dest.name}" in err and "run the survey first" in err
+
+
+def test_without_the_env_only_the_tip_is_printed(tmp_path, monkeypatch, capsys):
+    auto_env(tmp_path, monkeypatch)
+    monkeypatch.delenv("GPDF_BACKUP_DIR")
+    assert sheet_only(tmp_path) == 1
+    err = capsys.readouterr().err
+    assert err.count("tip: set GPDF_BACKUP_DIR") == 1
+    assert "README: Backing up your review work" in err and "backup:" not in err
+
+
+def test_a_failing_backup_warns_and_the_command_still_runs(tmp_path, monkeypatch, capsys):
+    not_a_dir = tmp_path / "file"
+    not_a_dir.write_text("x", "utf-8")
+    auto_env(tmp_path, monkeypatch, backup_dir=not_a_dir)
+    assert sheet_only(tmp_path) == 1
+    err = capsys.readouterr().err
+    assert "warning: automatic backup failed" in err and "run the survey first" in err
+
+    monkeypatch.setenv("GPDF_BACKUP_DIR", str(tmp_path / "backups"))
+    real = backup.shutil.copy2
+
+    def bad_copy(a, b):
+        real(a, b)
+        with open(b, "ab") as f:
+            f.write(b"x")
+
+    monkeypatch.setattr(backup.shutil, "copy2", bad_copy)
+    assert sheet_only(tmp_path) == 1
+    err = capsys.readouterr().err
+    assert "warning: automatic backup failed" in err and "differs" in err
+    assert "run the survey first" in err
+
+
+def test_no_auto_backup_turns_it_off(tmp_path, monkeypatch, capsys):
+    to = auto_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("GPDF_NO_AUTO_BACKUP", "1")
+    assert sheet_only(tmp_path) == 1
+    assert not to.exists()
+    err = capsys.readouterr().err
+    assert "backup:" not in err and "tip:" not in err
+
+
+def test_only_commands_that_read_decisions_back_up(tmp_path, monkeypatch, capsys):
+    to = auto_env(tmp_path, monkeypatch)
+    assert cli.main(["ocr", "nowhere.pdf", "-o", "out", "--lang", "spa"]) == 1
+    assert cli.main(["split", "nowhere.pdf", "-o", "out", "--dry-run"]) == 1
+    assert not to.exists() and "backup:" not in capsys.readouterr().err
+    assert cli.main(["split", "nowhere.pdf", "-o", "out", "--decisions", "d.json"]) == 1
+    assert len(list(to.iterdir())) == 1
+
+
+def test_no_book_prep_folder_skips_quietly(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GPDF_NO_AUTO_BACKUP")
+    monkeypatch.setenv("GPDF_BACKUP_DIR", str(tmp_path / "backups"))
+    assert sheet_only(tmp_path) == 1
+    err = capsys.readouterr().err
+    assert "backup:" not in err and "tip:" not in err
+    assert not (tmp_path / "backups").exists()
