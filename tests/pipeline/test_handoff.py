@@ -120,6 +120,16 @@ def test_decisions_confirm_the_structure_and_the_metadata(made, capsys):
     (out / sd.DECISIONS).write_text(json.dumps(dec), "utf-8")
     structure(text, out, capsys)
     assert cli.main(["handoff", "--structure", str(out), "--to", str(to)]) == 0
+    assert "structure not confirmed ('Structure reviewed' not ticked)" in capsys.readouterr().out
+    f = lines(to / f"{pdf_sha}{ho.SUFFIX}")[0]
+    assert f["metadata_confirmed"] is True and f["structure_confirmed"] is False
+    assert json.loads((to / ho.INDEX).read_text("utf-8"))["files"][pdf_sha][
+        "structure_confirmed"] is False
+
+    dec["entries"]["e" * 64]["reviewed"] = True                      # the owner ticks it
+    (out / sd.DECISIONS).write_text(json.dumps(dec), "utf-8")
+    structure(text, out, capsys)
+    assert cli.main(["handoff", "--structure", str(out), "--to", str(to)]) == 0
     f, *rest = lines(to / f"{pdf_sha}{ho.SUFFIX}")
     assert (f["title"], f["author"], f["year"], f["publisher"]) == (
         "Isla", "Editor Prueba", "1999", "Editorial Prueba")

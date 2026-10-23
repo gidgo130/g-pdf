@@ -165,11 +165,15 @@
   }
 
   function entryStatus(e) {
-    const r = state[e.id];
-    if (!hasContent(r)) return ["pending", "no decisions yet"];
-    const bad = replay(e).results.filter((x) => x.status !== "applied").length;
+    // as structure_decisions.confirmed: reviewed only when the owner ticked "Structure
+    // reviewed" and nothing is stale or unmatched; decisions alone (a draft) are pending
+    const r = state[e.id] || {};
+    const results = replay(e).results;
+    const bad = results.filter((x) => x.status !== "applied").length;
     if (bad) return ["problems", bad + " stale or unmatched decision" + (bad === 1 ? "" : "s")];
-    return ["reviewed", "decisions made"];
+    if (r.reviewed) return ["reviewed", "Structure reviewed ticked"];
+    if (results.length) return ["pending", results.length + " decision" + (results.length === 1 ? "" : "s") + ", not ticked"];
+    return ["pending", "no decisions yet"];
   }
   const STATUS_TEXT = { pending: "not reviewed", problems: "stale / unmatched", reviewed: "reviewed" };
 

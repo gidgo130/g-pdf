@@ -5,7 +5,8 @@ review sheet (structure.review.html) and read, never written, by gpdf-cli struct
     {"schema": 1, "saved": "...", "entries": {<entry id>: {
         "metadata": {"title", "author", "year", "publisher", "confirmed"},   optional
         "role": "primary",                    optional: every section of the entry
-        "reviewed": true,                     optional: looked at, nothing to change
+        "reviewed": true,                     optional: the owner ticked "Structure reviewed";
+                                              without it the structure is not confirmed
         "ops": [                              applied in order, after the role
           {"op": "edit",  "seq", "level", "hash", "title"?, "author"?, "role"?},
           {"op": "move",  "seq", "level", "hash", "to", "to_hash"},
@@ -232,12 +233,26 @@ def apply(s, rec: dict | None) -> list[dict]:
     return results
 
 
-def summary(results: list[dict], path, record: bool) -> dict:
-    return {"file": str(path) if path else None, "record": record,
+def summary(results: list[dict], path, record: bool, reviewed: bool = False) -> dict:
+    return {"file": str(path) if path else None, "record": record, "reviewed": reviewed,
             "applied": sum(r["status"] == APPLIED for r in results),
             "stale": sum(r["status"] == STALE for r in results),
             "unmatched": sum(r["status"] == UNMATCHED for r in results),
             "results": results}
+
+
+def confirmed(summary: dict | None) -> tuple[bool, str]:
+    """(structure confirmed, why not) from an entry's ``summary``: the owner ticked
+    "Structure reviewed" and none of its decisions is stale or unmatched. Decisions
+    alone (a planner's draft) do not confirm anything. The sheet's entryStatus uses the
+    same rule."""
+    d = summary or {}
+    bad = d.get("stale", 0) + d.get("unmatched", 0)
+    if bad:
+        return False, f"{bad} stale or unmatched decision{'s' if bad != 1 else ''}"
+    if not d.get("reviewed"):
+        return False, "'Structure reviewed' not ticked"
+    return True, ""
 
 
 # ---------------------------------------------------------------------------- review sheet

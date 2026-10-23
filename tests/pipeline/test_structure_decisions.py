@@ -148,6 +148,25 @@ def test_sections_nest_to_any_depth_one_level_below_their_parent():
     assert s.checks["sections_by_level"][5] == 1
 
 
+def test_structure_is_confirmed_only_when_ticked_and_no_decision_is_stale_or_unmatched():
+    e, _ = detected()
+    edit = {"op": "edit", "seq": 16, "level": 2, "hash": h(e, 16), "title": "Ensayo"}
+    stale = dict(edit, hash="0" * 10)
+
+    def confirmed(rec):
+        _, s = detected()
+        return sd.confirmed(sd.summary(sd.apply(s, rec), None, rec is not None,
+                                       bool((rec or {}).get("reviewed"))))
+
+    assert confirmed(None) == (False, "'Structure reviewed' not ticked")
+    assert confirmed({"metadata": {"title": "Isla"}, "ops": [edit]}) == (
+        False, "'Structure reviewed' not ticked")
+    assert confirmed({"reviewed": True, "ops": [edit, stale]}) == (
+        False, "1 stale or unmatched decision")
+    assert confirmed({"reviewed": True, "ops": [edit]}) == (True, "")
+    assert confirmed({"reviewed": True}) == (True, "")
+
+
 def test_decisions_file_is_validated_and_only_read(tmp_path):
     path = tmp_path / sd.DECISIONS
     assert sd.load(path) == {"schema": 1, "entries": {}}
@@ -167,8 +186,9 @@ def test_cli_structure_applies_the_decisions_file_in_out_by_default(text_dir, tm
     assert cli.main(["structure", "--text", str(text_dir), "--out", str(out)]) == 0
     assert "decisions: none" in capsys.readouterr().out
     first = json.loads((out / "libro.sections.json").read_text("utf-8"))
-    assert first["decisions"] == {"file": None, "record": False, "applied": 0, "stale": 0,
-                                  "unmatched": 0, "results": []}
+    assert first["decisions"] == {"file": None, "record": False, "reviewed": False,
+                                  "applied": 0, "stale": 0, "unmatched": 0, "results": []}
+    assert first["structure_confirmed"] is False
     assert len(first["units_sha256"]) == 64
     e = anthology()
     rec = {"metadata": {"title": "Isla", "confirmed": True}, "ops": [
@@ -181,8 +201,10 @@ def test_cli_structure_applies_the_decisions_file_in_out_by_default(text_dir, tm
     outp = capsys.readouterr().out
     assert "decisions: 2 applied, 1 stale, 0 unmatched" in outp
     assert "stale: edit at unit 21" in outp and "1 entry not in the export" in outp
+    assert "structure: not confirmed (1 stale or unmatched decision)" in outp
     data = json.loads((out / "libro.sections.json").read_text("utf-8"))
     assert data["decisions"]["record"] is True and data["decisions"]["stale"] == 1
+    assert data["structure_confirmed"] is False
     assert data["metadata"]["title"] == "Isla" and data["metadata"]["confirmed"] is True
     assert any(x["author"] == "Autora Una" and x.get("owner") for x in data["sections"])
     log = json.loads((out / "structure.json").read_text("utf-8"))

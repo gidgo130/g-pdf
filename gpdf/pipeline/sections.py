@@ -251,12 +251,15 @@ class Structure:
     decisions: dict | None = None                   # structure_decisions.summary
 
     def to_json(self) -> dict:
+        from gpdf.pipeline.structure_decisions import confirmed
+
         e = self.entry
         return {"schema": SCHEMA, "tool_version": __version__, "made": catalogue.now(),
                 "entry": e.id, "stem": e.stem, "input": e.input, "input_sha256": e.input_sha,
                 "kind": e.kind, "book_kind": self.kind, "pages": e.page_count,
                 "units": len(e.units), "units_sha256": e.units_sha, "lang": e.lang,
                 "metadata": self.metadata, "decisions": self.decisions,
+                "structure_confirmed": confirmed(self.decisions)[0],
                 "sections": [s.to_json() for s in self.sections],
                 "outline": {
                     "junk": self.outline.junk,
@@ -1770,7 +1773,8 @@ def run(text_dir, outdir, only=(), decisions=None) -> RunResult:
             s.detected = [x.to_json() for x in s.sections]
             s.detected_metadata = dict(s.metadata)
             mine = dec["entries"].get(id_)
-            s.decisions = sd.summary(sd.apply(s, mine), res.decisions_path, mine is not None)
+            s.decisions = sd.summary(sd.apply(s, mine), res.decisions_path, mine is not None,
+                                     bool((mine or {}).get("reviewed")))
             res.written.append(write_sections(s, outdir))
             res.structures.append(s)
         except (StructureError, OSError, ValueError, KeyError) as err:
@@ -1816,6 +1820,8 @@ def _pct(n, total) -> str:
 
 
 def report(res: RunResult) -> str:
+    from gpdf.pipeline import structure_decisions as sd
+
     out = []
     for s in res.structures:
         e = s.entry
@@ -1869,6 +1875,8 @@ def report(res: RunResult) -> str:
                     where = (f" at unit {r['seq']} (level {r['level']})"
                              if r.get("seq") is not None else "")
                     out.append(f"    {r['status']}: {r['op']}{where}: {r['why']}")
+        ok, why = sd.confirmed(d)
+        out.append("  structure: confirmed" if ok else f"  structure: not confirmed ({why})")
         out.append("  invariants: every unit in exactly one section; sections in order; none "
                    "empty: ok")
     for stem, err in res.errors:

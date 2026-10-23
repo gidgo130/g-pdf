@@ -26,6 +26,7 @@ from pathlib import Path
 
 from gpdf import __version__
 from gpdf.pipeline import catalogue
+from gpdf.pipeline.structure_decisions import confirmed
 
 FORMAT = "gpdf-handoff/1"
 SUFFIX = ".gpdf.jsonl"
@@ -136,17 +137,6 @@ def _deepest(secs: list[dict], n: int) -> list[str | None]:
             if leaf[i] is None or leaf[i][0] < x["level"]:
                 leaf[i] = (x["level"], x["id"])
     return [v[1] if v else None for v in leaf]
-
-
-def confirmed(dec: dict) -> tuple[bool, str]:
-    """(structure confirmed, why not): the owner's decisions exist for the entry and none
-    of them is stale or unmatched."""
-    if not dec or not dec.get("record"):
-        return False, "no decisions"
-    bad = dec.get("stale", 0) + dec.get("unmatched", 0)
-    if bad:
-        return False, f"{bad} stale or unmatched decision{'s' if bad != 1 else ''}"
-    return True, ""
 
 
 def _ascending(v) -> bool:

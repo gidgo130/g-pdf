@@ -105,6 +105,15 @@ def test_edit_move_merge_split_and_metadata_saved_and_applied_by_the_next_run(
     assert (23, 24, 3, "Primera parte", None, "criticism") in shown
     assert not any(t[3] == "Puerto Rico" for t in shown)
     assert page.evaluate(f"gpdfStructure.results('{ID}')") == ["applied"] * 5
+    assert page.evaluate(f"gpdfStructure.status('{ID}')") == "pending"     # not ticked yet
+    assert page.inner_text("#progress") == "Reviewed 0 / 1"
+    assert page.locator(f'tr.entry[data-id="{ID}"] .badge.pending').get_attribute(
+        "title") == "5 decisions, not ticked"
+    page.click('[data-filter="pending"]')
+    assert page.locator("tr.entry").count() == 1
+    page.locator("input.reviewed").click()                 # the row leaves "Not reviewed"
+    assert page.locator("tr.entry").count() == 0
+    page.click('[data-filter="all"]')
     assert page.evaluate(f"gpdfStructure.status('{ID}')") == "reviewed"
     assert page.inner_text("#progress") == "Reviewed 1 / 1"
     assert page.locator("ul.ops li").count() == 4
@@ -189,7 +198,7 @@ def test_split_form_offers_one_level_below_the_deepest_and_the_tree_indents_by_l
 
 def test_stale_decisions_are_shown_refused_ops_say_why_and_unsaved_work_restores(
         browser, out, text_dir):
-    dec = {"schema": 1, "entries": {ID: {"ops": [
+    dec = {"schema": 1, "entries": {ID: {"reviewed": True, "ops": [
         {"op": "edit", "seq": 16, "level": 2, "hash": "0" * 10, "title": "Viejo"}]}}}
     (out / sd.DECISIONS).write_text(json.dumps(dec), "utf-8")
     assert cli.main(["structure", "--text", str(text_dir), "--out", str(out)]) == 0
