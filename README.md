@@ -353,18 +353,38 @@ writes again. `backup` copies only the decision files to a dated folder,
 changes the source or earlier backups. `--source` defaults to
 `private\book-prep`.
 
-1. In PowerShell with the venv active, at the repo root, find your OneDrive
-   folder: `echo $env:OneDriveCommercial` (the TU account). If that prints
-   nothing, use `echo $env:OneDrive`.
-2. Make a backup folder there once:
-   `mkdir "$env:OneDriveCommercial\g-pdf-backups"`.
-3. Run `gpdf-cli backup --to "$env:OneDriveCommercial\g-pdf-backups"`. Expect
-   4 files (3 split decisions + catalogue decisions), 5 once you have saved the
-   structure review, plus any `.bak.json`.
-4. Check the new dated folder appears in OneDrive (File Explorer: the cloud
-   icon turns green).
-5. Repeat after every review session: split review, saving the catalogue
-   sheet, saving the structure sheet.
+If the decision files and their hashes are the same as in the newest backup's
+`manifest.json`, `backup` makes no new folder and prints `unchanged since
+<folder>`. A missing or unreadable earlier manifest counts as changed.
+`--always` makes a new dated folder anyway.
+
+**Automatic backup.** When the `GPDF_BACKUP_DIR` environment variable is set,
+every command that reads your decisions (`split --decisions` or
+`--sheet-only`, `survey`, `apply`, `export`, `structure`, `handoff`) first
+backs up `private\book-prep` there. Because unchanged decisions are skipped,
+this costs nothing between review sessions. It prints one line:
+`backup: unchanged since …` or `backup: N files -> <folder>`. If the
+backup fails (folder unreachable, a copy that doesn't match), you get a
+warning and the command runs anyway. Without the variable, the command prints
+a one-line tip. Set `GPDF_NO_AUTO_BACKUP=1` to turn the automatic backup off.
+
+Setting it up (once):
+
+1. In PowerShell, find your OneDrive folder: `echo $env:OneDriveCommercial`
+   (the TU account). If that prints nothing, use `$env:OneDrive` in place of
+   `$env:OneDriveCommercial` below.
+2. Set the variable for your user:
+   `[Environment]::SetEnvironmentVariable("GPDF_BACKUP_DIR", "$env:OneDriveCommercial\g-pdf-backups", "User")`
+3. Close and reopen VS Code (and any PowerShell window) so it sees the
+   variable. Check with `echo $env:GPDF_BACKUP_DIR`.
+4. From then on, every survey/split/apply/export/structure/handoff run backs
+   up your decisions first whenever they changed. Check the new dated folder
+   appears in OneDrive (File Explorer: the cloud icon turns green).
+
+A manual `gpdf-cli backup --to "$env:GPDF_BACKUP_DIR"` still works anytime
+(add `--always` for a fresh folder even when nothing changed). Expect 4 files
+(3 split decisions + catalogue decisions), 5 once you have saved the structure
+review, plus any `.bak.json`.
 
 To restore, copy the files from the dated folder back to the same relative
 paths under `private\book-prep`.
