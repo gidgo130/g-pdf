@@ -29,7 +29,8 @@ gpdf-cli = "gpdf.cli:main"
 include = ["gpdf*"]
 
 [tool.setuptools.package-data]
-gpdf = ["assets/*", "pipeline/review_sheet/*", "pipeline/catalogue_sheet/*"]
+gpdf = ["assets/*", "pipeline/review_sheet/*", "pipeline/catalogue_sheet/*",
+        "pipeline/structure_sheet/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

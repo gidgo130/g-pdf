@@ -1,0 +1,60 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- g-pdf structure review sheet. Self-contained: no network. Written by gpdf-cli structure. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Structure review</title>
+<style>
+{{css}}
+</style>
+</head>
+<body>
+<header id="top">
+  <div class="row">
+    <strong>Structure review</strong>
+    <span id="progress" class="pill"></span>
+    <span class="filters" role="group" aria-label="Show">
+      <button type="button" data-filter="all">All</button>
+      <button type="button" data-filter="low">Low confidence</button>
+      <button type="button" data-filter="pending">Not reviewed</button>
+      <button type="button" data-filter="problems">Stale or unmatched</button>
+    </span>
+    <span class="spacer"></span>
+    <button type="button" id="save" class="primary">Save decisions</button>
+    <button type="button" id="load">Load decisions...</button>
+    <input type="file" id="load-input" accept=".json,application/json" hidden>
+  </div>
+  <div class="row small muted" id="where"></div>
+  <div id="restore" class="banner" hidden>
+    <span id="restore-text"></span>
+    <button type="button" id="restore-yes">Restore</button>
+    <button type="button" id="restore-no">Discard</button>
+  </div>
+  <div id="msg" role="status" aria-live="polite"></div>
+</header>
+
+<main>
+  <table id="entries">
+    <thead>
+      <tr>
+        <th>File</th><th>Kind</th><th class="num">Sections</th><th class="num">Low</th>
+        <th>Metadata</th><th>Decisions</th><th>Status</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p class="muted small">Click a row to see its metadata and section tree. Edit titles,
+    authors and roles in place; move a section's start, merge it into the section before,
+    or split it at a unit. Nothing is applied by this sheet: it only saves
+    <code>structure.decisions.json</code>; the next <code>gpdf-cli structure</code> run
+    applies it.</p>
+</main>
+
+<script type="application/json" id="gpdf-data">{{data}}</script>
+<script>
+{{js}}
+</script>
+</body>
+</html>

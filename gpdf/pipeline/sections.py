@@ -246,6 +246,7 @@ class Structure:
     default_role: str = PRIMARY
     checks: dict = field(default_factory=dict)
     detected: list = field(default_factory=list)    # the sections before the decisions
+    detected_metadata: dict = field(default_factory=dict)
     decisions: dict | None = None                   # structure_decisions.summary
 
     def to_json(self) -> dict:
@@ -1720,6 +1721,8 @@ class RunResult:
     text_dir: Path | None = None
     decisions_path: Path | None = None              # the decisions file read, if any
     unknown: list = field(default_factory=list)     # its entry ids not in the export
+    sheet: Path | None = None
+    sheet_bytes: int = 0
 
 
 def plan_dirs(text_dir, outdir, export: dict) -> None:
@@ -1764,12 +1767,15 @@ def run(text_dir, outdir, only=(), decisions=None) -> RunResult:
             e = load_entry(text_dir, id_, rec)
             s = detect(e)
             s.detected = [x.to_json() for x in s.sections]
+            s.detected_metadata = dict(s.metadata)
             mine = dec["entries"].get(id_)
             s.decisions = sd.summary(sd.apply(s, mine), res.decisions_path, mine is not None)
             res.written.append(write_sections(s, outdir))
             res.structures.append(s)
         except (StructureError, OSError, ValueError, KeyError) as err:
             res.errors.append((rec.get("stem", id_), f"{type(err).__name__}: {err}"))
+    if not only:
+        res.sheet, res.sheet_bytes = sd.write_sheet(res.structures, dec, outdir)
     res.seconds = time.perf_counter() - t0
     res.log = write_log(outdir, res)
     return res
@@ -1888,6 +1894,11 @@ def report(res: RunResult) -> str:
         n = len(res.unknown)
         out.append(f"  {n} entr{'y' if n == 1 else 'ies'} not in the export (decisions kept, "
                    "not applied): " + ", ".join(k[:12] for k in res.unknown))
+    if res.sheet:
+        out.append(f"review sheet: {res.sheet} ({res.sheet_bytes / 1e6:.1f} MB): open it in a "
+                   "browser")
+    else:
+        out.append("review sheet not rewritten (--only): run without --only to rewrite it")
     out.append(f"wrote {len(res.written)} sections file(s), {len(res.errors)} error(s) "
                f"({res.seconds:.1f} s); run log: {res.log}")
     return "\n".join(out)

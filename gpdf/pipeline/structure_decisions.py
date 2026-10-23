@@ -30,10 +30,14 @@ import hashlib
 import json
 from pathlib import Path
 
+from gpdf.pipeline import catalogue
 from gpdf.pipeline import structure as st
 
 SCHEMA = 1
 DECISIONS = "structure.decisions.json"
+SHEET = "structure.review.html"
+SUMMARY_HEAD, SUMMARY_TAIL = 120, 80   # characters of a long unit shown in the sheet
+KIND_CODES = {"heading": "h", "prose": "p", "verse": "v", "quote": "q", "note": "n"}
 HASH_LEN = 10
 APPLIED, STALE, UNMATCHED = "applied", "stale", "unmatched"
 OPS = ("edit", "move", "merge", "split")
@@ -222,3 +226,67 @@ def summary(results: list[dict], path, record: bool) -> dict:
             "stale": sum(r["status"] == STALE for r in results),
             "unmatched": sum(r["status"] == UNMATCHED for r in results),
             "results": results}
+
+
+# ---------------------------------------------------------------------------- review sheet
+def unit_summary(text: str) -> str:
+    """A unit as the sheet shows it: whole when short, else its start and its end."""
+    if len(text) <= SUMMARY_HEAD + SUMMARY_TAIL:
+        return text
+    return text[:SUMMARY_HEAD] + " … " + text[-SUMMARY_TAIL:]
+
+
+def _units_view(e) -> list[list]:
+    """Per unit (index = seq - 1): kind code, first and last page (or line), first and
+    last printed label, summary, hash."""
+    out = []
+    for u in e.units:
+        loc = u.get("pages") or u.get("lines") or [None, None]
+        labels = u.get("labels") or [None, None]
+        out.append([KIND_CODES.get(u["kind"], u["kind"][:1]), loc[0], loc[-1], labels[0],
+                    labels[-1], unit_summary(u["text"]), unit_hash(u["text"])])
+    return out
+
+
+def _entry_view(s) -> dict:
+    e = s.entry
+    keep = ("first", "level", "title", "author", "role", "confidence", "evidence", "sources")
+    return {"id": e.id, "stem": e.stem, "file": Path(e.input).name, "kind": e.kind,
+            "book_kind": s.kind, "pages": e.page_count, "lang": e.lang,
+            "metadata": s.detected_metadata,
+            "detected": [{k: x[k] for k in keep} for x in s.detected],
+            "low": sum(x["confidence"] == st.LOW for x in s.detected),
+            "units": _units_view(e)}
+
+
+def sheet_data(structures, decisions: dict, folder) -> dict:
+    """The sheet's data: every entry's detected sections (before the decisions; the sheet
+    replays them), units and prefilled metadata, low-confidence entries first."""
+    entries = sorted((_entry_view(s) for s in structures),
+                     key=lambda v: (-v["low"], v["file"].lower()))
+    return {"folder": str(folder), "decisions_name": DECISIONS, "generated": catalogue.now(),
+            "roles": list(st.ROLES), "decisions": decisions, "entries": entries}
+
+
+def _template(name: str) -> str:
+    from importlib import resources
+
+    return resources.files("gpdf.pipeline").joinpath("structure_sheet", name).read_text("utf-8")
+
+
+def render_html(data: dict) -> str:
+    """The sheet: template with CSS, JS and the data inlined. ``</`` and ``://`` are
+    escaped in the JSON (no string in it can end the script element or read as a link)."""
+    blob = (json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+            .replace("</", "<\\/").replace("://", "\\u003a//"))
+    page = _template("sheet.html")
+    for token, value in (("{{css}}", _template("sheet.css")), ("{{js}}", _template("sheet.js"))):
+        page = page.replace(token, value)
+    return page.replace("{{data}}", blob)          # last: the data may contain anything
+
+
+def write_sheet(structures, decisions: dict, folder) -> tuple[Path, int]:
+    """Write DIR/structure.review.html (always replaced); returns (path, bytes)."""
+    path = Path(folder) / SHEET
+    catalogue.write_text(path, render_html(sheet_data(structures, decisions, Path(folder))))
+    return path, path.stat().st_size

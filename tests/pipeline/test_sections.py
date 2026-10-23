@@ -256,7 +256,8 @@ def test_cli_structure_writes_sections_files_and_run_log_only(text_dir, tmp_path
     out = tmp_path / "structure"
     before = snapshot(text_dir) | snapshot(tmp_path / "src")
     assert cli.main(["structure", "--text", str(text_dir), "--out", str(out)]) == 0
-    assert sorted(p.name for p in out.iterdir()) == ["libro.sections.json", "structure.json"]
+    assert sorted(p.name for p in out.iterdir()) == ["libro.sections.json", "structure.json",
+                                                    "structure.review.html"]
     assert snapshot(text_dir) | snapshot(tmp_path / "src") == before
     data = json.loads((out / "libro.sections.json").read_text("utf-8"))
     assert data["schema"] == 1 and data["entry"] == "e" * 64 and data["stem"] == "libro"
