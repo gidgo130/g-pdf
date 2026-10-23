@@ -17,12 +17,14 @@
     gpdf-cli structure --text DIR --out OUTDIR [--decisions FILE]
                                                     # parts, sections, authors and roles
                                                     # of every exported entry
+    gpdf-cli handoff --structure DIR [--to OUTDIR]  # gpdf-handoff/1 files for the search
+                                                    # app, named by the working file's sha256
     gpdf-cli backup --to DIR [--source PATH]        # copy the review decisions to DIR
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
 reviewed (or spreads could not be split), OCR failed on some pages, the survey could
-not read a file or run a trial page, or apply or export refused a file; 1 error (for
-backup, also a copy that does not match its source).
+not read a file or run a trial page, apply or export refused a file, or handoff
+skipped an entry; 1 error (for backup, also a copy that does not match its source).
 """
 
 from __future__ import annotations
@@ -188,6 +190,27 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--decisions", metavar="FILE", type=Path,
                    help="your review decisions to apply over the detection (default: "
                         "OUTDIR/structure.decisions.json if it exists; never written)")
+    hf = sub.add_parser("handoff", help="write the files the search app reads (gpdf-handoff/1)",
+                        description="For every exported entry that is not excluded, write "
+                                    "OUTDIR/<sha256 of the working file>.gpdf.jsonl (the "
+                                    "entry, its sections and every unit in reading order; "
+                                    "see docs/handoff-format.md) and OUTDIR/handoff.json. "
+                                    "Entries whose export or working file changed are "
+                                    "skipped. Nothing in OUTDIR is deleted: files no longer "
+                                    "current are listed for you to remove. The structure, "
+                                    "text and catalogue folders and the working files are "
+                                    "only read.")
+    hf.add_argument("--structure", metavar="DIR", type=Path, required=True,
+                    help="the structure folder (structure.json, <name>.sections.json)")
+    hf.add_argument("--to", metavar="OUTDIR", type=Path,
+                    default=Path("private/book-prep/handoff"),
+                    help="folder for the handoff files (default: private/book-prep/handoff; "
+                         "created if missing)")
+    hf.add_argument("--text", metavar="DIR", type=Path,
+                    help="the export folder (default: the one structure.json names)")
+    hf.add_argument("--catalogue", metavar="DIR", type=Path,
+                    help="catalogue folder whose decisions say what is excluded (default: "
+                         "private/book-prep/catalogue if it exists)")
     b = sub.add_parser("backup", help="copy your review decisions to a dated backup folder",
                        description="Copy the files only you can make (*.decisions.json and "
                                    "their *.bak.json backups) from the source tree to "
@@ -222,6 +245,8 @@ def main(argv: list[str] | None = None) -> int:
         return _backup_main(args)
     if args.command == "structure":
         return _structure_main(args)
+    if args.command == "handoff":
+        return _handoff_main(args)
     if args.sheet_only:
         for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
                          ("--report", args.report), ("--accept-flagged", args.accept_flagged)):
@@ -508,6 +533,18 @@ def _structure_main(args) -> int:
         return EXIT_ERROR
     print(sections.report(res))
     return EXIT_ERROR if res.errors else EXIT_OK
+
+
+def _handoff_main(args) -> int:
+    from gpdf.pipeline import handoff
+
+    try:
+        res = handoff.run(args.structure, args.to, args.text, args.catalogue)
+    except (handoff.HandoffError, OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    print(handoff.report(res))
+    return EXIT_UNREVIEWED if res.skipped else EXIT_OK
 
 
 def _run_exports(export, todo, out, jobs):
