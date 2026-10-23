@@ -555,7 +555,7 @@ def test_a_bracketed_list_of_names_in_the_running_head_is_the_essays_author_not_
     """Caribe: the last essay is signed "Sin autor" with the attributed names in the
     running head "[F. Mieses Burgos, F. Gatón Arce, Manuel Llanes et al.]": one section,
     its author those names, starting at the "Sin autor" line."""
-    heads = {3: "Autor Uno", 4: "Autor Uno",
+    heads = {3: "Autor Uno", 4: "Autor U no",                  # an OCR variant of the name
              6: "[F. Mieses Burgos, F. Gatón Arce, Manuel Llanes et al.]",
              7: "Sin autor [F. Mieses Burgos, F. Gatón Arce, Manuel Llanes et al.]"}
     units = [unit(0, 1, "Las vanguardias en el Caribe", "heading"), unit(0, 1, "EDITORA PRUEBA"),
@@ -579,3 +579,29 @@ def test_a_bracketed_list_of_names_in_the_running_head_is_the_essays_author_not_
     assert last.author == "F. Mieses Burgos, F. Gatón Arce, Manuel Llanes et al."
     assert last.first == 8 and last.pdf_pages == [5, 7]              # from the "Sin autor" line
     assert last.confidence == "high" and "head" in last.sources
+
+
+def test_a_contents_header_without_a_page_of_its_own_joins_its_first_child():
+    """Vasconcelos: the contents header "INTRODUCCIÓN" above an entry without a number
+    ("Una fiesta en la Normal", found on p10) has no page of its own near p10; it is not
+    a one-page section on p10 but context for that entry (the real INTRODUCCIÓN starts
+    on p2 from its heading, too far back for the header's own look-back)."""
+    units = [unit(0, 1, "La raza de prueba", "heading"), unit(0, 1, "AUTOR PRUEBA"),
+             unit(0, 2, "INTRODUCCIÓN", "heading"), unit(0, 2, "El mestizaje empieza aquí.")]
+    for p in range(3, 10):
+        units.append(unit(0, p, f"Sigue la introducción en la página {p}."))
+    units += [unit(0, 10, "Terminaba la introducción con estas palabras."),
+              unit(0, 10, "UNA FIESTA EN LA NORMAL"), unit(0, 10, "La fiesta fue en la Normal."),
+              unit(0, 11, "Sigue la fiesta."), unit(0, 12, "FIN", "heading"), unit(0, 12, "Fin.")]
+    rows = rows_for(13, kinds={13: "index"})
+    apparatus = [{"entry": "e" * 64, "page": 13, "label": None, "kind": "index", "columns": 1,
+                  "lines": ["ÍNDICE", "INTRODUCCIÓN", "Una fiesta en la Normal", "FIN 12"]}]
+    e = entry(units, rows, apparatus, [], stem="vasc4",
+              meta={"title": "La raza de prueba", "author": "Autor Prueba"})
+    s = sc.detect(e)
+    check_invariants(s, e.units)
+    titles = [(x.title, x.pdf_pages[0]) for x in s.sections if not x.implicit]
+    assert ("INTRODUCCIÓN", 10) not in titles, titles
+    fiesta = next(x for x in s.sections if st.fold(x.title) == "una fiesta en la normal")
+    assert fiesta.pdf_pages[0] == 10 and fiesta.first == 13       # at its own heading line
+    assert any("INTRODUCCIÓN" in ev for ev in fiesta.evidence), fiesta.evidence

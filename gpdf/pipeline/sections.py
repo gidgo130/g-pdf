@@ -1130,6 +1130,12 @@ def detect(e: Entry, decisions: dict | None = None) -> Structure:
     # 2. anchor every claim to a unit
     groups: dict[tuple, _Group] = {}
     unplaced = []
+    titled_on: dict[int, int] = {}              # page -> the unit of a contents entry
+    for c in c_claims:                          # anchored at its title there
+        if c.source == "contents" and (on.get(c.page) or on.get(c.page + 1)):
+            idx, how = st.anchor(c, units, on, pos)
+            if how.startswith(("heading", "title")):
+                titled_on.setdefault(c.page, idx)
     for c in c_claims + b_claims + h_claims + g_claims:
         if c.page < 1:
             continue
@@ -1140,6 +1146,11 @@ def detect(e: Entry, decisions: dict | None = None) -> Structure:
             unplaced.append(c)
             continue
         idx, how = st.anchor(c, units, on, pos)
+        if (c.source == "header" and how.startswith(("first unit", "title words"))
+                and c.page in titled_on
+                and not st.part_like(c.title)):
+            idx = titled_on[c.page]             # a header with no page of its own: context
+            how = f"with the contents entry found on p{c.page}"   # for its first child
         if c.source == "contents" and how.startswith(("heading", "title")):
             stats["matched"] += 1
         if c.source == "heading" and role in (BIBLIOGRAPHY, NOTES):
@@ -1168,8 +1179,11 @@ def detect(e: Entry, decisions: dict | None = None) -> Structure:
             s.outline.dropped.append((c, why))
         s.notes.append(f"claim «{c.title[:50]}» ({c.source}) dropped: {why}")
     # 3. merge the claims of each unit; authors from author-only heads; duplicates
-    head_keys = {fold(h) for parts in st.heads_of(e.rows).values() for h in parts
-                 if not name_like(h) and not st.names_list(h)}   # contributor heads
+    all_heads = {h for parts in st.heads_of(e.rows).values() for h in parts}
+    name_heads = {fold(h) for h in all_heads if name_like(h) or st.names_list(h)}
+    head_keys = {fold(h) for h in all_heads if fold(h) not in name_heads     # contributor
+                 and not any(ratio(fold(h), n) >= 0.8 for n in name_heads)}  # heads, and
+    # their OCR variants ("Gloria Videla de Ri vero"), are authors, never excluded
     contents_titles = {fold(c.title) for c in c_claims if c.source in ("contents", "header")
                        and (len(c.title.split()) >= 2 or len(c.title) >= 6)}
     merged = [_merge(g, units, not_authors, head_keys, contents_titles) for g in groups.values()]
