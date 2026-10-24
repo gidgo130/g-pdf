@@ -49,8 +49,10 @@ LEVEL_RE = re.compile(r"^(?:WARNING|CAUTION|DANGER|NOTICE|NOTE|IMPORTANT)\s*[!:]
 CURLY_RE = re.compile(r"“([^”]+)”")
 NUM_RE = re.compile(r"(?<![\w.])(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:/\d+)?")
 ELLIPSIS = "…"
-# **bold**, _italic_ (PyMuPDF's table Markdown); a lone "**" is a footnote mark ("CE**")
-EMPH_RE = re.compile(r"\*\*[^*\s][^*]*\*\*|_[^_\s|][^_|]*_")
+# **bold**, _italic_ (PyMuPDF's table Markdown, "Shows_EDIT:MDI_ in"); a lone "**" is a
+# footnote mark ("CE**"), underscores inside a name are not markup ("PROBE_SELECT_TO_PROBE")
+EMPH_RE = re.compile(r"\*\*[^*\s][^*]*\*\*|(?<![A-Za-z0-9])_[^_\s|][^_|]*_"
+                     r"|_[^_\s|][^_|]*_(?![A-Za-z0-9])")
 GLUE_RE = re.compile(r"([A-Za-z]*[a-z])([A-Z]{2,}[A-Za-z]*)")   # "inSETUP"
 _TRANS = str.maketrans({**{c: "'" for c in "‘’‚‛′"}, **{c: '"' for c in "“”„‟″"},
                         **{c: "-" for c in "‐‑‒–—―−⁃"}, "⁄": "/", "­": None, " ": " "})

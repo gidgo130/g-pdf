@@ -291,9 +291,10 @@ def test_markup_and_glued_words_in_table_cells_warn(ex, setup):
         glitch = [w for w in res.warnings if not w["message"].startswith("unanchored")]
         assert len(glitch) == 1 and what in glitch[0]["message"], (cell, res.warnings)
         assert glitch[0]["line"] == len((_good() + extra).splitlines())
-    # footnote asterisks printed on the page are not markup
-    res = _check(ex, setup, NAME, _good() + extra.replace("Press POWER UP.", "Press POWER UP.**"))
-    assert not [w for w in res.warnings if "emphasis" in w["message"]]
+    # footnote asterisks printed on the page are not markup, nor are underscores inside a name
+    for cell in ("Press POWER UP.**", "PROBE_SELECT_TO_PROBE"):
+        res = _check(ex, setup, NAME, _good() + extra.replace("Press POWER UP.", cell))
+        assert not [w for w in res.warnings if "emphasis" in w["message"]], cell
     # an anchored table (pdf 4) is looked at too
     res = _check(ex, setup, NAME, _good().replace("| 16 | 45 | 1.0 |", "| 16 | 45<br> | 1.0 |"))
     assert res.errors == [] and ["<br>" in w["message"] for w in res.warnings] == [True]
