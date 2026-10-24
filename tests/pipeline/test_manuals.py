@@ -491,6 +491,42 @@ def test_table_cell_soft_hyphens_dropped_and_joined_at_a_line_end():
         "comes on immediately when the torch is activated."
 
 
+def test_table_cell_keeps_a_glyph_that_overruns_the_tables_outer_edge():
+    """Wilton 4200A pdf 18: the "c" of "rec" (x 540.5-545.0) and the "it" of "removes it"
+    (540.5-545.0) run past the table's right rule (541.0). A glyph past an outer edge of the
+    table belongs to the cell on that edge when its line lies mostly inside the cell (left,
+    top and bottom the same: a tall glyph); a line that straddles the edge, a line outside the
+    table, or a glyph that crosses a rule inside it, does not."""
+    from types import SimpleNamespace
+
+    def line(text, x, y, w=4.5, h=6.5, up="", down=""):
+        """``text`` from ``x`` on baseline ``y``; the letters in ``up`` rise 12 higher, those
+        in ``down`` drop 16 below the baseline."""
+        chars = []
+        for c in text:
+            y0, y1 = y - h - 12 * (c in up), y + 16 * (c in down)
+            chars.append({"c": c, "bbox": (x, y0, x + w, y1), "origin": (x, y)})
+            x += w
+        y0, y1 = min(c["bbox"][1] for c in chars), max(c["bbox"][3] for c in chars)
+        return {"bbox": (chars[0]["bbox"][0], y0, x, y1), "spans": [{"chars": chars}]}
+
+    xs, ys = (54.8, 181.0, 541.0), (300.0, 320.0, 340.0)
+    t = SimpleNamespace(bbox=(xs[0], ys[0], xs[2], ys[2]), rows=[
+        SimpleNamespace(cells=[(xs[0], a, xs[1], b), (xs[1], a, xs[2], b)])
+        for a, b in zip(ys, ys[1:])])
+    raw = [line("on the page", 300.0, 302.0),        # straddles the top rule: y 295.5-302
+           line("(abc)", 300.0, 308.0, up="()"),     # past the top: "(" and ")" y 289.5-308
+           line("Check for rec", 486.5, 310),        # past the right: "c" x 540.5-545.0
+           line("xyw", 51.0, 330),                   # past the left: "x" x 51.0-55.5
+           line("i", 178.0, 330, w=4.0),             # crosses the inner rule, mostly left of it
+           line("removes it", 504.5, 330),           # "i" 540.5-545.0, "t" 545.0-549.5
+           line("[abc]", 300.0, 336.0, down="[]"),   # past the bottom: "[" and "]" y 329.5-352
+           line("below it", 300.0, 344.5),           # straddles the bottom rule: y 338-344.5
+           line("z", 541.5, 330)]                    # outside the table
+    assert manuals.table_cells(t, raw) == [["", "(abc) Check for rec"],
+                                           ["xyw i", "removes it [abc]"]]
+
+
 class _FakePage:
     """A page whose rawdict is given: one span per text, glyphs 5 pt apart."""
 

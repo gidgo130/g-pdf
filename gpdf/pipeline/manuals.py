@@ -781,14 +781,17 @@ def _stack_labels(labels: list[Line]) -> list[Line]:
     return out
 
 
-def cell_text(raw_lines: list[dict], rect: pymupdf.Rect) -> str:
+def cell_text(raw_lines: list[dict], rect: pymupdf.Rect, edges: str = "") -> str:
     """A table cell's text built from the characters of the table's text page (the one
     PyMuPDF's ``extract_cells`` reads, which merges overprinted bold; a glyph belongs to the
     cell when more than half of it lies inside, or a zero-width glyph when its centre does: the
-    letters MuPDF adds when it expands a ligature), as plain text: no emphasis markup, a space
-    where the page has a word gap (a whitespace glyph, as in body text) or a line break, soft
-    hyphens dropped (one at a line end joins the word with the next line), junk glyphs dropped
-    (they were counted from the page; a tab or line-break glyph is a word gap)."""
+    letters MuPDF adds when it expands a ligature; or a glyph past the rule on one of the sides
+    in ``edges`` (``l``, ``t``, ``r``, ``b``: those on the table's outer edge) when most of its
+    line's glyphs are inside, as "rec" and "removes it" on Wilton 4200A pdf 18; a line that
+    straddles the rule stays out), as plain text: no emphasis markup, a space where the
+    page has a word gap (a whitespace glyph, as in body text) or a line break, soft hyphens
+    dropped (one at a line end joins the word with the next line), junk glyphs dropped (they
+    were counted from the page; a tab or line-break glyph is a word gap)."""
     words, cur = [], []
 
     def brk():
@@ -796,28 +799,41 @@ def cell_text(raw_lines: list[dict], rect: pymupdf.Rect) -> str:
             words.append("".join(cur))
             cur.clear()
 
-    def inside(b: pymupdf.Rect) -> bool:
+    def half_in(b: pymupdf.Rect) -> bool:
         if b.is_empty:
             return pymupdf.Point((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2) in rect
         return abs(b & rect) > 0.5 * abs(b)
+
+    def past_edge(b: pymupdf.Rect) -> bool:
+        r = pymupdf.Rect(rect)              # widened over the glyph on the outer sides
+        if "l" in edges:
+            r.x0 = min(r.x0, b.x0)
+        if "t" in edges:
+            r.y0 = min(r.y0, b.y0)
+        if "r" in edges:
+            r.x1 = max(r.x1, b.x1)
+        if "b" in edges:
+            r.y1 = max(r.y1, b.y1)
+        return abs(b & r) > 0.5 * abs(b)
 
     for ln in raw_lines:
         lb = ln["bbox"]
         if lb[0] > rect.x1 or lb[2] < rect.x0 or lb[1] > rect.y1 or lb[3] < rect.y0:
             continue
+        glyphs = [(_cp1252(ch["c"]), pymupdf.Rect(ch["bbox"]))
+                  for span in ln["spans"] for ch in span["chars"]]
+        ins = [half_in(b) for c, b in glyphs if not c.isspace()]
+        mostly = bool(edges) and sum(ins) > len(ins) / 2      # the line lies in this cell
         soft = False                        # the line so far ends in a soft hyphen
-        for span in ln["spans"]:
-            for ch in span["chars"]:
-                c = _cp1252(ch["c"])
-                b = pymupdf.Rect(ch["bbox"])
-                if c.isspace() or not inside(b):
-                    brk()
-                    soft = False
-                elif c == "­":
-                    soft = True
-                elif not _dropped(c):
-                    cur.append(c)
-                    soft = False
+        for c, b in glyphs:
+            if c.isspace() or not (half_in(b) or (mostly and past_edge(b))):
+                brk()
+                soft = False
+            elif c == "­":
+                soft = True
+            elif not _dropped(c):
+                cur.append(c)
+                soft = False
         if not soft:
             brk()
     return " ".join(words)
@@ -826,8 +842,15 @@ def cell_text(raw_lines: list[dict], rect: pymupdf.Rect) -> str:
 def table_cells(t, raw_lines: list[dict]) -> list[list[str | None]]:
     """The table's rows of plain cells: ``None`` for a cell covered by a merged cell to its
     left or above (as PyMuPDF's ``extract``), ``""`` for an empty one."""
-    return [[None if c is None else cell_text(raw_lines, pymupdf.Rect(c)) for c in row.cells]
-            for row in t.rows]
+    tb = pymupdf.Rect(t.bbox)
+
+    def edges(c: pymupdf.Rect) -> str:
+        """The cell's sides that lie on the table's outer edge."""
+        sides = (("l", c.x0, tb.x0), ("t", c.y0, tb.y0), ("r", c.x1, tb.x1), ("b", c.y1, tb.y1))
+        return "".join(k for k, a, b in sides if abs(a - b) < 0.5)
+
+    return [[None if c is None else cell_text(raw_lines, pymupdf.Rect(c), edges(pymupdf.Rect(c)))
+             for c in row.cells] for row in t.rows]
 
 
 def table_markdown(t, cells: list[list[str | None]]) -> str:
