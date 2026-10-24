@@ -163,10 +163,47 @@ def _dropped(c: str) -> bool:
     return unicodedata.category(c) in ("Cc", "Cn", "Co")
 
 
+def _junk(c: str) -> bool:
+    """A dropped glyph that is not a tab or a line break."""
+    return c not in "\n\t" and _dropped(c)
+
+
+def clean_text(s: str) -> tuple[str, int]:
+    """``s`` without its junk glyphs, and how many there were."""
+    if not any(_junk(c) for c in s):
+        return s, 0
+    kept = "".join(c for c in s if not _junk(c))
+    return kept, len(s) - len(kept)
+
+
+def clean_record(rec: dict) -> dict:
+    """Every string of a page record (block text, items, labels, captions, stripped lines)
+    without junk glyphs; the ones found here are added to ``dropped_chars``."""
+    n = 0
+
+    def walk(o):
+        nonlocal n
+        if isinstance(o, str):
+            s, k = clean_text(o)
+            n += k
+            return s
+        if isinstance(o, list):
+            return [walk(v) for v in o]
+        if isinstance(o, dict):
+            return {k: walk(v) for k, v in o.items()}
+        return o
+
+    for key in list(rec):
+        if key != "dropped_chars":
+            rec[key] = walk(rec[key])
+    rec["dropped_chars"] = rec.get("dropped_chars", 0) + n
+    return rec
+
+
 def read_lines(page) -> tuple[list[Line], int]:
     """The page's text runs as PyMuPDF groups them (one per baseline run), cleaned: words
     split at whitespace, control glyphs dropped and counted, a soft hyphen kept only at the
-    end of a run. Non-horizontal runs are left out."""
+    end of a run. Non-horizontal runs are left out (their control glyphs are counted)."""
     d = page.get_text("rawdict", flags=FLAGS)
     out, dropped, seq = [], 0, 0
     for block in d["blocks"]:
@@ -174,6 +211,7 @@ def read_lines(page) -> tuple[list[Line], int]:
             continue
         for ln in block["lines"]:
             if abs(ln["dir"][1]) > 0.1 or ln["dir"][0] < 0:
+                dropped += sum(_junk(ch["c"]) for span in ln["spans"] for ch in span["chars"])
                 continue
             words, cur, soft = [], [], False
 
@@ -197,6 +235,7 @@ def read_lines(page) -> tuple[list[Line], int]:
                     if c.isspace():
                         flush()
                         soft = False
+                        dropped += _junk(c)       # \r, \x1c-\x1f: a word break, and junk
                         continue
                     if c == "­":
                         soft = True
@@ -713,6 +752,38 @@ def _stack_labels(labels: list[Line]) -> list[Line]:
     return out
 
 
+def _cell_text(s: str | None) -> str | None:
+    """A table cell without junk glyphs; a tab or line-break glyph inside a cell (a key
+    icon in the Haas tables) is a space, so the Markdown row stays on one line."""
+    if s is None:
+        return None
+    return re.sub(r"[\t\n]", " ", clean_text(s)[0])
+
+
+def table_markdown(t) -> str:
+    """The table as GitHub Markdown, laid out as PyMuPDF's ``Table.to_markdown`` (empty
+    cells filled from the left, then from above; header names ``ColN`` when empty), with
+    every cell cleaned. The glyphs dropped here were already counted from the page."""
+    from pymupdf.table import extract_cells
+    cells = [[None if c is None else _cell_text(extract_cells(t.textpage, c, markdown=True))
+              for c in row.cells] for row in t.rows]
+    for row in cells:
+        for i in range(len(row) - 1):
+            if row[i + 1] is None:
+                row[i + 1] = row[i]
+    for j in range(len(cells) - 1):
+        for i in range(t.col_count):
+            if cells[j + 1][i] is None:
+                cells[j + 1][i] = cells[j][i]
+    # header names keep their line breaks as <br>, as PyMuPDF writes them
+    names = [clean_text(n or "")[0].replace("\t", " ").replace("\n", "<br>") or f"Col{i + 1}"
+             for i, n in enumerate(t.header.names)]
+    out = ["|" + "|".join(names) + "|", "|" + "|".join("---" for _ in range(t.col_count)) + "|"]
+    for row in cells[0 if t.header.external else 1:]:
+        out.append("|" + "|".join(c or "" for c in row) + "|")
+    return "\n".join(out)
+
+
 def find_tables(page, height: float) -> list[Table]:
     out = []
     if hasattr(pymupdf, "no_recommend_layout"):
@@ -728,7 +799,7 @@ def find_tables(page, height: float) -> list[Table]:
         if r.y0 >= (1 - BAND) * height or r.y1 <= BAND * height:
             continue
         try:
-            md = t.to_markdown().strip()
+            md = table_markdown(t)
         except Exception:  # noqa: BLE001
             md = ""
         if not md or not any(c.isalnum() for c in md.replace("Col", "")):
@@ -1103,7 +1174,7 @@ def build_page(doc, pno: int, an: Analysis, slug: str, fig_dir: Path | None, dpi
            "warnings": warnings, "dropped_chars": pt.dropped}
     if contents:
         rec["contents"] = True
-    return rec
+    return clean_record(rec)
 
 
 # ---------------------------------------------------------------------------- a document

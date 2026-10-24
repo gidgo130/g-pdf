@@ -315,6 +315,52 @@ def test_soft_hyphen_controls_and_hidden_span(tmp_path, out):
     assert "The work stop is used" in over[0]["kept"]
 
 
+def _junk(o):
+    """The junk glyphs in a string or in every string of a record."""
+    if isinstance(o, dict):
+        return [c for v in o.values() for c in _junk(v)]
+    if isinstance(o, list):
+        return [c for v in o for c in _junk(v)]
+    return [c for c in o if c not in "\n\t" and manuals._dropped(c)] if isinstance(o, str) else []
+
+
+def test_control_glyphs_dropped_from_table_cells_and_counted_once(tmp_path, out):
+    doc = pymupdf.open()
+    page = doc.new_page(width=W, height=H)
+    rows = [("Key", "Function"), ("\x01\x02", "Cycle start"), ("\x1f", "Feed hold"),
+            ("\x0e", "Reset")]
+    x0, x1, xm, y0 = 72, 540, 220, 70
+    for i, (a, b) in enumerate(rows):
+        y = y0 + i * 24
+        page.draw_rect(pymupdf.Rect(x0, y, x1, y + 24), color=(0, 0, 0), width=0.7)
+        page.draw_line((xm, y), (xm, y + 24), color=(0, 0, 0), width=0.7)
+        page.insert_text((x0 + 4, y + 16), a, fontname="helv", fontsize=9)
+        page.insert_text((xm + 4, y + 16), b, fontname="helv", fontsize=9)
+    # vertical text is not read into lines, but its glyphs are dropped and counted too
+    page.insert_text((40, 400), "Side\x03 note", fontname="helv", fontsize=9, rotate=90)
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    rec = recs[0]
+    tables = _blocks(rec, "table")
+    assert len(tables) == 1
+    assert "Cycle start" in tables[0]["text"] and "Feed hold" in tables[0]["text"]
+    assert not _junk(rec)
+    assert not _junk(manuals.render_md({}, {}, [rec]))
+    assert rec["dropped_chars"] == 5
+
+
+def test_clean_record_sweeps_every_string():
+    rec = {"blocks": [{"kind": "figure", "caption": "Fig\x01ure 2", "labels": ["A\x02", "B"]},
+                      {"kind": "specs", "items": [{"label": "X\x7f", "values": ["1\x00"]}],
+                       "text": "| X\x7f | 1\x00 |\n|---|"}],
+           "stripped": ["Head"], "dropped_chars": 1}
+    manuals.clean_record(rec)
+    assert rec["blocks"][0] == {"kind": "figure", "caption": "Figure 2", "labels": ["A", "B"]}
+    assert rec["blocks"][1]["items"] == [{"label": "X", "values": ["1"]}]
+    assert rec["blocks"][1]["text"] == "| X | 1 |\n|---|"
+    assert rec["stripped"] == ["Head"]
+    assert rec["dropped_chars"] == 1 + 7
+
+
 def test_bold_paragraph_is_not_a_heading(tmp_path, out):
     doc = pymupdf.open()
     page = doc.new_page(width=W, height=H)
