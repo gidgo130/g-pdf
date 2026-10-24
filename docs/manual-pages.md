@@ -61,12 +61,12 @@ is the Haas control generation (Classic, NGC) or `null`.
 | --- | --- |
 | `pdf` | PDF page number, 1-based. Cite with it; it never changes. |
 | `label` | the printed page label, or `null` when the page shows none (covers, blank pages) |
-| `label_source` | `pdf_label`: the PDF's own page label (an InDesign `Sec1:` prefix is dropped); `text`: a number in the head/foot band (or a lone number in the side margin) that belongs to a run: label minus PDF index constant over >= 3 consecutive pages, chapter-page counters like `4-1` included; `inferred`: a single gap inside such a run, filled; `none` |
+| `label_source` | `pdf_label`: the PDF's own page label; a hex UTF-16 prefix is decoded, an InDesign section prefix `SecN:` is dropped (`<FEFF0053006500630031003A>1` = `1`), any other prefix is part of the label (`<FEFF00530043002D>2` = `SC-2`, `<FEFF0031002D>7` = `1-7`); `text`: a number in the head/foot band (or a lone number in the side margin) that belongs to a run: label minus PDF index constant over >= 3 consecutive pages, chapter-page counters like `4-1` included; `inferred`: a single gap inside such a run, filled; `none` |
 | `columns` | 1 or 2 (a gutter was found) |
 | `blocks` | the page's content in reading order, see below |
 | `stripped` | running heads and feet removed from the flow: band lines whose text (digits masked) repeats on >= 25% of the manual's pages, lines in the same slot that repeat, and lines on the same baseline as one of those |
 | `warnings` | per-page notes, see below |
-| `dropped_chars` | glyphs with no Unicode meaning dropped from this page (C0/C1 controls other than whitespace, private use, unassigned, U+FFFD): key icons, safety symbols, NUL padding, bell bullets |
+| `dropped_chars` | glyphs with no Unicode meaning dropped from this page (C0/C1 controls other than `\n` and `\t`, private use, unassigned, U+FFFD): key icons, safety symbols, NUL padding, bell bullets. Each glyph of the page is counted once, vertical text included. The filter applies to everything written: block text, `lines`, `items`, table cells, captions, labels and stripped lines (a tab or line-break glyph inside a table cell becomes a space; `\x1c`-`\x1f` and `\r` break a word and are counted) |
 | `contents` | only when true: the page's leader lists are page numbers in rising order (a contents or index page) and its spec blocks are of kind `contents` |
 
 Reading order: head/foot, figure, table and caption lines leave the flow; the
@@ -84,12 +84,17 @@ without a space only when the next line starts lowercase (so `CON-` / `TACT`
 stays `CON- TACT`). Case, punctuation, units, key names and G/M-codes are kept
 as printed.
 
+Every block built from text lines (all kinds but `table` and `figure`) also has
+`lines`: its lines as printed, after the glyph filter and before joining, in
+reading order (a step's number and a bullet's marker included; a soft hyphen
+at a line end stays as U+00AD). Quote line breaks from `lines`, not `text`.
+
 | kind | fields | what it is |
 | --- | --- | --- |
 | `heading` | `text` | a line set >= 1.15 x the body size, or a short bold line (<= 90 characters) on its own; consecutive heading lines of one size join |
 | `para` | `text` | running text; a new block at a vertical gap > 1.5 x the line pitch |
 | `step` | `n`, `text` | a numbered step: `1.` or `1)` at the line start (also when the number sits alone on its line and the text follows on the next); `n` is the manual's own number as a string; continuation lines are indented at least to the text |
-| `bullet` | `marker`, `text` | a line starting with a bullet character or a dash |
+| `bullet` | `marker`, `text` | a line starting with a bullet character or a dash and a space; or a line whose first glyph is from a symbol font (font name containing Wingdings, Symbol, ZapfDingbats or PSOsym) and is followed by a space, `marker` `•` (Mastercam's Wingdings `l`, Haas's Symbol `♦`; `lines` keeps the glyph as extracted). Symbol glyphs dropped as junk (Miller's PSOsym icons) do not make a bullet |
 | `warning` | `level`, `text` | a block starting WARNING, CAUTION, DANGER, NOTICE, NOTE or IMPORTANT (with or without `!` or `:`, or the word alone on a line and the box text under it); it runs to a gap > 1.5 x the pitch or to a heading, step or spec line; `level` is the word, upper case; `text` keeps the word as printed |
 | `specs` | `items`, `text` | consecutive lines `label <dot leader> value` (4+ dots or dot-space); `items` is `[{"label": ..., "values": [...]}]`, with every non-empty value when a line has two leaders (`Stock Number ... 321357A ... 321359A`); `text` is the same as a Markdown table (`Item`, `Value`, `Value 2`). Tools-needed lists are specs too |
 | `contents` | as `specs` | the specs of a contents page (see `contents` above) |
@@ -112,7 +117,18 @@ A header from the manuals.json entry (and the sha256), then per page
 and its blocks: headings as `###`, steps `1. ...` with the manual's numbers,
 bullets `- ...`, warnings `> **WARNING:** ...`, specs and tables as Markdown
 tables, figures as `[Figure: <caption or "no caption"> — figures/<file>;
-labels: a, b, c]`, paragraphs as they are.
+labels: a, b, c]`, paragraphs joined as they are.
+
+A `para` that is an NC listing is a fenced code block instead, one printed line
+per line (the `.jsonl` keeps it as a `para` with its `lines`). It is a listing
+when it has >= 2 lines and >= 60% of them are code or comment lines:
+
+- code: starts with `%`, a whole NC word (`O1234`, `N10`, `G00`, `M30`, `T1`,
+  `X.565`, `X 1.115`, glued `N11G98` or `N10#104=`; not `G0752/G0752Z`), an axis
+  expression (`X[#105]`) or a macro assignment (`#3000=1`, `#[#2+#19]=#22`),
+  also after a line number (`(2) G00 X1.1`);
+- comment: starts `(` and an upper-case letter, digit or `#`. A block of
+  comments alone is a listing only when every comment is closed.
 
 ## `manual-pages.json`
 
