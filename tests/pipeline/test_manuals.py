@@ -452,6 +452,45 @@ def test_table_cells_are_plain_text_with_spaces_between_runs_and_lines(tmp_path,
                                           "|Setup|Press [SHIFT] after [POWER UP]|"]
 
 
+def test_table_cell_keeps_the_letters_of_an_expanded_ligature():
+    """MuPDF expands a ligature glyph into its letters and gives the added letters a zero-width
+    box (Grizzly pdf 60: "ﬁ" in "finish", "ﬃ" in "difficult"): they belong to the cell too."""
+    def lig(word, x):
+        """``word`` with ``^`` before each letter a ligature adds (set at zero width)."""
+        chars, zero = [], False
+        for c in word:
+            if c == "^":
+                zero = True
+                continue
+            w = 0 if zero else 4.5
+            chars.append({"c": c, "bbox": (x, 282.5, x + w, 289.0), "origin": (x, 289.0)})
+            x += w
+            zero = False
+        return chars, x
+
+    a, x = lig("Bad f^inish, dif^f^icult", 51.3)
+    raw = [{"bbox": (51.3, 282.5, x, 289.0), "spans": [{"chars": a}]}]
+    assert manuals.cell_text(raw, pymupdf.Rect(47, 278, 300, 358)) == "Bad finish, difficult"
+
+
+def test_table_cell_soft_hyphens_dropped_and_joined_at_a_line_end():
+    """Hypertherm pdf 52 sets "im\xadme\xaddi\xadate\xadly" with zero-width soft hyphens: the cell
+    reads "immediately", as body text; a soft hyphen at the end of a cell's line joins the
+    word with the next line."""
+    def line(text, y, x=72.0):
+        chars = []
+        for c in text:
+            w = 0 if c == "\xad" else 4.5
+            chars.append({"c": c, "bbox": (x, y - 6.5, x + w, y), "origin": (x, y)})
+            x += w
+        return {"bbox": (72.0, y - 6.5, x, y), "spans": [{"chars": chars}]}
+
+    raw = [line("comes on im\xadme\xaddi\xadate\xadly when the", 100), line("torch is ac\xad", 110),
+           line("tivated.", 120)]
+    assert manuals.cell_text(raw, pymupdf.Rect(70, 90, 300, 125)) == \
+        "comes on immediately when the torch is activated."
+
+
 class _FakePage:
     """A page whose rawdict is given: one span per text, glyphs 5 pt apart."""
 

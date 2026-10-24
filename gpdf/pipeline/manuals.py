@@ -784,10 +784,11 @@ def _stack_labels(labels: list[Line]) -> list[Line]:
 def cell_text(raw_lines: list[dict], rect: pymupdf.Rect) -> str:
     """A table cell's text built from the characters of the table's text page (the one
     PyMuPDF's ``extract_cells`` reads, which merges overprinted bold; a glyph belongs to the
-    cell when more than half of it lies inside), as plain text: no emphasis markup, a space
-    where the page has a word gap (a whitespace glyph, as in body text) or a line break, junk
-    glyphs dropped (they were counted from the page; a tab or line-break glyph is a word
-    gap)."""
+    cell when more than half of it lies inside, or a zero-width glyph when its centre does: the
+    letters MuPDF adds when it expands a ligature), as plain text: no emphasis markup, a space
+    where the page has a word gap (a whitespace glyph, as in body text) or a line break, soft
+    hyphens dropped (one at a line end joins the word with the next line), junk glyphs dropped
+    (they were counted from the page; a tab or line-break glyph is a word gap)."""
     words, cur = [], []
 
     def brk():
@@ -795,19 +796,30 @@ def cell_text(raw_lines: list[dict], rect: pymupdf.Rect) -> str:
             words.append("".join(cur))
             cur.clear()
 
+    def inside(b: pymupdf.Rect) -> bool:
+        if b.is_empty:
+            return pymupdf.Point((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2) in rect
+        return abs(b & rect) > 0.5 * abs(b)
+
     for ln in raw_lines:
         lb = ln["bbox"]
         if lb[0] > rect.x1 or lb[2] < rect.x0 or lb[1] > rect.y1 or lb[3] < rect.y0:
             continue
+        soft = False                        # the line so far ends in a soft hyphen
         for span in ln["spans"]:
             for ch in span["chars"]:
                 c = _cp1252(ch["c"])
                 b = pymupdf.Rect(ch["bbox"])
-                if c.isspace() or not abs(b & rect) > 0.5 * abs(b):
+                if c.isspace() or not inside(b):
                     brk()
+                    soft = False
+                elif c == "­":
+                    soft = True
                 elif not _dropped(c):
                     cur.append(c)
-        brk()
+                    soft = False
+        if not soft:
+            brk()
     return " ".join(words)
 
 
