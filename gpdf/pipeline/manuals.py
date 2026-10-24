@@ -75,8 +75,12 @@ LABEL_PATTERNS = [
     ("c", re.compile(r"^(\d{1,2})-(\d{1,3})$")),
     ("r", re.compile(r"^([ivxlcdm]{1,8})$", re.I)),
 ]
-# "N10", "X-1.5", "X 1.115", "X[#105]", "(DRILL)", macro "#3000=1", "#[#2+#19]=#22"
-NC_LINE_RE = re.compile(r"^(?:%|[ONGMT]\d|[XYZ] ?[-+]?[\d.\[#]|\([A-Z0-9#]|#[\d\[])")
+# an NC line starts with "%", a whole NC word ("N10", "N11G98", "X-1.5", "X 1.115", "N10#104=",
+# not "G0752/G0752Z"), an axis with an expression ("X[#105]") or a macro assignment ("#3000=1",
+# "#[#2+#19]=#22"), also after a line number "(2) G00 X1.1"; a comment line starts "(DRILL"
+NC_WORD = r"[ONGMTXYZ] ?[-+]?[\d.]+(?:[A-Z][-+]?[\d.]+)*(?=[\s;(#\[]|$)"
+NC_CODE_RE = re.compile(rf"^(?:\(\d+\) )?(?:%|{NC_WORD}|[XYZ]\[|#(?:\d+|\[[^\]]*\])\s*=)")
+NC_COMMENT_RE = re.compile(r"^\([A-Z0-9#]")
 NC_SHARE = 0.6
 ROMAN = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100, "d": 500, "m": 1000}
 
@@ -1248,11 +1252,16 @@ def _warning_md(b: dict) -> str:
 
 
 def nc_code(lines: list[str]) -> bool:
-    """Lines that are mostly an NC program: >= NC_SHARE of them start with a program
-    number, block number, G/M/T word, an axis word or a comment. One line is not a listing."""
+    """Lines that are mostly an NC program: >= NC_SHARE of them are code or comment lines
+    (see NC_CODE_RE). Lines of comments alone count only when every comment is closed
+    ("(X) .750-35 IPM" in a Bridgeport feed chart is not one). One line is not a listing."""
     if len(lines) < 2:
         return False
-    return sum(bool(NC_LINE_RE.match(t)) for t in lines) >= NC_SHARE * len(lines)
+    code = [bool(NC_CODE_RE.match(t)) for t in lines]
+    comment = [bool(NC_COMMENT_RE.match(t)) for t in lines]
+    if sum(a or b for a, b in zip(code, comment)) < NC_SHARE * len(lines):
+        return False
+    return any(code) or all(re.search(r"\)\s*;?$", t) for t, c in zip(lines, comment) if c)
 
 
 def block_md(b: dict) -> str:

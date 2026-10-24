@@ -404,6 +404,16 @@ def test_blocks_keep_printed_lines_and_nc_code_is_a_code_block(tmp_path, out):
     assert manuals.nc_code(["O0300 (Initialize an array of variables) ;", "#3000=1 (Base variable) ;",
                             "#[#2+#19]=#22 ;", "END1 ;", "M99 ;"])
     assert manuals.nc_code(["Sub Program O1000 (X,Y Locations)", "X 1.115 Y-2.750", "X[#105] Y0", "M99"])
+    assert manuals.nc_code(["N10#104= [ #101 / COS[ 45. ] ]", "N11G98 G01 X#104 F100.", "N12M133 P1500"])
+    assert manuals.nc_code(["(1) M08", "(2) G00 X1.1 Z0.5 (Initial Start Point)"])
+    assert manuals.nc_code(["(Turn on Cutter Comp)", "(Move to I.D. of bored hole)"])
+    # not listings: Grizzly model numbers, a Bridgeport caption and feed chart, variable lists
+    assert not manuals.nc_code(["G0752/G0752Z Electrical Box Wiring Diagram.. 69",
+                                "G0752/G0752Z Electrical Box Components... 70"])
+    assert not manuals.nc_code(["Figure I.II - Spindle Guard Assembly", "(#30 Quick Change or Universal",
+                                "#200 Quick Change Spindle)"])
+    assert not manuals.nc_code(["(X) .750-35 IPM (X) .375-15 IPM", "(19-889mm/min) (9.5-381mm/min)"])
+    assert not manuals.nc_code(["#0 Not a number (read only)", "#1-#33 Macro call arguments"])
     # one line of prose that starts with a G-code is not a listing
     assert not manuals.nc_code(["G28 returns all axes to machine zero."])
     assert not manuals.nc_code(["X axis travel is 30 inches; Y axis travel", "(see Figure 3) is 16."])
