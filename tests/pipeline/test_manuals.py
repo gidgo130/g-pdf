@@ -315,6 +315,19 @@ def test_soft_hyphen_controls_and_hidden_span(tmp_path, out):
     assert "The work stop is used" in over[0]["kept"]
 
 
+def test_bold_paragraph_is_not_a_heading(tmp_path, out):
+    doc = pymupdf.open()
+    page = doc.new_page(width=W, height=H)
+    page.insert_text((72, 100), "Cleaning:", fontname="hebo", fontsize=BODY)
+    _lines(page, 72, 130, ["Maintenance, cleaning and repair work may only be carried",
+                           "out after the machine is protected against accidental",
+                           "starting by pulling the mains plug."], font="hebo")
+    _lines(page, 72, 190, ["Clean the machine regularly."])
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    kinds = [(b["kind"], b["text"][:20]) for b in recs[0]["blocks"]]
+    assert kinds == [("heading", "Cleaning:"), ("para", "Maintenance, cleanin"), ("para", "Clean the machine re")]
+
+
 def test_soft_hyphen_joins_the_word():
     words = manuals.join_lines(["Incorrect installa­", "tion will result"])
     assert words == "Incorrect installation will result"

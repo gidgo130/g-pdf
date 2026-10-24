@@ -42,7 +42,7 @@ RUN_MIN = 3                 # consecutive pages that make a page-number run
 GUTTER_LO, GUTTER_HI = 0.3, 0.7
 GUTTER_SIDE = 0.25
 GUTTER_MIN_LINES = 6
-GUTTER_HALF = 6.0           # pt: half the narrowest gutter
+GUTTER_HALF = 4.0           # pt: half the narrowest gutter (Enerpac's columns sit 10 pt apart)
 IMAGE_MIN_AREA = 2000.0
 DENSE_DRAWINGS = 30000      # paths: a page this dense is one vector drawing
 DRAWING_MIN_AREA = 4000.0
@@ -51,7 +51,7 @@ TABLE_COVER = 0.8           # a region mostly covered by a table is the table
 THIN_H, THIN_RATIO = 40.0, 12.0
 LABEL_WORDS = 8             # a callout label has at most this many words
 CAPTION_DIST = 40.0
-CAPTION_RE = re.compile(r"^Fig(?:ure)?\.?\s*[\d.]+")
+CAPTION_RE = re.compile(r"^(?:Fig(?:ure)?\.?\s*[\d.]+|F\d+\.\d+:)")   # "Figure 28.", "F7.26:" (Haas NGC)
 LEADER_RE = re.compile(r"(?:\s*\.){4,}\s*")
 STEP_RE = re.compile(r"^(\d{1,2})[.)](?!\d)\s*(.*)$")
 BULLET_RE = re.compile(r"^([•▪■●◦‣◆►➢✓*\-–—])\s+(.*)$")
@@ -60,6 +60,7 @@ WARN_RE = re.compile(r"^(" + "|".join(WARN_WORDS) + r")(?:\s*[!:]|\s*[–—-]\s
 WARN_TITLE_RE = re.compile(r"^(" + "|".join(w.capitalize() for w in WARN_WORDS) + r")\s*[!:]\s*(.*)$")
 GLUE_RE = re.compile(r"[a-z]{3,}[A-Z][a-z]{2,}")
 HEADING_SIZE = 1.15
+SENTENCE_END = ".!?:;)\"”"
 HEADING_CHARS = 90
 GAP_PITCH = 1.5
 CAPTION_CONT_WORDS = 12
@@ -730,7 +731,7 @@ def find_tables(page, height: float) -> list[Table]:
             md = t.to_markdown().strip()
         except Exception:  # noqa: BLE001
             md = ""
-        if not md:
+        if not md or not any(c.isalnum() for c in md.replace("Col", "")):
             continue
         out.append(Table(r, t.row_count, t.col_count, md))
     return out
@@ -879,6 +880,10 @@ class _Builder:
             self.cur_lines.append(ln)
             return
         if k == "warning":
+            if (cur is not None and cur["kind"] == "warning" and gap_ok and cur["level"] == kind[1]
+                    and len(cur["_texts"]) == 1 and len(cur["_texts"][0].split()) <= 2):
+                self._continue(ln, text)          # "DANGER" alone, then "DANGER indicates ..."
+                return
             self.start("warning", ln, text, level=kind[1])
             return
         if k == "spec":
@@ -913,8 +918,9 @@ class _Builder:
             self.start("bullet", ln, kind[2], marker=kind[1])
             return
         if k == "bold":
-            # a bold short line on its own is a heading; bold lines in a bold run are text
-            if cur is not None and cur["kind"] in ("para", "step", "bullet") and gap_ok and self.cur_lines[-1].bold:
+            # a bold short line on its own is a heading; a run of bold lines is a bold
+            # paragraph (finish() decides by its length)
+            if cur is not None and cur["kind"] in ("para", "step", "bullet", "bold") and gap_ok and self.cur_lines[-1].bold:
                 self._continue(ln, text)
                 return
             self.start("bold", ln, text)
@@ -922,13 +928,14 @@ class _Builder:
         # para
         if cur is not None and cur["kind"] in ("para", "step", "bullet", "bold") and gap_ok:
             if cur["kind"] in ("step", "bullet") and ln.x0 < cur["_textx0"] - 3:
-                self.start("para", ln, text)
-                return
+                last = cur["_texts"][-1].rstrip().rstrip("­")
+                if ln.x0 < cur["_x0"] - 3 or (last and last[-1] in SENTENCE_END):
+                    self.start("para", ln, text)
+                    return
             if cur["kind"] == "bold":
                 if self.cur_lines[-1].bold and ln.bold:
                     self._continue(ln, text)
                     return
-                self.cur["kind"] = "heading"
                 self.start("para", ln, text)
                 return
             self._continue(ln, text)
@@ -947,7 +954,8 @@ class _Builder:
         self.flush()
         for b in self.blocks:
             if b["kind"] == "bold":
-                b["kind"] = "heading"
+                # one short bold line is a heading; a wrapped bold run is a bold paragraph
+                b["kind"] = "heading" if len(b["text"]) <= HEADING_CHARS else "para"
             b.pop("_x0", None)
             b.pop("_textx0", None)
         return self.blocks
@@ -1003,15 +1011,13 @@ def build_page(doc, pno: int, an: Analysis, slug: str, fig_dir: Path | None, dpi
         if id(ln) in strip_ids:
             stripped.append(ln.text)
             continue
-        if source == "text" and label is not None and (in_band(ln, W, H) or (in_side(ln, W, H) and ln.nwords == 1)):
+        if label is not None and (in_band(ln, W, H) or (in_side(ln, W, H) and ln.nwords == 1)):
+            # the printed page number (also when the label came from the PDF's own labels)
             if any(_format_label(*c) == label or (c[0] == "r" and int_to_roman(c[1]) == label.lower())
                    for c in label_candidates(ln.text)):
                 label_lines.append(ln)
                 continue
         flow.append(ln)
-    if source == "text" and len(label_lines) > 1:
-        # the same number printed twice on the page: keep one out of the flow, both recorded
-        pass
     # columns on the raw runs (band lines left out), then runs merged into lines
     gutter = find_gutter(flow, W)
     for ln in flow:
