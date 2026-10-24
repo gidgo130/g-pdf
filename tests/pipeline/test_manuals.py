@@ -415,6 +415,34 @@ def test_control_glyphs_dropped_from_table_cells_and_counted_once(tmp_path, out)
     assert rec["dropped_chars"] == 5
 
 
+class _FakePage:
+    """A page whose rawdict is given: one span per text, glyphs 5 pt apart."""
+
+    def __init__(self, texts):
+        lines = []
+        for i, t in enumerate(texts):
+            y = 100 + 20 * i
+            chars = [{"c": c, "bbox": (72 + 5 * k, y - 8, 77 + 5 * k, y + 2), "origin": (72 + 5 * k, y)}
+                     for k, c in enumerate(t)]
+            lines.append({"dir": (1, 0), "spans": [{"font": "Arial", "flags": 0, "size": 10,
+                                                    "chars": chars}]})
+        self.raw = {"blocks": [{"type": 0, "lines": lines}]}
+
+    def get_text(self, *a, **kw):
+        return self.raw
+
+
+def test_c1_controls_read_as_cp1252():
+    """mini_mill.pdf sets inch marks, quotes and bullets as cp1252 bytes in C1 (0x94 = ”):
+    they are characters, not junk; a C1 code point that cp1252 leaves unmapped stays junk."""
+    lines, dropped = manuals.read_lines(_FakePage(["Up to 17.75\x94 under spindle.",
+                                                   "Haas Automation\x92s \x93Shipping\x94", "\x95 x\x81y"]))
+    assert [l.text for l in lines] == ["Up to 17.75” under spindle.", "Haas Automation’s “Shipping”",
+                                       "• xy"]
+    assert dropped == 1
+    assert manuals.clean_text("3/8\x94 hose\x8d") == ("3/8” hose", 1)
+
+
 def test_clean_record_sweeps_every_string():
     rec = {"blocks": [{"kind": "figure", "caption": "Fig\x01ure 2", "labels": ["A\x02", "B"]},
                       {"kind": "specs", "items": [{"label": "X\x7f", "values": ["1\x00"]}],

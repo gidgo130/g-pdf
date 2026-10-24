@@ -166,6 +166,17 @@ class Line:
         return pymupdf.Rect(self.x0, self.y0, self.x1, self.y1)
 
 
+def _cp1252(c: str) -> str:
+    """A C1 control (U+0080-U+009F) read as the cp1252 byte it is in some manuals (mini_mill.pdf
+    sets ” as 0x94); one that cp1252 leaves unmapped stays as it is (junk)."""
+    if "\x80" <= c <= "\x9f":
+        try:
+            return bytes([ord(c)]).decode("cp1252")
+        except UnicodeDecodeError:
+            return c
+    return c
+
+
 def _dropped(c: str) -> bool:
     """A character with no Unicode meaning: C0/C1 controls (but not whitespace), private
     use, unassigned, U+FFFD. Such glyphs are key icons and safety symbols in the manuals."""
@@ -180,7 +191,10 @@ def _junk(c: str) -> bool:
 
 
 def clean_text(s: str) -> tuple[str, int]:
-    """``s`` without its junk glyphs, and how many there were."""
+    """``s`` without its junk glyphs, and how many there were (C1 controls read as cp1252
+    first)."""
+    if any("\x80" <= c <= "\x9f" for c in s):
+        s = "".join(_cp1252(c) for c in s)
     if not any(_junk(c) for c in s):
         return s, 0
     kept = "".join(c for c in s if not _junk(c))
@@ -222,7 +236,7 @@ def read_lines(page) -> tuple[list[Line], int]:
             continue
         for ln in block["lines"]:
             if abs(ln["dir"][1]) > 0.1 or ln["dir"][0] < 0:
-                dropped += sum(_junk(ch["c"]) for span in ln["spans"] for ch in span["chars"])
+                dropped += sum(_junk(_cp1252(ch["c"])) for span in ln["spans"] for ch in span["chars"])
                 continue
             words, cur, soft = [], [], False
 
@@ -243,7 +257,7 @@ def read_lines(page) -> tuple[list[Line], int]:
                     or "heavy" in font
                 sym = any(f in font for f in SYMBOL_FONTS)
                 for ch in span["chars"]:
-                    c = ch["c"]
+                    c = _cp1252(ch["c"])
                     if c.isspace():
                         flush()
                         soft = False
