@@ -272,6 +272,11 @@ def test_an_unruled_table_on_a_page_without_a_table_is_checked_cell_by_cell(ex, 
     assert res.errors == [] and [w["rule"] for w in res.warnings] == ["table"]
     res = _check(ex, setup, NAME, _good() + extra.replace("Press POWER UP.", "Press POWER DOWN."))
     assert [e["rule"] for e in res.errors] == ["table"]
+    # an omission inside a cell is an omission, as in a paragraph
+    res = _check(ex, setup, NAME, _good() + extra.replace("Press POWER UP.", "Press … UP."))
+    assert res.errors == []
+    res = _check(ex, setup, NAME, _good() + extra.replace("Press POWER UP.", "UP. … Press"))
+    assert [e["rule"] for e in res.errors] == ["table"]
 
 
 def test_findings_name_the_manual_in_every_tag(ex, setup):

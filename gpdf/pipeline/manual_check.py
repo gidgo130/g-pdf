@@ -568,14 +568,15 @@ class Checker:
             if not cites:
                 res.err(ln, "tag", "table row without a page tag")
                 continue
-            cells = [norm(strip_marks(c)) for c in split_row(t)]
+            raw = [strip_marks(c) for c in split_row(t)]
+            cells = [norm(c) for c in raw]
             cite_txt = " ".join(c.text for c in cites)
             tables = [tb for c in cites for tb in self.source(c.slug).tables(c.pdfs)]
             if not tables:
                 unanchored = True
                 hay = self._hay(cites)
-                for c in cells:
-                    if len(c) >= MIN_CELL and not quote_found(c, hay):
+                for r, c in zip(raw, cells):
+                    if len(c) >= MIN_CELL and not quote_found(r, hay):   # raw: "…" splits
                         res.err(ln, "table", f"cell '{c}' not on the cited page", quote=" | ".join(cells),
                                 cite=cite_txt)
                 continue
