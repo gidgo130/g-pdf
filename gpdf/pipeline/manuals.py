@@ -35,7 +35,8 @@ from gpdf import __version__
 
 FLAGS = (pymupdf.TEXTFLAGS_RAWDICT & ~pymupdf.TEXT_PRESERVE_LIGATURES
          & ~pymupdf.TEXT_PRESERVE_IMAGES)
-BAND = 0.07                 # top/bottom (and side, for lone numbers) share of the page
+BAND = 0.10                 # top/bottom share of the page: running heads and feet, page numbers
+SIDE_BAND = 0.07            # left/right share of the page: lone page numbers in the side margin
 REPEAT_SHARE = 0.25         # a band line on >= this share of pages is a running head/foot
 REPEAT_MIN = 3
 RUN_MIN = 3                 # consecutive pages that make a page-number run
@@ -529,7 +530,7 @@ def in_band(ln: Line, width: float, height: float) -> bool:
 
 
 def in_side(ln: Line, width: float, height: float) -> bool:
-    return ln.x1 <= BAND * width or ln.x0 >= (1 - BAND) * width
+    return ln.x1 <= SIDE_BAND * width or ln.x0 >= (1 - SIDE_BAND) * width
 
 
 def _slot(ln: Line, height: float) -> tuple:

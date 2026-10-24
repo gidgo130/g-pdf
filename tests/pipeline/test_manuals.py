@@ -248,6 +248,24 @@ def test_running_head_and_foot_stripped_and_labels_from_text(tmp_path, out):
         assert "RS-232" in body
 
 
+def test_running_foot_up_to_ten_percent_from_the_edge_is_stripped(tmp_path, out):
+    """Hypertherm's feet sit at y 724-730 of 792 (8% from the bottom); a body line at the
+    same height that does not repeat stays in the flow."""
+    doc = pymupdf.open()
+    for i in range(6):
+        page = doc.new_page(width=W, height=H)
+        page.insert_text((54, 728), f"Powermax65/85 Operator Manual  3-{20 + i}", fontname="helv",
+                         fontsize=8)
+        _lines(page, 54, 100, [f"Body text of page {i + 1}."])
+        if i == 2:
+            page.insert_text((300, 724), "Continued on the next page.", fontname="helv", fontsize=9)
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    for rec in recs:
+        assert any("Powermax65/85 Operator Manual" in s for s in rec["stripped"])
+        assert not any("Powermax" in b.get("text", "") for b in rec["blocks"])
+    assert "Continued on the next page." in [b.get("text") for b in recs[2]["blocks"]]
+
+
 def test_pdf_page_labels_with_indesign_hex_prefix(tmp_path, out):
     doc = pymupdf.open()
     for i in range(4):
