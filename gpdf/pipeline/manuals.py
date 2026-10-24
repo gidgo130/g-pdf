@@ -44,6 +44,7 @@ GUTTER_SIDE = 0.25
 GUTTER_MIN_LINES = 6
 GUTTER_HALF = 6.0           # pt: half the narrowest gutter
 IMAGE_MIN_AREA = 2000.0
+DENSE_DRAWINGS = 30000      # paths: a page this dense is one vector drawing
 DRAWING_MIN_AREA = 4000.0
 REGION_JOIN = 6.0           # pt: regions this close are one figure
 TABLE_COVER = 0.8           # a region mostly covered by a table is the table
@@ -64,6 +65,7 @@ GAP_PITCH = 1.5
 CAPTION_CONT_WORDS = 12
 LABEL_PATTERNS = [
     ("a", re.compile(r"^(\d{1,4})$")),
+    ("s", re.compile(r"^(\d(?: \d){1,3})$")),              # letter-spaced "8 0"
     ("a", re.compile(r"^-\s*(\d{1,4})\s*-$")),
     ("a", re.compile(r"^Page\s+(\d{1,4})$", re.I)),
     ("a", re.compile(r"^[\w\- ]{2,40}\bPage\s+(\d{1,4})$")),
@@ -217,8 +219,8 @@ def _same_base(a: Line, b: Line) -> bool:
 
 def resolve_overlaps(lines: list[Line]) -> tuple[list[Line], list[dict]]:
     """Two runs on the same baseline whose boxes overlap by > 30% of the shorter one: a
-    hidden span under body text. Keep the body (the one that is not a figure caption; else
-    the one drawn last) and warn."""
+    hidden span under body text. A figure caption under body text is dropped (the body is
+    kept), a duplicate is dropped; otherwise both stay. Each case is warned."""
     warnings, dropped = [], set()
     by_base = sorted(lines, key=lambda l: l.base)
     for i, a in enumerate(by_base):
@@ -235,8 +237,13 @@ def resolve_overlaps(lines: list[Line]) -> tuple[list[Line], list[dict]]:
                 keep, drop = b, a
             elif cb and not ca:
                 keep, drop = a, b
-            else:
+            elif a.text == b.text:
                 keep, drop = (b, a) if b.seq > a.seq else (a, b)
+            else:
+                # neither is a caption: both stay, the reader is warned
+                warnings.append({"kind": "overlap", "kept": a.text, "also": b.text,
+                                 "bbox": a.bbox})
+                continue
             dropped.add(id(drop))
             kind = "duplicate" if keep.text == drop.text else "overlap"
             warnings.append({"kind": kind, "kept": keep.text, "dropped": drop.text,
@@ -376,6 +383,8 @@ def label_candidates(text: str) -> list[tuple]:
             continue
         if style == "a":
             out.append(("a", int(m.group(1)), None))
+        elif style == "s":
+            out.append(("a", int(m.group(1).replace(" ", "")), None))
         elif style == "c":
             out.append(("c", int(m.group(2)), int(m.group(1))))
         else:
@@ -457,6 +466,11 @@ def _mask(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"\d", "#", text.strip()))
 
 
+def _wordy(text: str) -> bool:
+    """A band line with a letter in it (a running head, not a bare page number)."""
+    return any(c.isalpha() for c in text)
+
+
 def in_band(ln: Line, width: float, height: float) -> bool:
     return ln.y1 <= BAND * height or ln.y0 >= (1 - BAND) * height
 
@@ -489,7 +503,7 @@ def analyse(doc, slug: str = "") -> Analysis:
         for ln in lines:
             if in_band(ln, W, H):
                 k = _mask(ln.text)
-                if k not in seen:
+                if _wordy(ln.text) and k not in seen:
                     masked[k] += 1
                     seen.add(k)
                 cs.extend(label_candidates(ln.text))
@@ -565,16 +579,37 @@ def merge_regions(rects: list[pymupdf.Rect]) -> list[pymupdf.Rect]:
     return rects
 
 
-def figure_regions(page, tables: list[Table], lines: list[Line]) -> list[pymupdf.Rect]:
+def dense_drawing(page) -> pymupdf.Rect | None:
+    """The union box of the page's vector paths when there are DENSE_DRAWINGS or more
+    (a wiring diagram, a parts explosion): clustering and table search would take minutes
+    there, and the whole thing is one figure. None otherwise."""
+    try:
+        paths = page.get_cdrawings()
+    except Exception:  # noqa: BLE001
+        return None
+    if len(paths) < DENSE_DRAWINGS:
+        return None
+    r = pymupdf.Rect()
+    for pth in paths:
+        r.include_rect(pymupdf.Rect(pth["rect"]))
+    r &= page.rect
+    return r if r.is_valid and not r.is_empty else None
+
+
+def figure_regions(page, tables: list[Table], lines: list[Line],
+                   dense: pymupdf.Rect | None = None) -> list[pymupdf.Rect]:
     rects = []
     for im in page.get_image_info():
         r = pymupdf.Rect(im["bbox"]) & page.rect
         if r.is_valid and not r.is_empty and r.get_area() > IMAGE_MIN_AREA:
             rects.append(r)
-    try:
-        clusters = page.cluster_drawings()
-    except Exception:  # noqa: BLE001 - odd drawings must not stop the page
-        clusters = []
+    if dense is not None:
+        clusters = [dense]
+    else:
+        try:
+            clusters = page.cluster_drawings()
+        except Exception:  # noqa: BLE001 - odd drawings must not stop the page
+            clusters = []
     for r in clusters:
         r = pymupdf.Rect(r) & page.rect
         if r.is_valid and not r.is_empty and r.get_area() > DRAWING_MIN_AREA:
@@ -588,7 +623,7 @@ def figure_regions(page, tables: list[Table], lines: list[Line]) -> list[pymupdf
             continue
         long_inside = sum(1 for ln in lines if ln.nwords > LABEL_WORDS
                           and r.contains(pymupdf.Point((ln.x0 + ln.x1) / 2, (ln.y0 + ln.y1) / 2)))
-        if long_inside >= 2:
+        if long_inside >= 2 and r != dense:
             continue              # a box drawn around text, not a figure
         out.append(r)
     out.sort(key=lambda r: (r.y0, r.x0))
@@ -956,6 +991,8 @@ def build_page(doc, pno: int, an: Analysis, slug: str, fig_dir: Path | None, dpi
         if id(ln) in strip_ids:
             continue
         k = _mask(ln.text)
+        if not _wordy(ln.text):
+            continue
         if _slot(ln, H) in an.stripped_slots and an.masked_counts.get(k, 0) >= 2:
             strip_ids.add(id(ln))
             continue
@@ -980,10 +1017,13 @@ def build_page(doc, pno: int, an: Analysis, slug: str, fig_dir: Path | None, dpi
     for ln in flow:
         ln.col = _col_of(ln.x0, ln.x1, gutter)
     # tables, figure regions (from the raw runs), then runs merged into lines
-    tables = find_tables(page, H)
+    dense = dense_drawing(page)
+    if dense is not None:
+        warnings.append({"kind": "dense_drawing", "bbox": [round(v, 1) for v in dense]})
+    tables = [] if dense is not None else find_tables(page, H)
     for t in tables:
         t.col = _col_of(t.rect.x0, t.rect.x1, gutter)
-    regions = figure_regions(page, tables, flow)
+    regions = figure_regions(page, tables, flow, dense)
     flow = merge_fragments(flow, regions)
     for ln in flow:
         ln.col = _col_of(ln.x0, ln.x1, gutter)

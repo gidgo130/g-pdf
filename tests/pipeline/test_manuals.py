@@ -230,6 +230,14 @@ def test_pdf_page_labels_with_indesign_hex_prefix(tmp_path, out):
     assert {r["label_source"] for r in recs} == {"pdf_label"}
 
 
+def test_label_candidates_letter_spaced_digits():
+    assert manuals.label_candidates("8 0") == [("a", 80, None)]
+    assert manuals.label_candidates("-28-") == [("a", 28, None)]
+    assert manuals.label_candidates("OM-232 384 Page 12") == [("a", 12, None)]
+    assert manuals.label_candidates("4-1") == [("c", 1, 4)]
+    assert manuals.label_candidates("iv") == [("r", 4, None)]
+
+
 def test_decode_label():
     assert manuals.decode_label("<FEFF0053006500630031003A>1") == "1"
     assert manuals.decode_label("A") == "A"
