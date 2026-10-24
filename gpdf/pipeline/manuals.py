@@ -599,6 +599,7 @@ class Table:
     rows: int
     cols: int
     markdown: str
+    cells: list[list[str | None]] = field(default_factory=list)
     col: int | None = 0
 
     @property
@@ -773,21 +774,20 @@ def _cell_text(s: str | None) -> str | None:
     return re.sub(r"[\t\n]", " ", clean_text(s)[0])
 
 
-def table_markdown(t) -> str:
-    """The table as GitHub Markdown, laid out as PyMuPDF's ``Table.to_markdown`` (empty
-    cells filled from the left, then from above; header names ``ColN`` when empty), with
-    every cell cleaned. The glyphs dropped here were already counted from the page."""
+def table_cells(t) -> list[list[str | None]]:
+    """The table's rows of cleaned cells: ``None`` for a cell covered by a merged cell to its
+    left or above (as PyMuPDF's ``extract``), ``""`` for an empty one."""
     from pymupdf.table import extract_cells
-    cells = [[None if c is None else _cell_text(extract_cells(t.textpage, c, markdown=True))
-              for c in row.cells] for row in t.rows]
-    for row in cells:
-        for i in range(len(row) - 1):
-            if row[i + 1] is None:
-                row[i + 1] = row[i]
-    for j in range(len(cells) - 1):
-        for i in range(t.col_count):
-            if cells[j + 1][i] is None:
-                cells[j + 1][i] = cells[j][i]
+    return [[None if c is None else _cell_text(extract_cells(t.textpage, c, markdown=True))
+             for c in row.cells] for row in t.rows]
+
+
+def table_markdown(t, cells: list[list[str | None]]) -> str:
+    """The table as GitHub Markdown, laid out as PyMuPDF's ``Table.to_markdown`` (header names
+    ``ColN`` when empty), except that merged cells are not filled: a value printed once in a
+    spanning cell is written once and the cells it covers stay empty (filling from the left
+    or from above invents values). The glyphs dropped here were already counted from the
+    page."""
     # header names keep their line breaks as <br>, as PyMuPDF writes them
     names = [clean_text(n or "")[0].replace("\t", " ").replace("\n", "<br>") or f"Col{i + 1}"
              for i, n in enumerate(t.header.names)]
@@ -812,12 +812,13 @@ def find_tables(page, height: float) -> list[Table]:
         if r.y0 >= (1 - BAND) * height or r.y1 <= BAND * height:
             continue
         try:
-            md = table_markdown(t)
+            cells = table_cells(t)
+            md = table_markdown(t, cells)
         except Exception:  # noqa: BLE001
-            md = ""
+            cells, md = [], ""
         if not md or not any(c.isalnum() for c in md.replace("Col", "")):
             continue
-        out.append(Table(r, t.row_count, t.col_count, md))
+        out.append(Table(r, t.row_count, t.col_count, md, cells))
     return out
 
 
@@ -1176,9 +1177,12 @@ def build_page(doc, pno: int, an: Analysis, slug: str, fig_dir: Path | None, dpi
                 "labels": [l.text.replace("­", "") for l in e.labels],
                 "bbox": [round(v, 1) for v in (e.rect.x0, e.rect.y0, e.rect.x1, e.rect.y1)]})
         elif isinstance(e, Table):
-            builder.add_element({
-                "kind": "table", "rows": e.rows, "cols": e.cols, "text": e.markdown,
-                "bbox": [round(v, 1) for v in (e.rect.x0, e.rect.y0, e.rect.x1, e.rect.y1)]})
+            tb = {"kind": "table", "rows": e.rows, "cols": e.cols, "text": e.markdown,
+                  "cells": e.cells,
+                  "bbox": [round(v, 1) for v in (e.rect.x0, e.rect.y0, e.rect.x1, e.rect.y1)]}
+            if any(c is None for row in e.cells for c in row):
+                tb["merged"] = True
+            builder.add_element(tb)
         else:
             builder.add(e)
     blocks = builder.finish()

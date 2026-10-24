@@ -150,6 +150,38 @@ def test_ruled_table_becomes_markdown_and_leaves_the_flow(tmp_path, out):
     body = " ".join(b.get("text", "") for b in rec["blocks"] if b["kind"] != "table")
     assert "Flashing Red" not in body
     assert not _blocks(rec, "figure")          # the table ruling is not a figure
+    assert "merged" not in tables[0]
+    assert tables[0]["cells"][0] == ["Flashing Green", "The machine is stopped, but is in a ready state."]
+
+
+def test_merged_cells_stay_empty_and_are_kept_as_null(tmp_path, out):
+    """A cell spanning two rows (column 0) and one spanning three columns (last row): the
+    continuation cells are written empty, never filled from the left or from above."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=W, height=H)
+    x, y = [72, 172, 272, 372, 472], [100, 124, 148, 172, 196]
+
+    def rule(a, b):
+        page.draw_line(a, b, color=(0, 0, 0), width=0.7)
+
+    page.draw_rect(pymupdf.Rect(x[0], y[0], x[-1], y[-1]), color=(0, 0, 0), width=0.7)
+    rule((x[0], y[1]), (x[-1], y[1]))
+    rule((x[1], y[2]), (x[-1], y[2]))         # column 0 spans rows 1-2
+    rule((x[0], y[3]), (x[-1], y[3]))
+    rule((x[1], y[0]), (x[1], y[-1]))
+    for xi in (x[2], x[3]):                   # the last row spans columns 1-3
+        rule((xi, y[0]), (xi, y[3]))
+    printed = [["Thick", "Amps", "Speed", "Delay"], ["10", "85", "0.5", "1.0"],
+               [None, "", "0.7", "1.2"], ["20", "Edge Start", None, None]]
+    for r, row in enumerate(printed):
+        for c, t in enumerate(row):
+            if t:
+                page.insert_text((x[c] + 4, y[r] + 16), t, fontname="helv", fontsize=9)
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    (table,) = _blocks(recs[0], "table")
+    assert table["merged"] is True
+    assert table["cells"] == printed
+    assert table["text"].splitlines()[2:] == ["|10|85|0.5|1.0|", "|||0.7|1.2|", "|20|Edge Start|||"]
 
 
 # ------------------------------------------------------------------------ specs, contents
