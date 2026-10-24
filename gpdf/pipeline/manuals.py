@@ -73,6 +73,9 @@ LABEL_PATTERNS = [
     ("c", re.compile(r"^(\d{1,2})-(\d{1,3})$")),
     ("r", re.compile(r"^([ivxlcdm]{1,8})$", re.I)),
 ]
+# "N10", "X-1.5", "X 1.115", "X[#105]", "(DRILL)", macro "#3000=1", "#[#2+#19]=#22"
+NC_LINE_RE = re.compile(r"^(?:%|[ONGMT]\d|[XYZ] ?[-+]?[\d.\[#]|\([A-Z0-9#]|#[\d\[])")
+NC_SHARE = 0.6
 ROMAN = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100, "d": 500, "m": 1000}
 
 
@@ -897,6 +900,7 @@ class _Builder:
                 b["text"] = _specs_markdown(b["items"])
             else:
                 b["text"] = join_lines([t for t in b.pop("_texts")])
+            b["lines"] = [ln.text for ln in self.cur_lines]
             b["bbox"] = _bbox_union(self.cur_lines)
             self.blocks.append(b)
         self.cur, self.cur_lines = None, []
@@ -1233,8 +1237,18 @@ def _warning_md(b: dict) -> str:
     return f"> **{b['level']}:** {rest}".rstrip()
 
 
+def nc_code(lines: list[str]) -> bool:
+    """Lines that are mostly an NC program: >= NC_SHARE of them start with a program
+    number, block number, G/M/T word, an axis word or a comment. One line is not a listing."""
+    if len(lines) < 2:
+        return False
+    return sum(bool(NC_LINE_RE.match(t)) for t in lines) >= NC_SHARE * len(lines)
+
+
 def block_md(b: dict) -> str:
     k = b["kind"]
+    if k == "para" and nc_code(b.get("lines", [])):
+        return "```\n" + "\n".join(t.replace("­", "") for t in b["lines"]) + "\n```"
     if k == "heading":
         return f"### {b['text']}"
     if k == "step":

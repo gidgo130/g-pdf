@@ -361,6 +361,37 @@ def test_clean_record_sweeps_every_string():
     assert rec["dropped_chars"] == 1 + 7
 
 
+def test_blocks_keep_printed_lines_and_nc_code_is_a_code_block(tmp_path, out):
+    doc = pymupdf.open()
+    page = doc.new_page(width=W, height=H)
+    _lines(page, 72, 100, ["The following program drills four holes with a peck",
+                           "drilling cycle on the part zero set in G54."])
+    nc = ["O1234 (Canned Cycle Example Program)", "T1 M06", "G90 G54 G00 X.565 Y-1.875",
+          "S1275 M03", "G43 H01 Z.1 M08", "G82 Z-.175 P.03 R.1 F10.", "repeat for each hole",
+          "M30"]
+    _lines(page, 72, 160, nc)
+    _lines(page, 72, 300, ["1.  Load the program and press", "Cycle Start."])
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    rec = recs[0]
+    paras = _blocks(rec, "para")
+    assert paras[0]["lines"] == ["The following program drills four holes with a peck",
+                                 "drilling cycle on the part zero set in G54."]
+    assert paras[1]["lines"] == nc
+    assert paras[1]["text"] == " ".join(nc)
+    assert _blocks(rec, "step")[0]["lines"] == ["1. Load the program and press", "Cycle Start."]
+    md = manuals.render_md({}, {}, [rec])
+    assert "```\n" + "\n".join(nc) + "\n```" in md
+    assert "The following program drills four holes with a peck drilling cycle" in md
+    assert manuals.nc_code(nc) and not manuals.nc_code(paras[0]["lines"])
+    # macro statements and spaced axis words are code too (Haas 2006 pdf 95, pdf 64)
+    assert manuals.nc_code(["O0300 (Initialize an array of variables) ;", "#3000=1 (Base variable) ;",
+                            "#[#2+#19]=#22 ;", "END1 ;", "M99 ;"])
+    assert manuals.nc_code(["Sub Program O1000 (X,Y Locations)", "X 1.115 Y-2.750", "X[#105] Y0", "M99"])
+    # one line of prose that starts with a G-code is not a listing
+    assert not manuals.nc_code(["G28 returns all axes to machine zero."])
+    assert not manuals.nc_code(["X axis travel is 30 inches; Y axis travel", "(see Figure 3) is 16."])
+
+
 def test_bold_paragraph_is_not_a_heading(tmp_path, out):
     doc = pymupdf.open()
     page = doc.new_page(width=W, height=H)
