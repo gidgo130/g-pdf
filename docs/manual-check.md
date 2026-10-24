@@ -31,8 +31,8 @@ The rules below are also the writing rules for the extracts.
   there is none);
 - topic: lower case, words joined by `-` (`offsets`, `power-up-and-homing`).
 
-Example: `HAAS_MILL_OPERATOR_96-8000_RevN_offsets.md`. `00_MANIFEST.md` and
-`01_FINDINGS.md` are exempt.
+Example: `HAAS_MILL_OPERATOR_96-8000_RevN_offsets.md`. `00_MANIFEST.md` and the findings
+files (`01_FINDINGS*.md`) are exempt.
 
 ## 2. Header block
 
@@ -176,11 +176,14 @@ A warning above 45,000 characters, an error above 60,000 (about 15-20 printed pa
 text) and no file that is not there; both are warnings. No manifest in the folder is a
 warning on a whole-folder run.
 
-## `01_FINDINGS.md`
+## `01_FINDINGS.md` and `01_FINDINGS_B<n>-<slug>.md`
 
-Follows rules 3-8. Every tag names the manual (`[haas-mill-2006 p. 32 / pdf 33]`), and the
-quotes and numbers of a block are checked against the pages its tags cite (of each manual
-named, joined). Answers are usually summaries; "not found" is a remark:
+Every `01_FINDINGS*.md` is a findings file: `01_FINDINGS.md` is a short index, one line per
+batch file, and each batch writes its own `01_FINDINGS_B<n>-<slug>.md`
+(`01_FINDINGS_B2-bridgeport.md`). The manifest check ignores them; the size rule applies to
+each. Findings files follow rules 3-8. Every tag names the manual
+(`[haas-mill-2006 p. 32 / pdf 33]`), and the quotes and numbers of a block are checked
+against the pages its tags cite (of each manual named, joined). Answers are usually summaries; "not found" is a remark:
 `[GAP: not found in haas-mill-2006, haas-tm-addendum-2010]`.
 
 ## `check.json`

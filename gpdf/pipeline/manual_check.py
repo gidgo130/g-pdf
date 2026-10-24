@@ -25,7 +25,7 @@ import pymupdf
 from gpdf import __version__
 
 MANIFEST = "00_MANIFEST.md"
-FINDINGS = "01_FINDINGS.md"
+FINDINGS = "01_FINDINGS.md"   # the index; 01_FINDINGS_B<n>-<slug>.md hold the batches
 HEADER_KEYS = ("Title", "Manufacturer", "Document number / revision / date",
                "Control generation (Haas)", "Models and years covered", "Source PDF filename",
                "Pages extracted (printed page numbers)", "Notes on applicability to our machines")
@@ -60,6 +60,11 @@ _TRANS = str.maketrans({**{c: "'" for c in "‘’‚‛′"}, **{c: '"' for c i
 
 class CheckError(Exception):
     pass
+
+
+def is_findings(name: str) -> bool:
+    """01_FINDINGS.md and the per-batch 01_FINDINGS_B<n>-<slug>.md files."""
+    return name.startswith("01_FINDINGS") and name.endswith(".md")
 
 
 # ---------------------------------------------------------------------------- normalising
@@ -435,7 +440,7 @@ class Checker:
         lines = text.splitlines()
         own = None
         start = 0
-        if name != FINDINGS:
+        if not is_findings(name):
             if not NAME_RE.match(name):
                 res.err(None, "name", "file name is not MAKER_MODEL_DOCTYPE_DocNo_Rev_topic.md")
             vals, start, errs = parse_header(lines)
@@ -670,8 +675,9 @@ def row_in_table(ext: list[str], cells: list[list]) -> bool:
 
 def check_manifest(extracts: Path, res: FileResult):
     text = (extracts / MANIFEST).read_text("utf-8")
-    listed = set(re.findall(r"[A-Za-z0-9][A-Za-z0-9._-]*\.md", text)) - {MANIFEST, FINDINGS}
-    present = {p.name for p in extracts.glob("*.md")} - {MANIFEST, FINDINGS}
+    listed = {f for f in re.findall(r"[A-Za-z0-9][A-Za-z0-9._-]*\.md", text)
+              if f != MANIFEST and not is_findings(f)}
+    present = {p.name for p in extracts.glob("*.md") if p.name != MANIFEST and not is_findings(p.name)}
     for f in sorted(present - listed):
         res.warn(None, "manifest", f"{f} is not listed in the manifest")
     for f in sorted(listed - present):

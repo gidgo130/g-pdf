@@ -309,12 +309,24 @@ def test_markup_and_glued_words_in_table_cells_warn(ex, setup):
     assert res.errors == [] and ["<br>" in w["message"] for w in res.warnings] == [True]
 
 
-def test_findings_name_the_manual_in_every_tag(ex, setup):
+@pytest.mark.parametrize("name", ["01_FINDINGS.md", "01_FINDINGS_B2-bridgeport.md"])
+def test_findings_name_the_manual_in_every_tag(ex, setup, name):
     good = ("# Findings\n\n## 1. Spindle speed\n\n- *Summary:* 6,000 rpm "
             f"[{SLUG} p. 2 / pdf 3]\n- [GAP: not found in {SLUG}]\n")
-    assert _check(ex, setup, "01_FINDINGS.md", good).errors == []
-    res = _check(ex, setup, "01_FINDINGS.md", good.replace(f"[{SLUG} p. 2", "[p. 2"))
+    assert _check(ex, setup, name, good).errors == []
+    res = _check(ex, setup, name, good.replace(f"[{SLUG} p. 2", "[p. 2"))
     assert [e["rule"] for e in res.errors] == ["tag"]
+    res = _check(ex, setup, name, good + "x" * manual_check.FAIL_SIZE)
+    assert "size" in [e["rule"] for e in res.errors]
+
+
+def test_manifest_ignores_the_findings_files(ex):
+    for f in ("01_FINDINGS.md", "01_FINDINGS_B1-haas.md", NAME):
+        (ex / f).write_text("x", "utf-8")
+    (ex / "00_MANIFEST.md").write_text(f"| {NAME} |\n", "utf-8")
+    res = manual_check.FileResult("00_MANIFEST.md")
+    manual_check.check_manifest(ex, res)
+    assert res.warnings == []
 
 
 def test_cli_reports_and_exits_1_on_a_failing_file(ex, setup, tmp_path, capsys):
