@@ -261,6 +261,15 @@ def test_ellipsis_fragments_must_keep_their_order(ex, setup):
     assert [e["rule"] for e in res.errors] == ["verbatim"]
 
 
+def test_a_warning_with_another_level_word_may_hold_an_omission(ex, setup):
+    text = _good().replace("> **WARNING:** Never open the doors while the spindle is turning.",
+                           "> **CAUTION:** Never open the doors … is turning.")
+    assert _check(ex, setup, NAME, text).errors == []
+    text = _good().replace("> **WARNING:** Never open the doors while the spindle is turning.",
+                           "> **CAUTION:** is turning. … Never open the doors")
+    assert [e["rule"] for e in _check(ex, setup, NAME, text).errors] == ["verbatim"]
+
+
 def test_a_code_line_not_on_the_page_fails(ex, setup):
     res = _check(ex, setup, NAME, _good().replace("G54 G00 X0 Y0", "G55 G00 X0 Y0"))
     assert [(e["rule"], e["line"]) for e in res.errors] == [("verbatim", _good().splitlines().index("G54 G00 X0 Y0") + 1)]

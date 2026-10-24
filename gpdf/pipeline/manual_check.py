@@ -537,10 +537,10 @@ class Checker:
         q = strip_marks(raw)
         if quote_found(q, hay):
             return
-        nq = norm(q)
-        if LEVEL_RE.match(nq) and quote_found(LEVEL_RE.sub("", nq, 1), hay):
+        bare = re.sub(r"^[*_\s]+", "", q)       # the level word out before norm turns … into ...
+        if LEVEL_RE.match(bare) and quote_found(LEVEL_RE.sub("", bare, 1), hay):
             return
-        res.err(b.line, "verbatim", "not on the cited page", quote=nq, cite=cite_txt)
+        res.err(b.line, "verbatim", "not on the cited page", quote=norm(q), cite=cite_txt)
 
     def _check_code(self, b: Block, res: FileResult, cites: list[Cite]):
         hay = self._hay(cites)
