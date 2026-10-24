@@ -392,6 +392,24 @@ def test_blocks_keep_printed_lines_and_nc_code_is_a_code_block(tmp_path, out):
     assert not manuals.nc_code(["X axis travel is 30 inches; Y axis travel", "(see Figure 3) is 16."])
 
 
+def test_symbol_font_bullets(tmp_path, out):
+    """Mastercam sets its bullets as Wingdings "l"; here the Symbol font stands in."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=W, height=H)
+    for i, t in enumerate(["Select the chain.", "Click OK to close the dialog."]):
+        page.insert_text((72, 100 + 30 * i), "l", fontname="symb", fontsize=BODY)
+        page.insert_text((84, 100 + 30 * i), t, fontname="helv", fontsize=BODY)
+    _lines(page, 72, 200, ["l is the letter, not a bullet, in a text font."])
+    page.insert_text((72, 240), "l", fontname="symb", fontsize=BODY)    # no text after it
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    bullets = _blocks(recs[0], "bullet")
+    assert [(b["marker"], b["text"]) for b in bullets] == [
+        ("•", "Select the chain."), ("•", "Click OK to close the dialog.")]
+    assert bullets[0]["lines"][0].endswith("Select the chain.")
+    assert "- Select the chain." in manuals.render_md({}, {}, recs)
+    assert any(b["text"].startswith("l is the letter") for b in _blocks(recs[0], "para"))
+
+
 def test_bold_paragraph_is_not_a_heading(tmp_path, out):
     doc = pymupdf.open()
     page = doc.new_page(width=W, height=H)

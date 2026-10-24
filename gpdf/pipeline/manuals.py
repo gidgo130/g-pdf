@@ -55,6 +55,8 @@ CAPTION_RE = re.compile(r"^(?:Fig(?:ure)?\.?\s*[\d.]+|F\d+\.\d+:)")   # "Figure 
 LEADER_RE = re.compile(r"(?:\s*\.){4,}\s*")
 STEP_RE = re.compile(r"^(\d{1,2})[.)](?!\d)\s*(.*)$")
 BULLET_RE = re.compile(r"^([•▪■●◦‣◆►➢✓*\-–—])\s+(.*)$")
+SYMBOL_FONTS = ("wingdings", "symbol", "zapfdingbats", "psosym")   # font names, lower case
+SYMBOL_BULLET = "•"
 WARN_WORDS = ("WARNING", "CAUTION", "DANGER", "NOTICE", "NOTE", "IMPORTANT")
 WARN_RE = re.compile(r"^(" + "|".join(WARN_WORDS) + r")(?:\s*[!:]|\s*[–—-]\s|\s|$)\s*(.*)$")
 WARN_TITLE_RE = re.compile(r"^(" + "|".join(w.capitalize() for w in WARN_WORDS) + r")\s*[!:]\s*(.*)$")
@@ -94,6 +96,7 @@ class Word:
     size: float
     base: float
     bold: bool
+    sym: bool = False           # the first glyph is from a symbol font (Wingdings, Symbol, ...)
 
 
 @dataclass
@@ -226,13 +229,14 @@ def read_lines(page) -> tuple[list[Line], int]:
                                       max(b[2] for _, b, _ in cur), max(b[3] for _, b, _ in cur),
                                       statistics.median(s[0] for _, _, s in cur),
                                       statistics.median(s[1] for _, _, s in cur),
-                                      all(s[2] for _, _, s in cur)))
+                                      all(s[2] for _, _, s in cur), cur[0][2][3]))
                     cur = []
 
             for span in ln["spans"]:
                 font = span.get("font", "").lower()
                 bold = bool(span["flags"] & 16) or "bold" in font or "black" in font \
                     or "heavy" in font
+                sym = any(f in font for f in SYMBOL_FONTS)
                 for ch in span["chars"]:
                     c = ch["c"]
                     if c.isspace():
@@ -247,7 +251,7 @@ def read_lines(page) -> tuple[list[Line], int]:
                         dropped += 1
                         continue
                     soft = False
-                    cur.append((c, ch["bbox"], (span["size"], ch["origin"][1], bold)))
+                    cur.append((c, ch["bbox"], (span["size"], ch["origin"][1], bold, sym)))
             flush()
             if words:
                 out.append(Line(words, soft_end=soft, seq=seq))
@@ -861,6 +865,10 @@ def _kind(ln: Line, body: float) -> tuple:
     m = BULLET_RE.match(t)
     if m:
         return ("bullet", m.group(1), m.group(2))
+    first = ln.words[0]
+    if first.sym and len(first.text) == 1 and ln.nwords > 1:
+        # a symbol-font glyph then a space (Mastercam's Wingdings "l"): a bullet
+        return ("bullet", SYMBOL_BULLET, t[1:].lstrip())
     if ln.bold and len(t) <= HEADING_CHARS:
         return ("bold", t)
     return ("para", t)
