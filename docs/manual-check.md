@@ -136,6 +136,11 @@ still be on the cited page. Every body row is then checked:
   each cell of 3 or more characters is checked on its own as a quote, and the table gets the
   warning `unanchored table`.
 
+A table cell is plain text, as layer 1 writes it: a row gets the warning `table cell` when a
+cell holds `<br>`, emphasis markup (`**`, `_..._`), a lowercase letter glued to `[`
+(`after[POWER UP]`), or a lowercase letter glued to an upper-case run that the cited page
+shows as two words (`inSETUP:JOG` where the page has `in SETUP:JOG`).
+
 A table that cannot be transcribed faithfully (icon tables, damaged extraction) is written
 `[Table: <description>, not transcribed: see the page] [tag]`: only its tag is checked.
 

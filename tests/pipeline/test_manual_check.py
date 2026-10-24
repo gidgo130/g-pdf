@@ -279,6 +279,26 @@ def test_an_unruled_table_on_a_page_without_a_table_is_checked_cell_by_cell(ex, 
     assert [e["rule"] for e in res.errors] == ["table"]
 
 
+def test_markup_and_glued_words_in_table_cells_warn(ex, setup):
+    """Leftovers of PyMuPDF's table Markdown: <br>, emphasis markup, a lowercase letter glued
+    to "[" or to an upper-case run that the page shows as two words."""
+    extra = "\n[p. 2 / pdf 3]\n\n| spindle | table |\n|---|---|\n| 1 | Press POWER UP. |\n"
+    assert _check(ex, setup, NAME, _good() + extra).warnings[-1]["message"].startswith("unanchored")
+    for cell, what in (("Press<br>POWER UP.", "<br>"), ("Press **POWER** UP.", "emphasis"),
+                       ("Press _POWER_ UP.", "emphasis"), ("Press[POWER UP.", "'['"),
+                       ("PressPOWER UP.", "two words")):
+        res = _check(ex, setup, NAME, _good() + extra.replace("Press POWER UP.", cell))
+        glitch = [w for w in res.warnings if not w["message"].startswith("unanchored")]
+        assert len(glitch) == 1 and what in glitch[0]["message"], (cell, res.warnings)
+        assert glitch[0]["line"] == len((_good() + extra).splitlines())
+    # footnote asterisks printed on the page are not markup
+    res = _check(ex, setup, NAME, _good() + extra.replace("Press POWER UP.", "Press POWER UP.**"))
+    assert not [w for w in res.warnings if "emphasis" in w["message"]]
+    # an anchored table (pdf 4) is looked at too
+    res = _check(ex, setup, NAME, _good().replace("| 16 | 45 | 1.0 |", "| 16 | 45<br> | 1.0 |"))
+    assert res.errors == [] and ["<br>" in w["message"] for w in res.warnings] == [True]
+
+
 def test_findings_name_the_manual_in_every_tag(ex, setup):
     good = ("# Findings\n\n## 1. Spindle speed\n\n- *Summary:* 6,000 rpm "
             f"[{SLUG} p. 2 / pdf 3]\n- [GAP: not found in {SLUG}]\n")

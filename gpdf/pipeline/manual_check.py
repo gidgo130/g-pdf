@@ -49,6 +49,9 @@ LEVEL_RE = re.compile(r"^(?:WARNING|CAUTION|DANGER|NOTICE|NOTE|IMPORTANT)\s*[!:]
 CURLY_RE = re.compile(r"“([^”]+)”")
 NUM_RE = re.compile(r"(?<![\w.])(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:/\d+)?")
 ELLIPSIS = "…"
+# **bold**, _italic_ (PyMuPDF's table Markdown); a lone "**" is a footnote mark ("CE**")
+EMPH_RE = re.compile(r"\*\*[^*\s][^*]*\*\*|_[^_\s|][^_|]*_")
+GLUE_RE = re.compile(r"([A-Za-z]*[a-z])([A-Z]{2,}[A-Za-z]*)")   # "inSETUP"
 _TRANS = str.maketrans({**{c: "'" for c in "‘’‚‛′"}, **{c: '"' for c in "“”„‟″"},
                         **{c: "-" for c in "‐‑‒–—―−⁃"}, "⁄": "/", "­": None, " ": " "})
 
@@ -571,6 +574,10 @@ class Checker:
             raw = [strip_marks(c) for c in split_row(t)]
             cells = [norm(c) for c in raw]
             cite_txt = " ".join(c.text for c in cites)
+            glitch = cell_glitches(raw, self._hay(cites))
+            if glitch:
+                res.warn(ln, "table", "table cell: " + "; ".join(glitch), quote=" | ".join(raw),
+                         cite=cite_txt)
             tables = [tb for c in cites for tb in self.source(c.slug).tables(c.pdfs)]
             if not tables:
                 unanchored = True
@@ -586,6 +593,25 @@ class Checker:
         if unanchored:
             res.warn(b.line, "table", "unanchored table: no layer-1 table on the cited page, "
                                       "cells checked one by one")
+
+
+def cell_glitches(raw: list[str], hay: dict) -> list[str]:
+    """Leftovers of PyMuPDF's table Markdown in a row's cells: <br>, emphasis markup, a
+    lowercase letter glued to '[' or to an upper-case run that the page shows as two words."""
+    out = []
+    if any("<br>" in c for c in raw):
+        out.append("<br> (write a line break inside a cell as a space)")
+    if any(EMPH_RE.search(c) for c in raw):
+        out.append("emphasis markup (** or _..._)")
+    if any(re.search(r"[a-z]\[", c) for c in raw):
+        out.append("a lowercase letter glued to '['")
+    texts = [hay[k][0] for k in ("layer1", "lines", "pdf")]
+    for c in raw:
+        for m in GLUE_RE.finditer(norm(c)):
+            glued, spaced = m.group(0), f"{m.group(1)} {m.group(2)}"
+            if not any(glued in t for t in texts) and any(spaced in t for t in texts):
+                out.append(f"'{glued}' is two words on the page ('{spaced}')")
+    return out
 
 
 def _cell_eq(a: str, b: str) -> bool:
