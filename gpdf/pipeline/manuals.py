@@ -382,19 +382,21 @@ def _col_of(x0: float, x1: float, gutter: float | None) -> int | None:
 
 # ---------------------------------------------------------------------------- labels
 def decode_label(raw: str | None) -> str | None:
-    """A PDF page label; an InDesign hex UTF-16 prefix ("<FEFF0053006500630031003A>1" =
-    "Sec1:1") is decoded and dropped, keeping the number."""
+    """A PDF page label; a hex UTF-16 prefix is decoded. An InDesign section prefix
+    ("<FEFF0053006500630031003A>1" = "Sec1:1") is dropped, keeping the number; any other
+    prefix is part of the printed label ("<FEFF00530043002D>2" = "SC-2")."""
     if not raw:
         return None
     m = re.match(r"^<([0-9A-Fa-f]+)>(.*)$", raw)
     if m:
         rest = m.group(2)
-        if rest:
-            return rest
         try:
-            return bytes.fromhex(m.group(1)).decode("utf-16") or None
+            prefix = bytes.fromhex(m.group(1)).decode("utf-16")
         except (UnicodeDecodeError, ValueError):
-            return None
+            return rest or None
+        if rest and re.fullmatch(r"Sec\d+:", prefix):
+            return rest
+        return prefix + rest or None
     return raw
 
 

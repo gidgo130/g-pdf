@@ -238,8 +238,25 @@ def test_label_candidates_letter_spaced_digits():
     assert manuals.label_candidates("iv") == [("r", 4, None)]
 
 
+def test_pdf_label_prefixes_other_than_indesign_sections_are_kept(tmp_path, out):
+    """Hypertherm 806650: chapter prefixes "SC-", "1-", "3-" are part of the printed label."""
+    doc = pymupdf.open()
+    for i in range(6):
+        page = doc.new_page(width=W, height=H)
+        _lines(page, 72, 100, [f"Text {i}"])
+    doc.set_page_labels([{"startpage": 0, "prefix": "<FEFF00530043002D>", "style": "D", "firstpagenum": 1},
+                         {"startpage": 2, "prefix": "<FEFF0031002D>", "style": "D", "firstpagenum": 7},
+                         {"startpage": 4, "prefix": "<FEFF0053006500630032003A>", "style": "D",
+                          "firstpagenum": 4}])
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    assert [r["label"] for r in recs] == ["SC-1", "SC-2", "1-7", "1-8", "4", "5"]
+
+
 def test_decode_label():
     assert manuals.decode_label("<FEFF0053006500630031003A>1") == "1"
+    assert manuals.decode_label("<FEFF00530043002D>2") == "SC-2"
+    assert manuals.decode_label("<FEFF0033002D>5") == "3-5"
+    assert manuals.decode_label("<FEFF00530065006300310032003A>3") == "3"     # Sec12:
     assert manuals.decode_label("A") == "A"
     assert manuals.decode_label("") is None
 
