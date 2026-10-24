@@ -429,6 +429,23 @@ with the reason. Outputs, replaced whole (temporary file, then rename):
 The page record fields and block kinds are in
 [docs/manual-pages.md](docs/manual-pages.md).
 
+### Checking extracts (manual-check)
+
+`manual-check` checks page-cited extracts of these manuals (Markdown files with a
+header block and a page tag such as `[p. 32 / pdf 33]` on every block) against the
+page records and the PDF's own text: verbatim quotes on the cited page, numbers in
+summaries, table rows against the page's table (merged cells included), printed
+labels in the tags, figure files, file names, size and the manifest.
+
+```powershell
+gpdf-cli manual-check --extracts "<extracts folder>" --pages private\machine-shop\pages `
+    --config private\machine-shop\manuals.json --report private\machine-shop\check [FILE ...]
+```
+
+It writes `check.json` and `check.md` to `--report` (never into the extracts
+folder) and exits with 1 when a file fails. The conventions are in
+[docs/manual-check.md](docs/manual-check.md).
+
 ## Keyboard shortcuts
 
 | Action | Shortcut |
