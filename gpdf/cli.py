@@ -25,6 +25,9 @@
     gpdf-cli manual-pages --config FILE --out OUTDIR [--only SLUG ...] [--pages RANGE]
                                                     # page-stamped text of the machine shop
                                                     # manuals (separate from the book pipeline)
+    gpdf-cli manual-check --extracts DIR --pages DIR --config FILE --report DIR [FILE ...]
+                                                    # quotes, numbers, table rows and page
+                                                    # tags of the extracts against the pages
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
 reviewed (or spreads could not be split), OCR failed on some pages, the survey could
@@ -253,6 +256,24 @@ def build_parser() -> argparse.ArgumentParser:
     mp.add_argument("--dpi", type=int, default=150, help="figure crops (default 150)")
     mp.add_argument("--dry-run", action="store_true",
                     help="print which files would be processed; write nothing")
+    mc = sub.add_parser("manual-check", help="check page-cited extracts against the manual pages",
+                        description="Checks every extract (.md) in --extracts, or the FILEs given: "
+                                    "file name, header block, page tags against the printed "
+                                    "labels, verbatim quotes, numbers in summaries, table rows, "
+                                    "figure files, size, the manifest. Quotes are matched against "
+                                    "the manual-pages records and the source PDF's own text. "
+                                    "Writes check.json and check.md to --report; exit code 1 "
+                                    "when a file fails. See docs/manual-check.md.")
+    mc.add_argument("--extracts", metavar="DIR", type=Path, required=True,
+                    help="the extracts folder (with figures/ inside); only read")
+    mc.add_argument("--pages", metavar="DIR", type=Path, required=True,
+                    help="the manual-pages output folder (<slug>.pages.jsonl)")
+    mc.add_argument("--config", metavar="FILE", type=Path, required=True,
+                    help="manuals.json: the source folder and the manuals")
+    mc.add_argument("--report", metavar="DIR", type=Path, required=True,
+                    help="folder for check.json and check.md (not inside --extracts)")
+    mc.add_argument("files", metavar="FILE", nargs="*",
+                    help="only these extracts (names in --extracts, or paths)")
     return p
 
 
@@ -281,6 +302,8 @@ def main(argv: list[str] | None = None) -> int:
         return _handoff_main(args)
     if args.command == "manual-pages":
         return _manual_pages_main(args, parser)
+    if args.command == "manual-check":
+        return _manual_check_main(args)
     if args.sheet_only:
         for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
                          ("--report", args.report), ("--accept-flagged", args.accept_flagged)):
@@ -633,6 +656,18 @@ def _manual_pages_main(args, parser) -> int:
         return EXIT_ERROR
     print(manuals.report(res))
     return EXIT_ERROR if res.errors else EXIT_OK
+
+
+def _manual_check_main(args) -> int:
+    from gpdf.pipeline import manual_check
+
+    try:
+        res = manual_check.run(args.extracts, args.pages, args.config, args.report, args.files)
+    except (manual_check.CheckError, OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    print(manual_check.report(res))
+    return EXIT_ERROR if res.failed else EXIT_OK
 
 
 def _run_exports(export, todo, out, jobs):
