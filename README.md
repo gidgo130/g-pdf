@@ -395,6 +395,40 @@ review, plus any `.bak.json`.
 To restore, copy the files from the dated folder back to the same relative
 paths under `private\book-prep`.
 
+## Machine shop manuals (manual-pages)
+
+`manual-pages` is for a different corpus: born-digital equipment manuals (Haas,
+Bridgeport, JET, Grizzly, Wilton, Miller ...) whose text a training manual quotes
+and must cite down to the page. It writes every page of each manual as faithful
+text in reading order, stamped with its PDF page and its printed page label, with
+headings, numbered steps, bullets, warning boxes, spec lists (dot leaders),
+tables and figures kept as blocks of their own and the figures cropped to PNG.
+Nothing is paraphrased or corrected: no word lists, no dictionary. It never
+touches the book pipeline (`survey`, `apply`, `export`, `structure`, `handoff`)
+or its folders.
+
+```powershell
+gpdf-cli manual-pages --config private\machine-shop\manuals.json --out private\machine-shop\pages
+gpdf-cli manual-pages --config ... --out ... --only grizzly-g0602 --pages 30-35 --dpi 150
+gpdf-cli manual-pages --config ... --out ... --dry-run
+```
+
+`manuals.json` names the source folder (only read), one entry per manual (slug,
+file, maker, model, doctype, doc number, revision, date, control, the shop
+machines it serves, an optional PDF page range, notes) and the files left out
+with the reason. Outputs, replaced whole (temporary file, then rename):
+
+- `<slug>.pages.jsonl`: a `file` record (the entry, the PDF's sha256, page
+  count), then one record per page with its label and blocks;
+- `<slug>.md`: the same for people, `## pdf 30 · p. 28` per page;
+- `figures/<slug>_pdf030_f1.png`: the figure crops;
+- `manual-pages.json`: per manual counts (pages, labels found/inferred/none,
+  figures and MB, tables, specs, warnings, steps, dropped glyphs, seconds) and
+  the excluded list.
+
+The page record fields and block kinds are in
+[docs/manual-pages.md](docs/manual-pages.md).
+
 ## Keyboard shortcuts
 
 | Action | Shortcut |
