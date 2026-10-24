@@ -339,3 +339,11 @@ def test_cli_reports_and_exits_1_on_a_failing_file(ex, setup, tmp_path, capsys):
     # only the files named; the report must not go into the extracts folder
     assert cli.main(args + [NAME]) == 0
     assert cli.main(args[:-1] + [str(ex / "check")]) == 1
+
+
+def test_a_number_broken_after_a_hyphen_at_a_line_end_is_closed_up():
+    """JET VBS-18 pdf 13 breaks "(Figure 7-" / "6)", so the page reads "7- 6": the quote
+    "Figure 7-6" matches; the hyphen stays (it is part of the number), "10 - 20" is untouched."""
+    assert manual_check.norm("(Figure 7- 6).") == manual_check.norm("(Figure 7-6).") == "(Figure 7-6)."
+    assert manual_check.norm("CON- TACT") == "CONTACT"
+    assert manual_check.norm("10 - 20 psi") == "10 - 20 psi"

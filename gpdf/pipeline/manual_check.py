@@ -65,13 +65,14 @@ class CheckError(Exception):
 # ---------------------------------------------------------------------------- normalising
 def norm(s: str) -> str:
     """Both sides of a comparison: NFKC, curly quotes straight, dashes to '-', soft hyphens
-    out, Markdown emphasis, escapes and <br> out, whitespace collapsed, 'CON- TACT' joined.
-    Case is kept."""
+    out, Markdown emphasis, escapes and <br> out, whitespace collapsed, 'CON- TACT' joined,
+    'Figure 7- 6' closed up to '7-6'. Case is kept."""
     s = unicodedata.normalize("NFKC", s).translate(_TRANS)
     s = s.replace("<br>", " ")
     s = re.sub(r"\\([\\`*_{}\[\]()#+\-.!|>])", r"\1", s)
     s = s.replace("**", "").replace("__", "").replace("*", "").replace("`", "")
     s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"(?<=\d)- (?=\d)", "-", s)
     return re.sub(r"(?<=[A-Za-z])- (?=[A-Za-z])", "", s)
 
 
