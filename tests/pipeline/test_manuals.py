@@ -415,6 +415,43 @@ def test_control_glyphs_dropped_from_table_cells_and_counted_once(tmp_path, out)
     assert rec["dropped_chars"] == 5
 
 
+def _runs(page, x, y, runs, size=9):
+    """Text runs set one after another on a baseline, each in its own font (a styled run)."""
+    for text, font in runs:
+        page.insert_text((x, y), text, fontname=font, fontsize=size)
+        x += pymupdf.get_text_length(text, fontname=font, fontsize=size)
+
+
+def test_table_cells_are_plain_text_with_spaces_between_runs_and_lines(tmp_path, out):
+    """Styled runs in a cell (Haas NGC: "Shows EDIT:MDI in", "Press [SHIFT]") and a cell of
+    two printed lines: plain text, a space where the page has a word gap or a line break,
+    no Markdown emphasis and no <br>; the header row the same. Text overprinted for a bold
+    look is read once."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=W, height=H)
+    x0, xm, x1, y = 72, 220, 540, [70, 94, 130, 154]
+    for a, b in zip(y, y[1:]):
+        page.draw_rect(pymupdf.Rect(x0, a, x1, b), color=(0, 0, 0), width=0.7)
+        page.draw_line((xm, a), (xm, b), color=(0, 0, 0), width=0.7)
+    _runs(page, x0 + 4, 86, [("Mode", "hebo")])
+    _runs(page, xm + 4, 86, [("Shown", "hebo"), (" ", "helv"), ("on screen", "heit")])
+    _runs(page, x0 + 4, 110, [("Manual Data Input", "helv")])
+    _runs(page, xm + 4, 110, [("Shows ", "helv"), ("EDIT:MDI", "hebo"), (" in", "helv")])
+    _runs(page, xm + 4, 124, [("upper left display.", "helv")])
+    _runs(page, x0 + 4, 146, [("Setup", "helv")])
+    _runs(page, xm + 4, 146, [("Press ", "helv"), ("[SHIFT]", "hebo"), (" after ", "helv"),
+                              ("[POWER UP]", "hebo")])
+    _runs(page, x0 + 4.3, 146, [("Setup", "helv")])        # overprinted for a bold look (Miller)
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    (table,) = _blocks(recs[0], "table")
+    assert table["cells"] == [["Mode", "Shown on screen"],
+                              ["Manual Data Input", "Shows EDIT:MDI in upper left display."],
+                              ["Setup", "Press [SHIFT] after [POWER UP]"]]
+    assert table["text"].splitlines() == ["|Mode|Shown on screen|", "|---|---|",
+                                          "|Manual Data Input|Shows EDIT:MDI in upper left display.|",
+                                          "|Setup|Press [SHIFT] after [POWER UP]|"]
+
+
 class _FakePage:
     """A page whose rawdict is given: one span per text, glyphs 5 pt apart."""
 

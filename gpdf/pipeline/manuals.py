@@ -781,31 +781,54 @@ def _stack_labels(labels: list[Line]) -> list[Line]:
     return out
 
 
-def _cell_text(s: str | None) -> str | None:
-    """A table cell without junk glyphs; a tab or line-break glyph inside a cell (a key
-    icon in the Haas tables) is a space, so the Markdown row stays on one line."""
-    if s is None:
-        return None
-    return re.sub(r"[\t\n]", " ", clean_text(s)[0])
+def cell_text(raw_lines: list[dict], rect: pymupdf.Rect) -> str:
+    """A table cell's text built from the characters of the table's text page (the one
+    PyMuPDF's ``extract_cells`` reads, which merges overprinted bold; a glyph belongs to the
+    cell when more than half of it lies inside), as plain text: no emphasis markup, a space
+    where the page has a word gap (a whitespace glyph, as in body text) or a line break, junk
+    glyphs dropped (they were counted from the page; a tab or line-break glyph is a word
+    gap)."""
+    words, cur = [], []
+
+    def brk():
+        if cur:
+            words.append("".join(cur))
+            cur.clear()
+
+    for ln in raw_lines:
+        lb = ln["bbox"]
+        if lb[0] > rect.x1 or lb[2] < rect.x0 or lb[1] > rect.y1 or lb[3] < rect.y0:
+            continue
+        for span in ln["spans"]:
+            for ch in span["chars"]:
+                c = _cp1252(ch["c"])
+                b = pymupdf.Rect(ch["bbox"])
+                if c.isspace() or not abs(b & rect) > 0.5 * abs(b):
+                    brk()
+                elif not _dropped(c):
+                    cur.append(c)
+        brk()
+    return " ".join(words)
 
 
-def table_cells(t) -> list[list[str | None]]:
-    """The table's rows of cleaned cells: ``None`` for a cell covered by a merged cell to its
+def table_cells(t, raw_lines: list[dict]) -> list[list[str | None]]:
+    """The table's rows of plain cells: ``None`` for a cell covered by a merged cell to its
     left or above (as PyMuPDF's ``extract``), ``""`` for an empty one."""
-    from pymupdf.table import extract_cells
-    return [[None if c is None else _cell_text(extract_cells(t.textpage, c, markdown=True))
-             for c in row.cells] for row in t.rows]
+    return [[None if c is None else cell_text(raw_lines, pymupdf.Rect(c)) for c in row.cells]
+            for row in t.rows]
 
 
 def table_markdown(t, cells: list[list[str | None]]) -> str:
     """The table as GitHub Markdown, laid out as PyMuPDF's ``Table.to_markdown`` (header names
     ``ColN`` when empty), except that merged cells are not filled: a value printed once in a
     spanning cell is written once and the cells it covers stay empty (filling from the left
-    or from above invents values). The glyphs dropped here were already counted from the
-    page."""
-    # header names keep their line breaks as <br>, as PyMuPDF writes them
-    names = [clean_text(n or "")[0].replace("\t", " ").replace("\n", "<br>") or f"Col{i + 1}"
-             for i, n in enumerate(t.header.names)]
+    or from above invents values). Header names are the first row's cells, or PyMuPDF's names
+    of a header found above the table."""
+    if t.header.external:
+        heads = [re.sub(r"\s+", " ", clean_text(n or "")[0]).strip() for n in t.header.names]
+    else:
+        heads = cells[0] if cells else []
+    names = [(heads[i] if i < len(heads) else "") or f"Col{i + 1}" for i in range(t.col_count)]
     out = ["|" + "|".join(names) + "|", "|" + "|".join("---" for _ in range(t.col_count)) + "|"]
     for row in cells[0 if t.header.external else 1:]:
         out.append("|" + "|".join(c or "" for c in row) + "|")
@@ -820,6 +843,7 @@ def find_tables(page, height: float) -> list[Table]:
         found = page.find_tables()
     except Exception:  # noqa: BLE001 - a page find_tables cannot read is a page without
         return out
+    raw: dict[int, list[dict]] = {}         # the tables' text page, read once
     for t in found.tables:
         if t.row_count < 2 or t.col_count < 2:
             continue
@@ -827,7 +851,10 @@ def find_tables(page, height: float) -> list[Table]:
         if r.y0 >= (1 - BAND) * height or r.y1 <= BAND * height:
             continue
         try:
-            cells = table_cells(t)
+            if id(t.textpage) not in raw:
+                raw[id(t.textpage)] = [ln for b in t.textpage.extractRAWDICT()["blocks"]
+                                       if b.get("type") == 0 for ln in b["lines"]]
+            cells = table_cells(t, raw[id(t.textpage)])
             md = table_markdown(t, cells)
         except Exception:  # noqa: BLE001
             cells, md = [], ""
