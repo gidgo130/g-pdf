@@ -1,0 +1,356 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""gpdf-cli manual-pages: page-stamped text of born-digital equipment manuals, on synthetic
+PDFs built here with PyMuPDF (two columns with figures, a ruled table, dot-leader specs,
+a contents page, running heads with page numbers, InDesign page labels, a WARNING box,
+steps with the number alone on its line, soft hyphens, control glyphs, a hidden span)."""
+
+import json
+
+import pymupdf
+import pytest
+
+from gpdf import cli
+from gpdf.pipeline import manuals
+
+W, H = 612, 792
+BODY = 10
+
+
+def _lines(page, x, y, lines, size=BODY, font="helv", pitch=None):
+    pitch = pitch or size * 1.3
+    for i, t in enumerate(lines):
+        page.insert_text((x, y + i * pitch), t, fontname=font, fontsize=size)
+    return y + len(lines) * pitch
+
+
+def _figure(page, rect, labels, caption=None):
+    """A vector drawing (box + diagonal) with callout labels inside and a caption below."""
+    page.draw_rect(rect, color=(0, 0, 0), width=1)
+    page.draw_line((rect.x0 + 5, rect.y0 + 5), (rect.x1 - 5, rect.y1 - 5), color=(0, 0, 0))
+    for (lx, ly), text in labels:
+        page.insert_text((lx, ly), text, fontname="helv", fontsize=9)
+    if caption:
+        page.insert_text((rect.x0 + 10, rect.y1 + 16), caption, fontname="helv", fontsize=BODY)
+
+
+def _two_column_page(doc):
+    page = doc.new_page(width=W, height=H)
+    # left column: heading, tools list, steps, figure, step
+    page.insert_text((48, 70), "Chuck Removal", fontname="hebo", fontsize=24)
+    page.insert_text((48, 95), "Tools Needed:", fontname="hebo", fontsize=BODY)
+    page.insert_text((265, 95), "Qty", fontname="hebo", fontsize=BODY)
+    _lines(page, 48, 110, ["Spanner Wrench............................... 1",
+                           "Chuck Key (3- or 4-Jaw)..................... 1"])
+    _lines(page, 48, 150, ["1.  DISCONNECT LATHE FROM POWER!"])
+    _lines(page, 48, 170, ["2.  Remove the cap screws and chuck locks"])
+    _lines(page, 68, 183, ["(see Figure 28)."])
+    _figure(page, pymupdf.Rect(48, 300, 290, 420),
+            [((176, 330), "Cap Screw"), ((71, 400), "Chuck Lock")],
+            "Figure 28. Location of chuck lock and cap screws.")
+    _lines(page, 48, 470, ["3.  Support the chuck, unscrew it, and remove."])
+    # right column: heading, paragraph, figure with labels, paragraph
+    page.insert_text((324, 70), "Changing Jaw Set", fontname="hebo", fontsize=24)
+    _lines(page, 324, 130, ["The 3-jaw scroll chuck included with the lathe fea-",
+                            "tures inside and outside hardened steel jaw sets",
+                            "(see Figure 30), which move in unison to center",
+                            "a concentric workpiece."])
+    _figure(page, pymupdf.Rect(325, 266, 565, 443),
+            [((491, 310), "Inside Set"), ((336, 400), "Outside Set")],
+            "Figure 30. Chuck and jaw selection.")
+    _lines(page, 324, 480, ["Jaws are numbered from 1-3 (see Figure 31).",
+                            "They are designed to be installed in numerical",
+                            "order in the jaw guides."])
+    return page
+
+
+def _blocks(rec, kind=None):
+    return [b for b in rec["blocks"] if kind is None or b["kind"] == kind]
+
+
+@pytest.fixture
+def out(tmp_path):
+    d = tmp_path / "out"
+    d.mkdir()
+    return d
+
+
+def _process(doc, tmp_path, out, slug="synth", **kw):
+    path = tmp_path / f"{slug}.pdf"
+    doc.save(str(path))
+    doc.close()
+    return manuals.process_pdf(path, slug, out / "figures", **kw)
+
+
+# ------------------------------------------------------------------ reading order, figures
+def test_two_columns_read_left_then_right_with_figures(tmp_path, out):
+    doc = pymupdf.open()
+    _two_column_page(doc)
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    rec = recs[0]
+    kinds = [b["kind"] for b in rec["blocks"]]
+    texts = [b.get("text", "") for b in rec["blocks"]]
+    assert rec["columns"] == 2
+    # left column first: heading, tools (specs), steps 1-2, figure 28, step 3; then the right
+    i_left = texts.index("Chuck Removal")
+    i_right = texts.index("Changing Jaw Set")
+    assert i_left < i_right
+    figs = _blocks(rec, "figure")
+    assert [f["caption"] for f in figs] == ["Figure 28. Location of chuck lock and cap screws.",
+                                            "Figure 30. Chuck and jaw selection."]
+    assert figs[0]["labels"] == ["Cap Screw", "Chuck Lock"]
+    assert figs[1]["labels"] == ["Inside Set", "Outside Set"]
+    for f in figs:
+        assert (out / f["file"]).is_file()
+    steps = _blocks(rec, "step")
+    assert [s["n"] for s in steps] == ["1", "2", "3"]
+    assert steps[1]["text"] == "Remove the cap screws and chuck locks (see Figure 28)."
+    # the figure sits between step 2 and step 3
+    order = [b["kind"] for b in rec["blocks"][i_left:i_right]]
+    assert order.index("figure") > order.index("step")
+    assert rec["blocks"][i_right - 1]["kind"] == "step"
+    assert rec["blocks"][i_right - 1]["n"] == "3"
+    # labels and captions are not body text
+    body = " ".join(b.get("text", "") for b in rec["blocks"] if b["kind"] not in ("figure",))
+    for label in ("Cap Screw", "Chuck Lock", "Inside Set", "Outside Set", "Figure 28."):
+        assert label not in body
+    # tools list is a specs block; the hyphenated line joins without a space
+    specs = _blocks(rec, "specs")
+    assert specs[0]["items"][0] == {"label": "Spanner Wrench", "values": ["1"]}
+    paras = [b["text"] for b in _blocks(rec, "para")]
+    assert any("chuck included with the lathe features inside" in p for p in paras)
+    assert "heading" in kinds
+
+
+# ------------------------------------------------------------------------------ tables
+def test_ruled_table_becomes_markdown_and_leaves_the_flow(tmp_path, out):
+    doc = pymupdf.open()
+    page = doc.new_page(width=W, height=H)
+    page.insert_text((72, 60), "Beacon Light", fontname="hebo", fontsize=11)
+    rows = [("Flashing Green", "The machine is stopped, but is in a ready state."),
+            ("Flashing Red", "A fault has occurred."),
+            ("Flashing Yellow", "A tool has expired.")]
+    x0, x1, xm, y0 = 72, 540, 220, 70
+    for i, (a, b) in enumerate(rows):
+        y = y0 + i * 24
+        page.draw_rect(pymupdf.Rect(x0, y, x1, y + 24), color=(0, 0, 0), width=0.7)
+        page.draw_line((xm, y), (xm, y + 24), color=(0, 0, 0), width=0.7)
+        page.insert_text((x0 + 4, y + 16), a, fontname="helv", fontsize=9)
+        page.insert_text((xm + 4, y + 16), b, fontname="helv", fontsize=9)
+    page.insert_text((72, 180), "2.3.3 Keyboard", fontname="hebo", fontsize=15)
+    _lines(page, 72, 200, ["Keyboard keys are grouped into these functional areas:"])
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    rec = recs[0]
+    tables = _blocks(rec, "table")
+    assert len(tables) == 1
+    md = tables[0]["text"]
+    assert "Flashing Green" in md and "Flashing Yellow" in md and "|" in md
+    assert tables[0]["rows"] >= 3 and tables[0]["cols"] == 2
+    kinds = [b["kind"] for b in rec["blocks"]]
+    assert kinds.index("table") < [b.get("text") for b in rec["blocks"]].index("2.3.3 Keyboard")
+    body = " ".join(b.get("text", "") for b in rec["blocks"] if b["kind"] != "table")
+    assert "Flashing Red" not in body
+    assert not _blocks(rec, "figure")          # the table ruling is not a figure
+
+
+# ------------------------------------------------------------------------ specs, contents
+def test_dot_leader_specs_with_two_values_and_empty_middle(tmp_path, out):
+    doc = pymupdf.open()
+    page = doc.new_page(width=W, height=H)
+    page.insert_text((72, 50), "4.0  Specifications", fontname="hebo", fontsize=16)
+    _lines(page, 72, 70, [
+        "Model number ................................  ................... VBS-18MWEVS",
+        "Stock Number ........................ 321357A ........................ 321359A",
+        "Horsepower ............................................................... 2 HP",
+        "Phase .................................................................... three",
+    ])
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    specs = _blocks(recs[0], "specs")
+    assert len(specs) == 1
+    assert specs[0]["items"] == [
+        {"label": "Model number", "values": ["VBS-18MWEVS"]},
+        {"label": "Stock Number", "values": ["321357A", "321359A"]},
+        {"label": "Horsepower", "values": ["2 HP"]},
+        {"label": "Phase", "values": ["three"]},
+    ]
+    assert "| Horsepower | 2 HP |" in specs[0]["text"]
+    assert recs[0].get("contents") is not True
+
+
+def test_contents_page_is_marked(tmp_path, out):
+    doc = pymupdf.open()
+    page = doc.new_page(width=W, height=H)
+    page.insert_text((72, 50), "Table of Contents", fontname="hebo", fontsize=16)
+    _lines(page, 72, 70, ["Safety ........................................ 3",
+                          "Specifications ................................ 5",
+                          "Setup ......................................... 9",
+                          "Operation .................................... 14"])
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    assert recs[0]["contents"] is True
+    assert _blocks(recs[0], "contents") and not _blocks(recs[0], "specs")
+
+
+# ------------------------------------------------------------- running heads, page labels
+def _numbered_book(doc, n=8, skip=(), start=10):
+    for i in range(n):
+        page = doc.new_page(width=W, height=H)
+        page.insert_text((450, 30), "96-8000  rev N June 2006", fontname="helv", fontsize=8)
+        page.insert_text((300, 770), "Operation", fontname="hebo", fontsize=10)
+        if i not in skip:
+            page.insert_text((55, 770), str(start + i), fontname="helv", fontsize=9)
+        _lines(page, 54, 100, [f"Body text of page {i + 1}, a paragraph about RS-232.",
+                               "A second line of the paragraph on this page."])
+
+
+def test_running_head_and_foot_stripped_and_labels_from_text(tmp_path, out):
+    doc = pymupdf.open()
+    _numbered_book(doc, skip=(3,))
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    assert [r["label"] for r in recs] == ["10", "11", "12", "13", "14", "15", "16", "17"]
+    assert recs[2]["label_source"] == "text"
+    assert recs[3]["label_source"] == "inferred"
+    for rec in recs:
+        stripped = " ".join(rec["stripped"])
+        assert "96-8000" in stripped and "Operation" in stripped
+        body = " ".join(b.get("text", "") for b in rec["blocks"])
+        assert "96-8000" not in body and "Operation" not in body
+        assert "RS-232" in body
+
+
+def test_pdf_page_labels_with_indesign_hex_prefix(tmp_path, out):
+    doc = pymupdf.open()
+    for i in range(4):
+        page = doc.new_page(width=W, height=H)
+        _lines(page, 72, 100, [f"Text {i}"])
+    doc.set_page_labels([{"startpage": 0, "prefix": "", "style": "A", "firstpagenum": 1},
+                         {"startpage": 2, "prefix": "<FEFF0053006500630031003A>", "style": "D",
+                          "firstpagenum": 1}])
+    assert doc[2].get_label() == "<FEFF0053006500630031003A>1"
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    assert [r["label"] for r in recs] == ["A", "B", "1", "2"]
+    assert {r["label_source"] for r in recs} == {"pdf_label"}
+
+
+def test_decode_label():
+    assert manuals.decode_label("<FEFF0053006500630031003A>1") == "1"
+    assert manuals.decode_label("A") == "A"
+    assert manuals.decode_label("") is None
+
+
+def test_chapter_page_labels(tmp_path, out):
+    doc = pymupdf.open()
+    for i in range(4):
+        page = doc.new_page(width=W, height=H)
+        page.insert_text((54, 760), "J500", fontname="helv", fontsize=10)
+        page.insert_text((560, 760), f"4-{i + 1}", fontname="helv", fontsize=10)
+        _lines(page, 72, 100, [f"Chapter four text {i}"])
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    assert [r["label"] for r in recs] == ["4-1", "4-2", "4-3", "4-4"]
+    assert all("J500" in " ".join(r["stripped"]) for r in recs)
+
+
+# ------------------------------------------------------------- warnings, steps, hyphens
+def test_warning_box_and_steps_with_number_alone(tmp_path, out):
+    doc = pymupdf.open()
+    page = doc.new_page(width=W, height=H)
+    page.insert_text((278, 100), "WARNING!", fontname="hebo", fontsize=10)
+    _lines(page, 162, 113, ["One of the biggest causes of electronic damage is a lack of a good",
+                            "ground on both the CNC mill and the computer."], size=8, font="hebo",
+           pitch=9.6)
+    page.insert_text((54, 160), "Cable length", fontname="hebo", fontsize=11)
+    _lines(page, 54, 175, ["The following lists baud rate and the respective maximum cable length."])
+    _lines(page, 325, 220, ["CAUTION: MAKE SURE THE BLADE IS NOT IN CON-",
+                            "TACT WITH THE WORKPIECE WHEN THE MOTOR",
+                            "IS STARTED."])
+    # NGC style: "1." then the text on the same baseline, in its own span
+    y = 300
+    for n, t in (("1", "Function"), ("2", "Cursor"), ("3", "Display")):
+        page.insert_text((81, y), f"{n}.", fontname="helv", fontsize=BODY)
+        page.insert_text((108, y), t, fontname="helv", fontsize=BODY)
+        y += 16
+    # number alone on its line, text on the next line
+    page.insert_text((48, 400), "4.", fontname="hebo", fontsize=BODY)
+    page.insert_text((69, 413), "DISCONNECT LATHE FROM POWER!", fontname="helv", fontsize=BODY)
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    rec = recs[0]
+    warns = _blocks(rec, "warning")
+    assert [w["level"] for w in warns] == ["WARNING", "CAUTION"]
+    assert warns[0]["text"].startswith("WARNING! One of the biggest causes")
+    assert warns[0]["text"].endswith("the computer.")
+    # a hyphen at a line end joins without a space only before a lowercase letter
+    assert "IN CON- TACT WITH THE WORKPIECE" in warns[1]["text"]
+    heads = [b["text"] for b in _blocks(rec, "heading")]
+    assert "Cable length" in heads
+    steps = _blocks(rec, "step")
+    assert [(s["n"], s["text"]) for s in steps] == [
+        ("1", "Function"), ("2", "Cursor"), ("3", "Display"), ("4", "DISCONNECT LATHE FROM POWER!")]
+
+
+def test_soft_hyphen_controls_and_hidden_span(tmp_path, out):
+    doc = pymupdf.open()
+    page = doc.new_page(width=W, height=H)
+    _lines(page, 72, 100, ["Pull the red release button\x07 on the electro-", "magnetic valve."])
+    _lines(page, 72, 140, ["Press the \x01\x02 key to start."])
+    page.insert_text((84, 200), "Figure 5: Securing workpiece", fontname="helv", fontsize=BODY)
+    page.insert_text((84, 200), "The work stop is used", fontname="helv", fontsize=BODY)
+    _lines(page, 72, 213, ["to set up the saw for making multiple cuts."])
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    rec = recs[0]
+    paras = [b["text"] for b in _blocks(rec, "para")]
+    assert "Pull the red release button on the electromagnetic valve." in paras
+    assert "Press the key to start." in paras
+    assert rec["dropped_chars"] == 3
+    assert any(p.startswith("The work stop is used to set up") for p in paras)
+    assert not any("Securing" in p for p in paras)
+    over = [w for w in rec["warnings"] if w["kind"] == "overlap"]
+    assert len(over) == 1
+    assert "Figure 5: Securing workpiece" in over[0]["dropped"]
+    assert "The work stop is used" in over[0]["kept"]
+
+
+def test_soft_hyphen_joins_the_word():
+    words = manuals.join_lines(["Incorrect installa­", "tion will result"])
+    assert words == "Incorrect installation will result"
+    assert manuals.join_lines(["a soft­hyphen inside", "stays out"]) == "a softhyphen inside stays out"
+    assert manuals.join_lines(["self-", "Contained"]) == "self- Contained"
+
+
+# -------------------------------------------------------------------------------- CLI
+def test_cli_dry_run_and_run_write_only_to_out(tmp_path, capsys):
+    src = tmp_path / "src"
+    src.mkdir()
+    doc = pymupdf.open()
+    _two_column_page(doc)
+    _numbered_book(doc, n=3)
+    doc.save(str(src / "synth manual.pdf"))
+    doc.close()
+    config = {"source": str(src),
+              "manuals": [{"slug": "synth", "file": "synth manual.pdf", "maker": "Acme", "model": "X",
+                           "doctype": "Manual", "doc_no": "1", "rev": "A", "date": "2020",
+                           "control": None, "machines": ["lathe"], "pages": None, "notes": ""}],
+              "excluded": [{"file": "old.pdf", "reason": "superseded"}]}
+    cfg = tmp_path / "manuals.json"
+    cfg.write_text(json.dumps(config), "utf-8")
+    out = tmp_path / "pages"
+    before = sorted(p.name for p in src.iterdir())
+    assert cli.main(["manual-pages", "--config", str(cfg), "--out", str(out), "--dry-run"]) == 0
+    assert "synth" in capsys.readouterr().out
+    assert not out.exists()
+    assert cli.main(["manual-pages", "--config", str(cfg), "--out", str(out), "--dpi", "72"]) == 0
+    assert sorted(p.name for p in src.iterdir()) == before
+    recs = [json.loads(l) for l in (out / "synth.pages.jsonl").read_text("utf-8").splitlines()]
+    assert recs[0]["type"] == "file" and recs[0]["manual"]["slug"] == "synth"
+    assert len(recs[0]["sha256"]) == 64 and recs[0]["pages"] == 4
+    assert [r["pdf"] for r in recs[1:]] == [1, 2, 3, 4]
+    md = (out / "synth.md").read_text("utf-8")
+    assert "## pdf 1" in md and "### Chuck Removal" in md and "[Figure: Figure 28." in md
+    summary = json.loads((out / "manual-pages.json").read_text("utf-8"))
+    assert summary["manuals"]["synth"]["pages"] == 4
+    assert summary["manuals"]["synth"]["figures"]["count"] == 2
+    assert summary["excluded"][0]["file"] == "old.pdf"
+    assert list((out / "figures").glob("synth_pdf001_f*.png"))
+    # --pages limits the pages written; --only an unknown slug is an error
+    assert cli.main(["manual-pages", "--config", str(cfg), "--out", str(out), "--only", "synth",
+                     "--pages", "2-3", "--dpi", "72"]) == 0
+    recs = [json.loads(l) for l in (out / "synth.pages.jsonl").read_text("utf-8").splitlines()]
+    assert [r["pdf"] for r in recs[1:]] == [2, 3]
+    assert cli.main(["manual-pages", "--config", str(cfg), "--out", str(out), "--only", "nope"]) == 1

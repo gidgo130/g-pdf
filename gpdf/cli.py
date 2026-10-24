@@ -22,6 +22,9 @@
     gpdf-cli backup --to DIR [--source PATH] [--always]
                                                     # copy the review decisions to DIR
                                                     # (nothing if unchanged since the last)
+    gpdf-cli manual-pages --config FILE --out OUTDIR [--only SLUG ...] [--pages RANGE]
+                                                    # page-stamped text of the machine shop
+                                                    # manuals (separate from the book pipeline)
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
 reviewed (or spreads could not be split), OCR failed on some pages, the survey could
@@ -231,6 +234,25 @@ def build_parser() -> argparse.ArgumentParser:
                    help="folder holding the decisions (default: private/book-prep)")
     b.add_argument("--always", action="store_true",
                    help="make a new dated folder even if nothing changed")
+    mp = sub.add_parser("manual-pages", help="page-stamped text of born-digital equipment manuals",
+                        description="For every manual in the config (slug, file, maker, model, "
+                                    "doc number ...): every page as text in reading order, "
+                                    "stamped with its PDF page and printed page label, with "
+                                    "headings, steps, warnings, spec lists, tables and figures "
+                                    "as blocks. Writes OUTDIR/<slug>.pages.jsonl, <slug>.md, "
+                                    "figures/ and manual-pages.json. The source folder is only "
+                                    "read. Separate from the book pipeline.")
+    mp.add_argument("--config", metavar="FILE", type=Path, required=True,
+                    help="manuals.json: source folder, the manuals, the excluded files")
+    mp.add_argument("--out", metavar="OUTDIR", type=Path, required=True,
+                    help="folder for the output files (created if missing)")
+    mp.add_argument("--only", metavar="SLUG", nargs="+", default=[],
+                    help="only these manuals")
+    mp.add_argument("--pages", metavar="RANGE",
+                    help="only these PDF pages (1-based), e.g. 30-35,40; needs --only with one slug")
+    mp.add_argument("--dpi", type=int, default=150, help="figure crops (default 150)")
+    mp.add_argument("--dry-run", action="store_true",
+                    help="print which files would be processed; write nothing")
     return p
 
 
@@ -257,6 +279,8 @@ def main(argv: list[str] | None = None) -> int:
         return _structure_main(args)
     if args.command == "handoff":
         return _handoff_main(args)
+    if args.command == "manual-pages":
+        return _manual_pages_main(args, parser)
     if args.sheet_only:
         for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
                          ("--report", args.report), ("--accept-flagged", args.accept_flagged)):
@@ -595,6 +619,20 @@ def _handoff_main(args) -> int:
         return EXIT_ERROR
     print(handoff.report(res))
     return EXIT_UNREVIEWED if res.skipped else EXIT_OK
+
+
+def _manual_pages_main(args, parser) -> int:
+    from gpdf.pipeline import manuals
+
+    if args.dpi < 36:
+        parser.error("--dpi must be at least 36")
+    try:
+        res = manuals.run(args.config, args.out, args.only, args.pages, args.dpi, args.dry_run)
+    except (manuals.ManualsError, OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    print(manuals.report(res))
+    return EXIT_ERROR if res.errors else EXIT_OK
 
 
 def _run_exports(export, todo, out, jobs):
