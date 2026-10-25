@@ -1542,3 +1542,130 @@ def report(res: Result) -> str:
                      f"specs {s['specs']}  warnings {s['warnings']}  steps {s['steps']}  "
                      f"dropped {s['dropped_chars']}  overlap {s['overlap_warnings']}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------- coverage
+COVER_MIN_RUN = 3           # letter/digit runs shorter than this are not checked
+COVER_REPORT = 3            # a page with this many missing words is reported
+COVER_SKIP_KEYS = ("kind", "file", "level", "label_source", "warnings")
+_RUN_RE = re.compile(r"[^\W_]+")
+
+
+def _runs(s: str) -> list[str]:
+    """The letter/digit runs of ``s``, case-folded, after the glyph filter and NFKC (so a
+    ligature reads as its letters); soft hyphens are left out."""
+    s = unicodedata.normalize("NFKC", clean_text(s)[0].replace("­", ""))
+    return [r.casefold() for r in _RUN_RE.findall(s)]
+
+
+def _record_strings(o, key: str = ""):
+    if key in COVER_SKIP_KEYS:
+        return
+    if isinstance(o, str):
+        yield o
+    elif isinstance(o, list):
+        for v in o:
+            yield from _record_strings(v)
+    elif isinstance(o, dict):
+        for k, v in o.items():
+            yield from _record_strings(v, k)
+
+
+def missing_words(page, rec: dict) -> list[str]:
+    """The words of ``page.get_text("words")``, in its order, with a letter/digit run of
+    >= COVER_MIN_RUN characters that occurs nowhere in the page's record (blocks with their
+    lines, cells, specs, captions and figure labels; stripped heads and feet; the label).
+    A word broken by a hyphen at a line end ("con-" / "trols") is looked up joined."""
+    have = set()
+    for s in _record_strings(rec):
+        have.update(_runs(s))
+    words = [w[4] for w in page.get_text("words")]
+    runs = [_runs(w) for w in words]
+    broken = [w.endswith(("-", "­")) for w in words]
+    out = []
+    for i, w in enumerate(words):
+        for j, r in enumerate(runs[i]):
+            if len(r) < COVER_MIN_RUN or r in have:
+                continue
+            last, first = j == len(runs[i]) - 1, j == 0
+            if last and broken[i] and i + 1 < len(words) and runs[i + 1] \
+                    and r + runs[i + 1][0] in have:
+                continue
+            if first and i > 0 and broken[i - 1] and runs[i - 1] and runs[i - 1][-1] + r in have:
+                continue
+            out.append(w)
+            break
+    return out
+
+
+def coverage(config: Path, out: Path, only: list[str] = ()) -> tuple[list[dict], list[str]]:
+    """Per manual whose records are in ``out``: the pages with >= COVER_REPORT missing words
+    (see ``missing_words``). Returns (per-manual results, problems such as a missing record
+    file or a PDF that changed since the records were made)."""
+    cfg = load_config(config)
+    source = Path(cfg["source"])
+    results, problems = [], []
+    for e in cfg["manuals"]:
+        if only and e["slug"] not in only:
+            continue
+        path = out / f"{e['slug']}.pages.jsonl"
+        src = source / e["file"]
+        if not path.is_file() or not src.is_file():
+            problems.append(f"{e['slug']}: missing {path if not path.is_file() else src}")
+            continue
+        recs = [json.loads(ln) for ln in path.read_text("utf-8").splitlines() if ln.strip()]
+        head, pages = recs[0], recs[1:]
+        if head.get("sha256") != sha256_of(src):
+            problems.append(f"{e['slug']}: {src.name} changed since its records were made")
+        res = {"slug": e["slug"], "pages": len(pages), "missing": 0, "reported": []}
+        doc = pymupdf.open(str(src))
+        try:
+            for rec in pages:
+                miss = missing_words(doc[rec["pdf"] - 1], rec)
+                res["missing"] += len(miss)
+                if len(miss) >= COVER_REPORT:
+                    res["reported"].append({"pdf": rec["pdf"], "label": rec.get("label"),
+                                            "words": miss})
+        finally:
+            doc.close()
+        results.append(res)
+    return results, problems
+
+
+def coverage_md(results: list[dict], problems: list[str], worst: int = 15) -> str:
+    def where(p):
+        return f"pdf {p['pdf']} · " + (f"p. {p['label']}" if p.get("label") else "no label")
+
+    out = ["# manual-pages coverage", "",
+           'Words of the PDF\'s own text (`page.get_text("words")`) that occur nowhere in the '
+           "page's layer-1 record (blocks and their lines, table cells, specs, captions, figure "
+           "labels, stripped heads and feet). Letter/digit runs of fewer than "
+           f"{COVER_MIN_RUN} characters and punctuation are not checked; a word broken by a "
+           "hyphen at a line end is looked up joined. A word counts as present when it occurs "
+           "anywhere on the page, so a dropped line whose words recur elsewhere on the page "
+           f"does not show. Pages with >= {COVER_REPORT} missing words are listed, the words in "
+           "the PDF text's order. Layer 1 leaves out non-horizontal text, so rotated labels show "
+           "here too.", ""]
+    if problems:
+        out += ["## Problems", ""] + [f"- {p}" for p in problems] + [""]
+    out += ["## Totals", "", "| manual | pages | pages >= 3 | missing words | worst page (words) |",
+            "| --- | --- | --- | --- | --- |"]
+    for r in results:
+        top = max(r["reported"], key=lambda p: len(p["words"]), default=None)
+        top_s = f"{where(top)} ({len(top['words'])})" if top else ""
+        out.append(f"| {r['slug']} | {r['pages']} | {len(r['reported'])} | {r['missing']} | {top_s} |")
+    allp = sorted(((r["slug"], p) for r in results for p in r["reported"]),
+                  key=lambda sp: -len(sp[1]["words"]))
+    total = sum(len(r["reported"]) for r in results)
+    out += ["", f"{total} page(s) listed, {sum(r['missing'] for r in results)} missing word(s) "
+                "in all.", ""]
+    if allp:
+        out += [f"## Worst {min(worst, len(allp))} pages", ""]
+        out += [f"- {s} {where(p)}: {len(p['words'])}" for s, p in allp[:worst]] + [""]
+    for r in results:
+        if not r["reported"]:
+            continue
+        out += [f"## {r['slug']}", ""]
+        for p in r["reported"]:
+            out += [f"### {where(p)} ({len(p['words'])} missing)", "", " ".join(p["words"]), ""]
+    return "\n".join(out)

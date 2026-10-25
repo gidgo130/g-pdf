@@ -25,6 +25,8 @@
     gpdf-cli manual-pages --config FILE --out OUTDIR [--only SLUG ...] [--pages RANGE]
                                                     # page-stamped text of the machine shop
                                                     # manuals (separate from the book pipeline)
+    gpdf-cli manual-pages --config FILE --out OUTDIR --coverage REPORT [--only SLUG ...]
+                                                    # PDF words the page records lack
     gpdf-cli manual-check --extracts DIR --pages DIR --config FILE --report DIR [FILE ...]
                                                     # quotes, numbers, table rows and page
                                                     # tags of the extracts against the pages
@@ -256,6 +258,9 @@ def build_parser() -> argparse.ArgumentParser:
     mp.add_argument("--dpi", type=int, default=150, help="figure crops (default 150)")
     mp.add_argument("--dry-run", action="store_true",
                     help="print which files would be processed; write nothing")
+    mp.add_argument("--coverage", metavar="REPORT", type=Path,
+                    help="process nothing: compare the records in OUTDIR with each PDF's own "
+                         "words and write the pages that lack some to REPORT (Markdown)")
     mc = sub.add_parser("manual-check", help="check page-cited extracts against the manual pages",
                         description="Checks every extract (.md) in --extracts, or the FILEs given: "
                                     "file name, header block, page tags against the printed "
@@ -649,6 +654,20 @@ def _manual_pages_main(args, parser) -> int:
 
     if args.dpi < 36:
         parser.error("--dpi must be at least 36")
+    if args.coverage:
+        try:
+            results, problems = manuals.coverage(args.config, args.out, args.only)
+            manuals.write_atomic(args.coverage, manuals.coverage_md(results, problems))
+        except (manuals.ManualsError, OSError, ValueError) as e:
+            print(f"gpdf-cli: error: {e}", file=sys.stderr)
+            return EXIT_ERROR
+        for r in results:
+            print(f"  {r['slug']:<28} pages {r['pages']:>4}  listed {len(r['reported']):>3}  "
+                  f"missing words {r['missing']}")
+        for p in problems:
+            print(f"problem  {p}")
+        print(f"coverage report in {args.coverage}")
+        return EXIT_ERROR if problems else EXIT_OK
     try:
         res = manuals.run(args.config, args.out, args.only, args.pages, args.dpi, args.dry_run)
     except (manuals.ManualsError, OSError) as e:

@@ -139,3 +139,18 @@ Per manual: `pdf_pages`, `pages` (processed), `labels` (`text`, `pdf_label`,
 `two_column_pages`, `seconds`; plus `excluded` (from the config), `errors`,
 `dpi` and the run time. A run with `--only` or `--pages` updates only those
 manuals' entries.
+
+## `--coverage REPORT`: words the records lack
+
+`gpdf-cli manual-pages --config FILE --out OUTDIR --coverage REPORT [--only SLUG ...]`
+processes nothing: it reads the records in OUTDIR and, for every page, lists the words of
+the PDF's own text (`page.get_text("words")`, in its order) that occur nowhere in the
+page's record (any string of it: block text and `lines`, table cells, spec items,
+captions, figure labels, `stripped`, the label; not `warnings`). Words are compared by
+their letter/digit runs, case-folded, after the glyph filter and NFKC; runs of 1-2
+characters and punctuation are not checked, and a word broken by a hyphen at a line end
+(`con-` / `trols`) is looked up joined. REPORT (Markdown) has the totals per manual, the
+worst pages, and every page with >= 3 missing words. A word counts as present when it
+occurs anywhere on the page, so a dropped line whose words recur on the page does not
+show; words that layer 1 runs together (no space glyph in the PDF) and non-horizontal text
+do. Exit code 1 when a record file or PDF is missing or a PDF changed since its records.

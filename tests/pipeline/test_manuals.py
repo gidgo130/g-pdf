@@ -687,3 +687,64 @@ def test_cli_dry_run_and_run_write_only_to_out(tmp_path, capsys):
     recs = [json.loads(l) for l in (out / "synth.pages.jsonl").read_text("utf-8").splitlines()]
     assert [r["pdf"] for r in recs[1:]] == [2, 3]
     assert cli.main(["manual-pages", "--config", str(cfg), "--out", str(out), "--only", "nope"]) == 1
+
+
+# ---------------------------------------------------------------------------- coverage
+def test_missing_words_are_the_pdf_words_the_record_lacks():
+    doc = pymupdf.open()
+    page = doc.new_page(width=W, height=H)
+    _lines(page, 48, 100, ["A DANGER is only used when your action may cause",
+                           "serious injury. Keep the con-",
+                           "trols clean; see the Spindle Lock and -- 12 3/4 in."])
+    page.insert_text((48, 300), "Cap Screw", fontname="helv", fontsize=9)
+    page.insert_text((48, 760), "Running Foot", fontname="helv", fontsize=9)
+    rec = {"pdf": 1, "label": None, "stripped": ["Running Foot"],
+           "blocks": [{"kind": "para", "text": "serious injury. Keep the controls clean;",
+                       "lines": ["serious injury. Keep the con-", "trols clean;"]},
+                      {"kind": "table", "cells": [["see the", "Spindle"], ["Lock and", None]]},
+                      {"kind": "figure", "file": "figures/x_pdf001_f1.png", "caption": None,
+                       "labels": ["Cap Screw"]}],
+           "warnings": []}
+    # the first line is lost; words of 1-2 letters, numbers under 3 digits and punctuation
+    # are not checked; "con-" / "trols" is found as "controls"
+    assert manuals.missing_words(page, rec) == ["DANGER", "only", "used", "when", "your",
+                                                "action", "may", "cause"]
+    rec["blocks"][0]["text"] = "A DANGER is only used when your action may cause " \
+                               + rec["blocks"][0]["text"]
+    assert manuals.missing_words(page, rec) == []
+    doc.close()
+
+
+def test_cli_coverage_report_lists_pages_with_missing_words(tmp_path, capsys):
+    src = tmp_path / "src"
+    src.mkdir()
+    doc = pymupdf.open()
+    _two_column_page(doc)
+    doc.save(str(src / "synth.pdf"))
+    doc.close()
+    config = {"source": str(src),
+              "manuals": [{"slug": "synth", "file": "synth.pdf", "maker": "Acme", "model": "X",
+                           "doctype": "Manual", "doc_no": "1", "rev": "A", "date": "2020",
+                           "control": None, "machines": ["lathe"], "pages": None, "notes": ""}]}
+    cfg = tmp_path / "manuals.json"
+    cfg.write_text(json.dumps(config), "utf-8")
+    out = tmp_path / "pages"
+    assert cli.main(["manual-pages", "--config", str(cfg), "--out", str(out), "--dpi", "72"]) == 0
+    report = tmp_path / "coverage.md"
+    assert cli.main(["manual-pages", "--config", str(cfg), "--out", str(out),
+                     "--coverage", str(report)]) == 0
+    md = report.read_text("utf-8")
+    assert "| synth | 1 | 0 | 0 |" in md
+    # drop the right column's last paragraph from the record: its words are reported in order
+    path = out / "synth.pages.jsonl"
+    recs = [json.loads(l) for l in path.read_text("utf-8").splitlines()]
+    recs[1]["blocks"] = [b for b in recs[1]["blocks"] if not b.get("text", "").startswith("Jaws")]
+    path.write_text("\n".join(json.dumps(r) for r in recs) + "\n", "utf-8")
+    capsys.readouterr()
+    assert cli.main(["manual-pages", "--config", str(cfg), "--out", str(out),
+                     "--coverage", str(report)]) == 0
+    md = report.read_text("utf-8")
+    assert "| synth | 1 | 1 | " in md
+    assert "### pdf 1 · no label" in md
+    assert "Jaws are numbered They are designed installed numerical order guides." in md
+    assert "synth" in capsys.readouterr().out
