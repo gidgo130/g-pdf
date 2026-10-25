@@ -329,6 +329,36 @@ def test_manifest_ignores_the_findings_files(ex):
     assert res.warnings == []
 
 
+def test_the_manifest_split_into_batch_files_is_read_together(ex, setup):
+    """00_MANIFEST.md is an index naming the batch manifests; every extract is listed in
+    exactly one 00_MANIFEST*.md. The batch manifests are exempt from the name rule, not from
+    the size rule."""
+    other = "ACME_MILL_OPERATOR_AM-1_RevB_tooling.md"
+    for f in (NAME, other):
+        (ex / f).write_text("x", "utf-8")
+    (ex / "00_MANIFEST.md").write_text("- 00_MANIFEST_B1-acme.md: 1 file\n"
+                                       "- 00_MANIFEST_B2-acme.md: 1 file\n", "utf-8")
+    (ex / "00_MANIFEST_B1-acme.md").write_text(f"| {NAME} |\n", "utf-8")
+    (ex / "00_MANIFEST_B2-acme.md").write_text(f"| {other} |\n", "utf-8")
+
+    def warnings():
+        res = manual_check.FileResult("00_MANIFEST.md")
+        manual_check.check_manifest(ex, res)
+        return [w["message"] for w in res.warnings]
+
+    assert warnings() == []
+    (ex / "00_MANIFEST_B2-acme.md").write_text(f"| {other} |\n| {NAME} |\n", "utf-8")
+    assert warnings() == [f"{NAME} is listed in more than one manifest: "
+                          "00_MANIFEST_B1-acme.md, 00_MANIFEST_B2-acme.md"]
+    (ex / "00_MANIFEST_B2-acme.md").write_text("| GONE_X_Y_Z_RevA_gone.md |\n", "utf-8")
+    assert warnings() == [f"{other} is not listed in the manifest",
+                          "GONE_X_Y_Z_RevA_gone.md is listed but not in the folder"]
+    res = _check(ex, setup, "00_MANIFEST_B1-acme.md", f"| {NAME} |\n")
+    assert res.errors == [] and res.warnings == []
+    res = _check(ex, setup, "00_MANIFEST_B1-acme.md", "x" * (manual_check.FAIL_SIZE + 1))
+    assert [e["rule"] for e in res.errors] == ["size"]
+
+
 def test_cli_reports_and_exits_1_on_a_failing_file(ex, setup, tmp_path, capsys):
     root, cfg, pages = setup
     (ex / NAME).write_text(_good(), "utf-8")

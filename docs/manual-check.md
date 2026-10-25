@@ -31,8 +31,8 @@ The rules below are also the writing rules for the extracts.
   there is none);
 - topic: lower case, words joined by `-` (`offsets`, `power-up-and-homing`).
 
-Example: `HAAS_MILL_OPERATOR_96-8000_RevN_offsets.md`. `00_MANIFEST.md` and the findings
-files (`01_FINDINGS*.md`) are exempt.
+Example: `HAAS_MILL_OPERATOR_96-8000_RevN_offsets.md`. The manifest files (`00_MANIFEST*.md`)
+and the findings files (`01_FINDINGS*.md`) are exempt.
 
 ## 2. Header block
 
@@ -176,9 +176,12 @@ A warning above 45,000 characters, an error above 60,000 (about 15-20 printed pa
 
 ## 10. Manifest
 
-`00_MANIFEST.md` must list every extract file in the folder (by file name anywhere in its
-text) and no file that is not there; both are warnings. No manifest in the folder is a
-warning on a whole-folder run.
+Every `00_MANIFEST*.md` is a manifest file: `00_MANIFEST.md` is a short index, one line per
+batch manifest, and each batch writes its own `00_MANIFEST_B<n>-<slug>.md`
+(`00_MANIFEST_B2-bridgeport.md`). They are read together: every extract file in the folder
+must be listed (by file name anywhere in the text) in exactly one of them, and no file that is
+not there may be listed; all three are warnings. The size rule applies to each manifest file;
+no other rule does. No `00_MANIFEST.md` in the folder is a warning on a whole-folder run.
 
 ## `01_FINDINGS.md` and `01_FINDINGS_B<n>-<slug>.md`
 

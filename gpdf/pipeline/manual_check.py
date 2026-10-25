@@ -24,7 +24,7 @@ import pymupdf
 
 from gpdf import __version__
 
-MANIFEST = "00_MANIFEST.md"
+MANIFEST = "00_MANIFEST.md"   # the index; 00_MANIFEST_B<n>-<slug>.md hold the batches
 FINDINGS = "01_FINDINGS.md"   # the index; 01_FINDINGS_B<n>-<slug>.md hold the batches
 HEADER_KEYS = ("Title", "Manufacturer", "Document number / revision / date",
                "Control generation (Haas)", "Models and years covered", "Source PDF filename",
@@ -62,6 +62,11 @@ _TRANS = str.maketrans({**{c: "'" for c in "‘’‚‛′"}, **{c: '"' for c i
 
 class CheckError(Exception):
     pass
+
+
+def is_manifest(name: str) -> bool:
+    """00_MANIFEST.md and the per-batch 00_MANIFEST_B<n>-<slug>.md files."""
+    return name.startswith("00_MANIFEST") and name.endswith(".md")
 
 
 def is_findings(name: str) -> bool:
@@ -437,7 +442,7 @@ class Checker:
             res.err(None, "size", f"{len(text)} characters (more than {FAIL_SIZE})")
         elif len(text) > WARN_SIZE:
             res.warn(None, "size", f"{len(text)} characters (more than {WARN_SIZE})")
-        if name == MANIFEST:
+        if is_manifest(name):
             return res
         lines = text.splitlines()
         own = None
@@ -690,13 +695,22 @@ def row_in_table(ext: list[str], cells: list[list]) -> bool:
 
 
 def check_manifest(extracts: Path, res: FileResult):
-    text = (extracts / MANIFEST).read_text("utf-8")
-    listed = {f for f in re.findall(r"[A-Za-z0-9][A-Za-z0-9._-]*\.md", text)
-              if f != MANIFEST and not is_findings(f)}
-    present = {p.name for p in extracts.glob("*.md") if p.name != MANIFEST and not is_findings(p.name)}
-    for f in sorted(present - listed):
-        res.warn(None, "manifest", f"{f} is not listed in the manifest")
-    for f in sorted(listed - present):
+    """Every 00_MANIFEST*.md read together: each extract listed in exactly one of them."""
+    where: dict[str, list[str]] = {}
+    for m in sorted(p for p in extracts.glob("*.md") if is_manifest(p.name)):
+        text = m.read_text("utf-8")
+        for f in sorted({f for f in re.findall(r"[A-Za-z0-9][A-Za-z0-9._-]*\.md", text)
+                         if not is_manifest(f) and not is_findings(f)}):
+            where.setdefault(f, []).append(m.name)
+    present = {p.name for p in extracts.glob("*.md")
+               if not is_manifest(p.name) and not is_findings(p.name)}
+    for f in sorted(present):
+        if f not in where:
+            res.warn(None, "manifest", f"{f} is not listed in the manifest")
+        elif len(where[f]) > 1:
+            res.warn(None, "manifest", f"{f} is listed in more than one manifest: "
+                                       + ", ".join(where[f]))
+    for f in sorted(set(where) - present):
         res.warn(None, "manifest", f"{f} is listed but not in the folder")
 
 
