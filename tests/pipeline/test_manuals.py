@@ -280,6 +280,23 @@ def test_pdf_page_labels_with_indesign_hex_prefix(tmp_path, out):
     assert {r["label_source"] for r in recs} == {"pdf_label"}
 
 
+def test_pdf_labels_that_are_only_the_page_numbers_yield_to_a_printed_run(tmp_path, out):
+    """Hypertherm 806690 is the English section of a larger book: its PDF labels are 1, 2, 3 ...
+    but the pages print 5-16 from pdf 3 on. The printed run wins, the cover has no label, and
+    the printed number is not left in the body."""
+    doc = pymupdf.open()
+    for i in range(6):
+        page = doc.new_page(width=W, height=H)
+        _lines(page, 72, 100, [f"Body text of page {i + 1}."])
+        if i >= 1:
+            page.insert_text((560, 750), str(i + 6), fontname="helv", fontsize=9)
+    doc.set_page_labels([{"startpage": 0, "prefix": "", "style": "D", "firstpagenum": 1}])
+    _, recs = _process(doc, tmp_path, out, dpi=72)
+    assert [r["label"] for r in recs] == [None, "7", "8", "9", "10", "11"]
+    assert [r["label_source"] for r in recs] == ["none"] + ["text"] * 5
+    assert not any(b.get("text") == "8" for b in recs[2]["blocks"])
+
+
 def test_label_candidates_letter_spaced_digits():
     assert manuals.label_candidates("8 0") == [("a", 80, None)]
     assert manuals.label_candidates("-28-") == [("a", 28, None)]

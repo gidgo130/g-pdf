@@ -499,6 +499,11 @@ def assign_labels(page_count: int, cands: dict[int, list[tuple]],
                 cur = accepted.get(i)
                 if cur is None or len(st) > cur[0] or (len(st) == cur[0] and src == "text"):
                     accepted[i] = (len(st), _format_label(style, i + off, chapter), src)
+    # PDF labels that are only the page numbers (1, 2, 3 ...) say nothing: a printed run that
+    # disagrees wins (Hypertherm 806690, a section cut from a larger book, prints 5-16)
+    if pdf_labels and all(decode_label(v) == str(i + 1) for i, v in pdf_labels.items()) \
+            and any(lab != str(i + 1) for i, (_, lab, _) in accepted.items()):
+        pdf_labels = {}
     out = {}
     for i in range(page_count):
         lab = decode_label(pdf_labels.get(i))
