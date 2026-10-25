@@ -56,7 +56,8 @@ EMPH_RE = re.compile(r"\*\*[^*\s][^*]*\*\*|(?<![A-Za-z0-9])_[^_\s|][^_|]*_"
 GLUE_RE = re.compile(r"([A-Za-z]*[a-z])([A-Z]{2,}[A-Za-z]*)")   # "inSETUP"
 _TRANS = str.maketrans({**{c: "'" for c in "‘’‚‛′"}, **{c: '"' for c in "“”„‟″"},
                         **{c: "-" for c in "‐‑‒–—―−⁃"}, "⁄": "/", "­": None, " ": " ",
-                        **{c: None for c in "\u200b\u200c\u200d\u2060\ufeff"}})   # zero-width
+                        **{c: None for c in "\u200b\u200c\u200d\u2060\ufeff"},    # zero-width
+                        **{chr(c): " " for c in range(32)}})   # C0: an unmapped glyph, a word break
 
 
 class CheckError(Exception):

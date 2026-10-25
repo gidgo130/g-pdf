@@ -400,3 +400,11 @@ def test_a_dotted_class_or_section_number_is_not_a_number():
     such number); plain decimals and a sentence-ending number still count."""
     assert manual_check.NUM_RE.findall("Class 1.2.2, section 7.1.2, 0.5 s at 85 psi.") == \
         ["0.5", "85"]
+
+
+def test_c0_control_characters_are_word_breaks():
+    """Miller p. 22-23 (the weld chart) sets its spaces as an unmapped glyph that the PDF
+    text gives as U+0002 ("Select<U+0002>Voltage"); the page shows "Select Voltage"."""
+    assert manual_check.norm("Select\x02Voltage\x02and\x02Wire") == "Select Voltage and Wire"
+    assert manual_check.norm('0.023"\x02(0.6mm)') == '0.023" (0.6mm)'
+    assert manual_check.norm("Aluminum\x03\x04with") == "Aluminum with"
