@@ -376,3 +376,20 @@ def test_zero_width_characters_are_dropped_like_soft_hyphens():
     so a quote written as printed matches."""
     for zw in ("​", "‌", "‍", "⁠", "﻿"):
         assert manual_check.norm(f"automatic/{zw}manual pressure") == "automatic/manual pressure"
+
+
+def test_a_cell_merged_across_rows_and_columns_repeats_in_every_row():
+    """Hypertherm cut charts print "Edge Start" once across the pierce height, % and delay
+    columns of the last rows: each covered cell takes the value of the span's top-left cell,
+    which is neither straight above nor straight left of most of them."""
+    cells = [["Thick", "Dist", "Pierce", None, "Delay"],
+             ["20", "1.5", "6.0", "400", "1.5"],
+             ["25", None, "Edge Start", None, None],
+             ["30", None, None, None, None]]
+    es = "Edge Start"
+    assert manual_check.row_in_table(["30", "1.5", es, es, es], cells)
+    assert manual_check.row_in_table(["25", "1.5", es, es, es], cells)
+    assert manual_check.row_in_table(["30", "", "", "", ""], cells)
+    # a value from outside the span's rectangle still fails
+    assert not manual_check.row_in_table(["30", "1.5", "6.0", es, es], cells)
+    assert not manual_check.row_in_table(["30", "1.5", es, es, "6.0"], cells)

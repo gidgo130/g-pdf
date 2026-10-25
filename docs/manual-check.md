@@ -129,7 +129,9 @@ still be on the cited page. Every body row is then checked:
   column: a non-empty layer-1 cell must equal the extract cell; an empty one (`""`) must be
   empty in the extract; a merged cell (`null`) accepts an empty extract cell, or the text of
   the cell it continues: the nearest cell above it in its column, or to its left in its row,
-  that is not merged (when that cell is not empty).
+  that is not merged, or the top-left cell of a span across rows and columns (a non-merged
+  cell above and to the left whose rectangle down to this cell is merged apart from it), when
+  that cell is not empty.
 - The extract keeps the source table's columns in order. A column may be left out only
   where it is empty (or merged) in that row; a row with more cells than the source table
   fails.

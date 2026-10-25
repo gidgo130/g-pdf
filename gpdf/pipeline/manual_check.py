@@ -627,14 +627,29 @@ def _cell_eq(a: str, b: str) -> bool:
     return a == b or dehyphen(a) == dehyphen(b)
 
 
-def _origin(cells: list[list], r: int, j: int, dr: int, dc: int) -> str | None:
-    """The cell a merged (null) cell continues: the nearest cell above (dr) or to the left
-    (dc) that is not null; its text when it is not empty."""
-    while 0 <= r < len(cells) and 0 <= j < len(cells[r]) and cells[r][j] is None:
-        r, j = r - dr, j - dc
-    if 0 <= r < len(cells) and 0 <= j < len(cells[r]) and cells[r][j]:
-        return norm(cells[r][j])
-    return None
+def _origins(cells: list[list], r: int, j: int) -> set[str]:
+    """The texts a merged (null) cell may continue: every non-empty cell above and to the left
+    of it whose rectangle down to the merged cell is null apart from that cell (a span down a
+    column, along a row, or across both, as "Edge Start" in a cut chart)."""
+    def null(i, k):
+        return k < len(cells[i]) and cells[i][k] is None
+
+    def add(i, k):
+        if k < len(cells[i]) and cells[i][k]:
+            out.add(norm(cells[i][k]))
+
+    out = set()
+    for c0 in range(j, -1, -1):
+        if c0 < j and not null(r, c0):
+            add(r, c0)               # the span starts in this row: nothing further left
+            break
+        for r0 in range(r - 1, -1, -1):
+            if not all(null(r0, k) for k in range(c0 + 1, j + 1)):
+                break
+            if not null(r0, c0):
+                add(r0, c0)
+                break
+    return out
 
 
 def row_matches(ext: list[str], cells: list[list], r: int, cols: tuple) -> bool:
@@ -646,8 +661,7 @@ def row_matches(ext: list[str], cells: list[list], r: int, cols: tuple) -> bool:
     for e, j in zip(ext, cols):
         c = row[j]
         if c is None:
-            if e and not any(o is not None and _cell_eq(e, o)
-                             for o in (_origin(cells, r, j, 1, 0), _origin(cells, r, j, 0, 1))):
+            if e and not any(_cell_eq(e, o) for o in _origins(cells, r, j)):
                 return False
         elif not _cell_eq(e, norm(c)):
             return False
