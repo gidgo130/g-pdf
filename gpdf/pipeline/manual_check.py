@@ -47,7 +47,7 @@ ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d{1,3}[.)])\s+(.*)$")
 SEP_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$")
 LEVEL_RE = re.compile(r"^(?:WARNING|CAUTION|DANGER|NOTICE|NOTE|IMPORTANT)\s*[!:]?\s*")
 CURLY_RE = re.compile(r"“([^”]+)”")
-NUM_RE = re.compile(r"(?<![\w.])(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:/\d+)?")
+NUM_RE = re.compile(r"(?<![\w.])(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:/\d+(?:\.\d+)?)?")
 ELLIPSIS = "…"
 # **bold**, _italic_ (PyMuPDF's table Markdown, "Shows_EDIT:MDI_ in"); a lone "**" is a
 # footnote mark ("CE**"), underscores inside a name are not markup ("PROBE_SELECT_TO_PROBE")

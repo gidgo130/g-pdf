@@ -150,7 +150,7 @@ shows it; the checker accepts that, and the empty cell too.
 
 ## 7. Numbers in summaries
 
-Every number in a summary (`6,000`, `0.0005`, `.0005`, `3/4`, `1.5`, `20`) must be on a
+Every number in a summary (`6,000`, `0.0005`, `.0005`, `3/4`, `20.5/19.5`, `1.5`, `20`) must be on a
 cited page as a number of its own (not as part of a longer one: `20` is not found in `200`
 or `2.05`). Thousands separators are ignored (`6,000` = `6000`), and a leading zero may be
 written or left out (`0.0005` = `.0005`). Digits glued to letters (`G54`, `CAT40`) are not

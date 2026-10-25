@@ -359,3 +359,13 @@ def test_a_number_broken_after_a_hyphen_at_a_line_end_is_closed_up():
     assert manual_check.norm("(Figure 7- 6).") == manual_check.norm("(Figure 7-6).") == "(Figure 7-6)."
     assert manual_check.norm("CON- TACT") == "CONTACT"
     assert manual_check.norm("10 - 20 psi") == "10 - 20 psi"
+
+
+def test_a_slash_pair_of_decimals_in_a_summary_is_one_number():
+    """Hypertherm p. 1-8 prints currents as "20.5/19.5 A": the summary's number is the whole
+    pair, found on the page; a pair the page does not print still fails."""
+    assert manual_check.NUM_RE.findall("50/60 Hz 20.5/19.5 A, 1/4 in, .5") == \
+        ["50/60", "20.5/19.5", "1/4", ".5"]
+    hay = {"numbers": manual_check._num_text("380/400 V, 3 PH, 50/60 Hz 20.5/19.5 A")}
+    assert manual_check.number_found("20.5/19.5", hay)
+    assert not manual_check.number_found("20.5/19", hay)
