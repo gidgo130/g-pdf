@@ -369,3 +369,10 @@ def test_a_slash_pair_of_decimals_in_a_summary_is_one_number():
     hay = {"numbers": manual_check._num_text("380/400 V, 3 PH, 50/60 Hz 20.5/19.5 A")}
     assert manual_check.number_found("20.5/19.5", hay)
     assert not manual_check.number_found("20.5/19", hay)
+
+
+def test_zero_width_characters_are_dropped_like_soft_hyphens():
+    """Hypertherm p. 4-2 sets "automatic/<U+200C>manual": the page shows "automatic/manual",
+    so a quote written as printed matches."""
+    for zw in ("​", "‌", "‍", "⁠", "﻿"):
+        assert manual_check.norm(f"automatic/{zw}manual pressure") == "automatic/manual pressure"

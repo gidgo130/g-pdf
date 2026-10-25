@@ -108,7 +108,7 @@ A sentence that reads oddly because layer 1 dropped a key icon gets the writer's
 ## 5. Matching
 
 Both sides are normalised: NFKC, curly quotes and apostrophes to straight, every dash to
-`-`, soft hyphens removed, Markdown escapes, emphasis and `<br>` removed, whitespace
+`-`, soft hyphens and zero-width characters removed, Markdown escapes, emphasis and `<br>` removed, whitespace
 collapsed, a line-end split such as `CON- TACT` joined, a number split after its hyphen
 (`Figure 7-` / `6`) closed up to `7-6`; case-sensitive. A hyphen between
 two letters is also tried without it on both sides, so a word the page breaks at a line end
