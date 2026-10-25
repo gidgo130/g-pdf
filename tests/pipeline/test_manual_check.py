@@ -393,3 +393,10 @@ def test_a_cell_merged_across_rows_and_columns_repeats_in_every_row():
     # a value from outside the span's rectangle still fails
     assert not manual_check.row_in_table(["30", "1.5", "6.0", es, es], cells)
     assert not manual_check.row_in_table(["30", "1.5", es, es, "6.0"], cells)
+
+
+def test_a_dotted_class_or_section_number_is_not_a_number():
+    """Hypertherm p. 1-8 "ISO 8573-1 Class 1.2.2": no "1.2" is taken from it (the page has no
+    such number); plain decimals and a sentence-ending number still count."""
+    assert manual_check.NUM_RE.findall("Class 1.2.2, section 7.1.2, 0.5 s at 85 psi.") == \
+        ["0.5", "85"]
