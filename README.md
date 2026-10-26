@@ -395,6 +395,19 @@ review, plus any `.bak.json`.
 To restore, copy the files from the dated folder back to the same relative
 paths under `private\book-prep`.
 
+## Machine shop manuals workflow
+
+A separate workflow from the book pipeline, for the equipment manuals of a machine
+shop. `manual-pages` writes every page of each manual as text with its PDF page and
+printed label; extracts (Markdown files, written by hand or by an agent) quote those
+pages with a page tag on every block, plus one manifest and one findings file per
+batch; `manual-check` proves each quote, number and table row against the pages.
+The page records, `manuals.json` and the check reports live in
+`private\machine-shop\` (`pages`, `check`), never committed; the extracts go to a
+folder of your choice, which `manual-check` only reads. Details:
+[docs/manual-pages.md](docs/manual-pages.md) and
+[docs/manual-check.md](docs/manual-check.md).
+
 ## Machine shop manuals (manual-pages)
 
 `manual-pages` is for a different corpus: born-digital equipment manuals (Haas,
