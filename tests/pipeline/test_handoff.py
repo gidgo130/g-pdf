@@ -328,3 +328,79 @@ def test_the_format_docs_synthetic_example_validates():
     block = re.search(r"## Example \(synthetic\).*?```json\n(.*?)```", doc, re.S).group(1)
     rows = [json.loads(s) for s in block.splitlines() if s.strip()]
     assert len(rows) > 5 and ho.validate(rows) == []
+
+
+def with_catalogue(made, tmp_path):
+    """A catalogue folder surveyed from src/, whose entry records libro.pdf as the working
+    file (the size lets a moved file be found by its hash)."""
+    text, out, to, pdf_sha = made
+    pdf = tmp_path / "src" / "libro.pdf"
+    cat = tmp_path / "catalogue"
+    cat.mkdir()
+    (cat / "catalogue.json").write_text(json.dumps({
+        "schema": 1, "roots": [{"path": str(tmp_path / "src")}], "files": {"e" * 64: {
+            "id": "e" * 64, "path": str(tmp_path / "src" / "orig.pdf"), "size": 1,
+            "working_file": {"path": str(pdf), "sha256": pdf_sha,
+                             "size": pdf.stat().st_size}}}}), "utf-8")
+    return pdf, ["handoff", "--structure", str(out), "--to", str(to), "--catalogue", str(cat)]
+
+
+def test_a_renamed_working_file_is_found_by_its_hash(made, tmp_path, monkeypatch, capsys):
+    text, out, to, pdf_sha = made
+    pdf, argv = with_catalogue(made, tmp_path)
+    new = tmp_path / "src" / "otra carpeta" / "Libro renombrado.pdf"
+    new.parent.mkdir()
+    os.replace(pdf, new)
+    (tmp_path / "src" / "otro.pdf").write_bytes(b"%PDF-1.7 not the same size\n")
+    before = snapshot(tmp_path / "src")
+    hashed = []
+    real = ho.catalogue.sha256
+    monkeypatch.setattr(ho.catalogue, "sha256", lambda p: hashed.append(p) or real(p))
+    assert cli.main(argv) == 0
+    stdout = capsys.readouterr().out
+    assert snapshot(tmp_path / "src") == before
+    assert hashed == [new]                         # only the file of the right size
+    assert f"moved: {pdf} -> {new}" in stdout
+    path = to / f"{pdf_sha}{ho.SUFFIX}"
+    assert f"Libro renombrado.pdf -> {path.name} (written)" in stdout
+    f = lines(path)[0]
+    assert (f["sha256"], f["source_sha256"], f["file_name"], f["pages"]) == (
+        pdf_sha, "e" * 64, "Libro renombrado.pdf", 22)
+    idx = json.loads((to / ho.INDEX).read_text("utf-8"))
+    assert idx["files"][pdf_sha]["file_name"] == "Libro renombrado.pdf"
+    assert idx["skipped"] == []
+    assert json.loads((text / "export.json").read_text("utf-8"))["entries"]["e" * 64][
+        "input"] == str(pdf)                       # the record is not rewritten
+
+
+def test_a_deleted_working_file_is_skipped(made, tmp_path, capsys):
+    pdf, argv = with_catalogue(made, tmp_path)
+    pdf.unlink()
+    assert cli.main(argv) == 2
+    assert f"skipped libro: the working file {pdf} is missing" in capsys.readouterr().out
+
+
+def test_an_edited_file_at_the_recorded_path_is_changed_not_moved(made, tmp_path, capsys):
+    pdf, argv = with_catalogue(made, tmp_path)
+    data = pdf.read_bytes()
+    (tmp_path / "src" / "copia.pdf").write_bytes(data)
+    pdf.write_bytes(data[:-1] + b" ")              # same size, other bytes
+    assert cli.main(argv) == 2
+    stdout = capsys.readouterr().out
+    assert "skipped libro: the working file changed since the export" in stdout
+    assert "moved:" not in stdout
+
+
+def test_identical_copies_use_the_first_by_sorted_path(made, tmp_path, capsys):
+    text, out, to, pdf_sha = made
+    pdf, argv = with_catalogue(made, tmp_path)
+    b, a = tmp_path / "src" / "b.pdf", tmp_path / "src" / "A.pdf"
+    os.replace(pdf, b)
+    a.write_bytes(b.read_bytes())
+    before = snapshot(tmp_path / "src")
+    assert cli.main(argv) == 0
+    stdout = capsys.readouterr().out
+    assert snapshot(tmp_path / "src") == before
+    assert f"moved: {pdf} -> {a}" in stdout
+    assert f"same bytes also at: {b}" in stdout
+    assert lines(to / f"{pdf_sha}{ho.SUFFIX}")[0]["file_name"] == "A.pdf"

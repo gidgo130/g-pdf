@@ -18,9 +18,11 @@ old bytes is shown as "needs re-confirm", never applied silently to changed cont
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -59,6 +61,52 @@ def under(path, folder) -> bool:
     """``path`` is ``folder`` or inside it (case-insensitively on Windows)."""
     p, f = os.path.normcase(norm(path)), os.path.normcase(norm(folder))
     return p == f or p.startswith(f.rstrip(os.sep) + os.sep)
+
+
+# ---------------------------------------------------------------------------- moved files
+def sha256(path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+@dataclass
+class Located:
+    path: Path | None                 # the file to use; None when "changed" or "missing"
+    status: str                       # "found", "moved", "changed" or "missing"
+    copies: list[Path] = field(default_factory=list)   # the same bytes elsewhere (moved)
+
+
+def locate_working_file(recorded, want, folders, size=None) -> Located:
+    """The file whose sha256 is ``want``: at its ``recorded`` path when it is there with
+    those bytes ("found"); other bytes there are "changed" (not searched for). If nothing
+    is at that path, the files under ``folders`` (recursively) of ``size`` bytes are
+    hashed: the first match by sorted path is used ("moved"), the others are listed. No
+    ``size``: no search. Only reads; nothing is renamed, moved or recorded."""
+    recorded = Path(recorded)
+    if recorded.is_file():
+        same = sha256(recorded) == want
+        return Located(recorded if same else None, "found" if same else "changed")
+    hits, seen = [], set()
+    for folder in folders if size is not None else ():
+        for dirpath, _dirs, names in os.walk(folder):
+            for name in names:
+                p = Path(dirpath, name)
+                key = os.path.normcase(norm(p))
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    if p.stat().st_size == size and sha256(p) == want:
+                        hits.append(p)
+                except OSError:
+                    continue
+    if not hits:
+        return Located(None, "missing")
+    hits.sort(key=lambda p: (str(p).lower(), str(p)))
+    return Located(hits[0], "moved", hits[1:])
 
 
 # ---------------------------------------------------------------------------- JSON

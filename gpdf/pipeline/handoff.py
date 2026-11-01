@@ -13,7 +13,9 @@ started from, before split, OCR or rebuild). Inputs are
 only read: the structure folder (structure.json, <stem>.sections.json), the export folder
 (export.json, <stem>.jsonl, .pages.jsonl, .apparatus.jsonl), the working files (hashed
 again) and the catalogue's decisions (for exclusions). An entry whose export changed
-since structure ran, or whose working file changed since the export, is skipped. Files
+since structure ran, or whose working file changed since the export, is skipped; a
+working file gone from its recorded path is looked for by its hash under the catalogue's
+roots and its old folder (renamed or moved: used, reported, never touched). Files
 are written atomically and only when their content (all but "made") changes; nothing in OUTDIR is ever deleted: .gpdf.jsonl files whose hash
 is no longer current are listed for the owner to remove. No chunking: the app does that.
 """
@@ -57,6 +59,8 @@ class Written:
     metadata_confirmed: bool
     structure_confirmed: bool
     why_unconfirmed: str
+    moved: tuple | None = None      # (recorded path, path found), when found elsewhere
+    copies: list = field(default_factory=list)   # other files with the same bytes
 
 
 @dataclass
@@ -282,6 +286,11 @@ def run(structure, to, text=None, cat=None) -> Result:
     text, _log, export, cat = plan(structure, to, text, cat)
     res = Result(out=to, catalogue=cat)
     excluded = _excluded(cat)
+    try:
+        known = catalogue.load(cat) if cat else catalogue.empty()
+    except catalogue.CatalogueError as e:
+        raise HandoffError(str(e)) from None
+    roots = [r["path"] for r in known["roots"]]
     items = sorted(export.get("entries", {}).items(),
                    key=lambda kv: kv[1].get("stem", "").lower())
     sources: dict[str, list[str]] = {}
@@ -303,7 +312,8 @@ def run(structure, to, text=None, cat=None) -> Result:
         want = rec.get("input_sha256", "")
         current.add(want)
         try:
-            res.written.append(_one(structure, text, to, stem, rec, source_sha256(id_, rec)))
+            res.written.append(_one(structure, text, to, stem, rec, source_sha256(id_, rec),
+                                    roots, _size(known["files"].get(id_), id_, want)))
         except HandoffError as e:
             res.skipped.append((stem, str(e)))
     for p in sorted(to.glob(f"*{SUFFIX}")):
@@ -313,7 +323,17 @@ def run(structure, to, text=None, cat=None) -> Result:
     return res
 
 
-def _one(structure: Path, text: Path, to: Path, stem: str, rec: dict, source: str) -> Written:
+def _size(entry: dict | None, id_: str, want: str) -> int | None:
+    """The size the catalogue recorded for the file whose sha256 is ``want``: the entry's
+    source or its working file (None: unknown, so a moved file is not searched for)."""
+    wf = (entry or {}).get("working_file") or {}
+    if entry and id_ == want:
+        return entry.get("size")
+    return wf.get("size") if wf.get("sha256") == want else None
+
+
+def _one(structure: Path, text: Path, to: Path, stem: str, rec: dict, source: str,
+         roots=(), size=None) -> Written:
     sec_path = structure / f"{stem}.sections.json"
     if not sec_path.is_file():
         raise HandoffError(f"no {sec_path.name}: run gpdf-cli structure")
@@ -329,14 +349,17 @@ def _one(structure: Path, text: Path, to: Path, stem: str, rec: dict, source: st
         raise HandoffError("the sections file is for another version of the working file: run "
                            "gpdf-cli structure again")
     src = Path(str(rec.get("input", "")))
-    if not src.is_file():
+    found = catalogue.locate_working_file(src, want, [*roots, src.parent] if src.name else
+                                          roots, size)
+    if found.status == "missing":
         raise HandoffError(f"the working file {src} is missing")
-    if sha256(src) != want:
+    if found.status == "changed":
         raise HandoffError(f"the working file changed since the export ({src}): export it "
                            "again, then run structure")
     units = _jsonl(units_path)
     app = [] if sections["kind"] == "txt" else _apparatus_pages(text, stem, units)
     rows = lines_for(sections, units, app, source)
+    rows[0]["file_name"] = found.path.name
     problems = validate(rows)
     if problems:
         raise HandoffError("the lines do not validate: " + "; ".join(problems[:5]))
@@ -357,7 +380,9 @@ def _one(structure: Path, text: Path, to: Path, stem: str, rec: dict, source: st
                            "kinds": kinds, "chars": sum(len(p["text"]) for p in paras),
                            "pages": rows[0]["pages"]},
                    metadata_confirmed=rows[0]["metadata_confirmed"], structure_confirmed=ok,
-                   why_unconfirmed=why)
+                   why_unconfirmed=why,
+                   moved=(str(src), str(found.path)) if found.status == "moved" else None,
+                   copies=[str(c) for c in found.copies])
 
 
 def _dump(rows: list[dict]) -> str:
@@ -403,6 +428,10 @@ def report(res: Result) -> str:
                    f"{w.counts['sections']} sections; metadata "
                    f"{'confirmed' if w.metadata_confirmed else 'not confirmed'}; structure "
                    f"{struct}")
+        if w.moved:
+            out.append(f"  moved: {w.moved[0]} -> {w.moved[1]}")
+        if w.copies:
+            out.append("  same bytes also at: " + ", ".join(w.copies))
     for stem, why in res.skipped:
         out.append(f"skipped {stem}: {why}")
     if res.excluded:
