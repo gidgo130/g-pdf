@@ -78,7 +78,7 @@ document order, then one `para` line per unit of text in reading order.
 | `schema` | `"gpdf-handoff/1.1"` | format version `<major>.<minor>`; a reader accepts any version with the major it knows (`gpdf-handoff/1`, `1.1`, …) and refuses another major. `gpdf-handoff/1` (no minor) is version 1.0 |
 | `sha256` | string | hash of the working file (also the file name) |
 | `source_sha256` | string | hash of the file g-pdf started from (the original before splitting, OCR or rebuild); equals `sha256` when the original was used as is. New in 1.1; absent in 1.0 files, where it equals `sha256` |
-| `file_name` | string | the working file's name |
+| `file_name` | string | the working file's name: the name of the working file as g-pdf last found it; files are matched by hash, so this may change if the owner renames the file |
 | `pages` | int or null | PDF page count; null for a `.txt` |
 | `title`, `author`, `year`, `publisher` | string or null | the book's metadata (`author` may be an editor) |
 | `metadata_confirmed` | bool | the owner checked and confirmed the four fields above |
