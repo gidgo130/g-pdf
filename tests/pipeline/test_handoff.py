@@ -61,7 +61,8 @@ def test_handoff_file_is_named_by_the_working_file_and_its_lines_validate(made, 
     assert ho.validate(rows) == []
     f = rows[0]
     assert (f["type"], f["schema"], f["sha256"], f["file_name"], f["pages"]) == (
-        "file", "gpdf-handoff/1", pdf_sha, "libro.pdf", 22)
+        "file", "gpdf-handoff/1.1", pdf_sha, "libro.pdf", 22)
+    assert f["source_sha256"] == "e" * 64          # the catalogue id: the source's sha256
     assert f["title"] == "Las vanguardias en la isla" and f["metadata_confirmed"] is False
     assert f["structure_confirmed"] is False and f["lang"] == "es"
     assert f["apparatus_pages"] == [2, 19, 20] and f["made_with"].startswith("g-pdf ")
@@ -83,7 +84,8 @@ def test_handoff_file_is_named_by_the_working_file_and_its_lines_validate(made, 
     assert by[paras[25]["section"]]["level"] == 3
     idx = json.loads((to / ho.INDEX).read_text("utf-8"))
     rec = idx["files"][pdf_sha]
-    assert idx["format"] == "gpdf-handoff/1" and rec["file_name"] == "libro.pdf"
+    assert idx["format"] == "gpdf-handoff/1.1" and rec["file_name"] == "libro.pdf"
+    assert rec["source_sha256"] == "e" * 64
     assert rec["file"] == path.name and rec["title"] == "Las vanguardias en la isla"
     assert rec["counts"]["paras"] == 30 and rec["counts"]["sections"] == len(secs)
     assert rec["structure_confirmed"] is False and rec["made"]
@@ -222,6 +224,30 @@ def test_txt_entry_uses_lines(tmp_path, capsys):
     assert s["lines"] == [1, 4] and "pdf_pages" not in s and "printed" not in s
     assert p2["lines"] == [3, 4] and p2["text"] == "¡Es con voz\nde Biblia!"
     assert "pdf_pages" not in p2 and "printed" not in p2 and "printed_inferred" not in p2
+
+
+def test_validate_accepts_major_1_and_refuses_another_major(made, capsys):
+    text, out, to, pdf_sha = made
+    assert cli.main(["handoff", "--structure", str(out), "--to", str(to)]) == 0
+    rows = lines(to / f"{pdf_sha}{ho.SUFFIX}")
+    for schema, ok in (("gpdf-handoff/1", True), ("gpdf-handoff/1.1", True),
+                       ("gpdf-handoff/1.7", True), ("gpdf-handoff/2", False),
+                       ("gpdf-handoff/2.1", False), ("gpdf-handoff/10", False),
+                       ("gpdf-handoff/1.x", False)):
+        rows[0]["schema"] = schema
+        assert (ho.validate(rows) == []) is ok, schema
+
+
+def test_two_entries_with_one_source_refuse_the_run(made, monkeypatch, capsys):
+    text, out, to, pdf_sha = made
+    log = json.loads((text / "export.json").read_text("utf-8"))
+    log["entries"]["f" * 64] = dict(log["entries"]["e" * 64])
+    (text / "export.json").write_text(json.dumps(log), "utf-8")
+    monkeypatch.setattr(ho, "source_sha256", lambda id_, rec: "c" * 64)
+    assert cli.main(["handoff", "--structure", str(out), "--to", str(to)]) == 1
+    err = capsys.readouterr().err
+    assert "share the source" in err and "c" * 64 in err
+    assert not to.exists()
 
 
 def test_handoff_refuses_a_structure_folder_without_a_run_log(tmp_path, capsys):

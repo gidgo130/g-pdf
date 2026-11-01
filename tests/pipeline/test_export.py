@@ -130,6 +130,7 @@ def test_export_writes_new_files_only(lay, capsys):
     e = log["entries"][lay["files"]["aplicado.pdf"]["id"]]
     assert e["input_from"] == "applied output"
     assert e["input_sha256"] == survey.sha256(lay["tmp"] / "aplicado_rebuilt.pdf")
+    assert lay["files"]["aplicado.pdf"]["id"] == survey.sha256(lay["root"] / "aplicado.pdf")
     assert e["flags"]["no_dictionary_fixes"] is False and e["counts"]["pages"] == 3
     assert log["tool_version"]
     recs = [json.loads(s) for s in (lay["out"] / "libro.jsonl").read_text("utf-8").splitlines()]

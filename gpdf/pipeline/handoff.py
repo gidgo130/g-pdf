@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""gpdf-cli handoff: the files the owner's search app reads (format "gpdf-handoff/1",
+"""gpdf-cli handoff: the files the owner's search app reads (format "gpdf-handoff/1.1",
 described in docs/handoff-format.md). For every exported entry that is not excluded:
 
   OUTDIR/<sha256 of the working file>.gpdf.jsonl   a "file" line, the "section" lines,
@@ -7,7 +7,9 @@ described in docs/handoff-format.md). For every exported entry that is not exclu
   OUTDIR/handoff.json                              sha256 -> file name, title, counts,
                                                    time, structure confirmed yes/no
 
-The sha256 is export.json's input_sha256: the exact file the owner uploads. Inputs are
+The sha256 is export.json's input_sha256: the exact file the owner uploads; the
+source_sha256 is the entry's key there (the catalogue id: the hash of the file g-pdf
+started from, before split, OCR or rebuild). Inputs are
 only read: the structure folder (structure.json, <stem>.sections.json), the export folder
 (export.json, <stem>.jsonl, .pages.jsonl, .apparatus.jsonl), the working files (hashed
 again) and the catalogue's decisions (for exclusions). An entry whose export changed
@@ -28,7 +30,8 @@ from gpdf import __version__
 from gpdf.pipeline import catalogue
 from gpdf.pipeline.structure_decisions import confirmed
 
-FORMAT = "gpdf-handoff/1"
+FORMAT = "gpdf-handoff/1.1"
+_MAJOR = re.compile(r"^gpdf-handoff/1(\.\d+)?$")
 SUFFIX = ".gpdf.jsonl"
 INDEX = "handoff.json"
 DEFAULT_OUT = Path("private/book-prep/handoff")
@@ -44,6 +47,7 @@ class HandoffError(Exception):
 class Written:
     stem: str
     sha: str
+    source: str
     file_name: str
     path: Path
     title: str | None
@@ -89,14 +93,16 @@ def _pair(v) -> list | None:
     return [v[0], v[-1]] if v else None
 
 
-def lines_for(sections: dict, units: list[dict], apparatus_pages: list[int]) -> list[dict]:
-    """The handoff lines of one entry, from its sections file and its units."""
+def lines_for(sections: dict, units: list[dict], apparatus_pages: list[int],
+              source: str | None = None) -> list[dict]:
+    """The handoff lines of one entry, from its sections file and its units; ``source`` is
+    the hash of the original (default: the working file's, an original used as is)."""
     txt = sections["kind"] == "txt"
     md = sections.get("metadata") or {}
     dec = sections.get("decisions") or {}
     secs = sections["sections"]
     head = {"type": "file", "schema": FORMAT, "sha256": sections["input_sha256"],
-            "file_name": Path(sections["input"]).name,
+            "source_sha256": source or sections["input_sha256"], "file_name": Path(sections["input"]).name,
             "pages": None if txt else sections.get("pages"),
             "title": md.get("title"), "author": md.get("author"), "year": md.get("year"),
             "publisher": md.get("publisher"), "metadata_confirmed": bool(md.get("confirmed")),
@@ -150,7 +156,8 @@ def validate(rows: list[dict]) -> list[str]:
     paras from the first; every unit exactly once, in order, as a para of the deepest
     section holding it; page (or line) ranges ascending, never going back."""
     out = []
-    if not rows or rows[0].get("type") != "file" or rows[0].get("schema") != FORMAT:
+    if (not rows or rows[0].get("type") != "file"
+            or not _MAJOR.match(str(rows[0].get("schema")))):
         return ["the first line is not a gpdf-handoff/1 file line"]
     secs = [r for r in rows if r.get("type") == "section"]
     paras = [r for r in rows if r.get("type") == "para"]
@@ -262,15 +269,30 @@ def plan(structure, to, text=None, cat=None) -> tuple[Path, dict, dict, Path | N
     return text, log, export, Path(cat) if cat else None
 
 
+def source_sha256(id_: str, rec: dict) -> str:
+    """The hash of the file g-pdf started from: the export entry's key, which is the
+    catalogue id (the survey keys entries by the sha256 of the file it found)."""
+    return id_
+
+
 def run(structure, to, text=None, cat=None) -> Result:
     structure, to = Path(structure), Path(to)
     text, _log, export, cat = plan(structure, to, text, cat)
     res = Result(out=to, catalogue=cat)
     excluded = _excluded(cat)
-    to.mkdir(parents=True, exist_ok=True)
-    current = set()
     items = sorted(export.get("entries", {}).items(),
                    key=lambda kv: kv[1].get("stem", "").lower())
+    sources: dict[str, list[str]] = {}
+    for id_, rec in items:
+        if id_ not in excluded:
+            sources.setdefault(source_sha256(id_, rec), []).append(rec.get("stem", id_[:12]))
+    shared = {k: v for k, v in sources.items() if len(v) > 1}
+    if shared:
+        raise HandoffError("entries would share the source " + "; ".join(
+            f"{k} ({', '.join(v)})" for k, v in sorted(shared.items()))
+            + ": each source may have one handoff file; exclude the others in the catalogue")
+    to.mkdir(parents=True, exist_ok=True)
+    current = set()
     for id_, rec in items:
         stem = rec.get("stem", id_[:12])
         if id_ in excluded:
@@ -279,7 +301,7 @@ def run(structure, to, text=None, cat=None) -> Result:
         want = rec.get("input_sha256", "")
         current.add(want)
         try:
-            res.written.append(_one(structure, text, to, stem, rec))
+            res.written.append(_one(structure, text, to, stem, rec, source_sha256(id_, rec)))
         except HandoffError as e:
             res.skipped.append((stem, str(e)))
     for p in sorted(to.glob(f"*{SUFFIX}")):
@@ -289,7 +311,7 @@ def run(structure, to, text=None, cat=None) -> Result:
     return res
 
 
-def _one(structure: Path, text: Path, to: Path, stem: str, rec: dict) -> Written:
+def _one(structure: Path, text: Path, to: Path, stem: str, rec: dict, source: str) -> Written:
     sec_path = structure / f"{stem}.sections.json"
     if not sec_path.is_file():
         raise HandoffError(f"no {sec_path.name}: run gpdf-cli structure")
@@ -312,7 +334,7 @@ def _one(structure: Path, text: Path, to: Path, stem: str, rec: dict) -> Written
                            "again, then run structure")
     units = _jsonl(units_path)
     app = [] if sections["kind"] == "txt" else _apparatus_pages(text, stem, units)
-    rows = lines_for(sections, units, app)
+    rows = lines_for(sections, units, app, source)
     problems = validate(rows)
     if problems:
         raise HandoffError("the lines do not validate: " + "; ".join(problems[:5]))
@@ -323,7 +345,8 @@ def _one(structure: Path, text: Path, to: Path, stem: str, rec: dict) -> Written
     for p in paras:
         kinds[p["kind"]] = kinds.get(p["kind"], 0) + 1
     ok, why = confirmed(sections.get("decisions") or {})
-    return Written(stem=stem, sha=want, file_name=rows[0]["file_name"], path=path,
+    return Written(stem=stem, sha=want, source=source, file_name=rows[0]["file_name"],
+                   path=path,
                    title=rows[0]["title"],
                    counts={"sections": len(rows) - 1 - len(paras), "paras": len(paras),
                            "kinds": kinds, "chars": sum(len(p["text"]) for p in paras),
@@ -336,7 +359,8 @@ def _write_index(to: Path, res: Result) -> Path:
     path = to / INDEX
     now = catalogue.now()
     data = {"format": FORMAT, "made_with": f"g-pdf {__version__}", "made": now,
-            "files": {w.sha: {"file": w.path.name, "file_name": w.file_name, "entry_stem": w.stem,
+            "files": {w.sha: {"file": w.path.name, "file_name": w.file_name,
+                              "source_sha256": w.source, "entry_stem": w.stem,
                               "title": w.title, "counts": w.counts, "made": now,
                               "metadata_confirmed": w.metadata_confirmed,
                               "structure_confirmed": w.structure_confirmed}
