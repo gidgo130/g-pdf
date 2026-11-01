@@ -294,6 +294,18 @@ working file, named by that file's sha256 (the format is in
 [docs/handoff-format.md](docs/handoff-format.md)). The text folder, the
 working files and the catalogue folder are only read.
 
+Both commands open the working files: `structure` reads each PDF's
+bookmarks, page count and metadata, and `handoff` hashes each file again.
+If you renamed or moved a working file after the export, both look for it
+by its sha256 in the catalogue's root folders and its old folder, among
+files of the size the catalogue recorded. They use the file they find and
+report it as `moved: <old> -> <new>`, without renaming or recording
+anything. The catalogue is `private\book-prep\catalogue` unless you pass
+`--catalogue DIR`. A working file that is not found, or whose bytes changed
+since the export, gets a warning and exit code 2. `structure` then detects
+without its bookmarks, so decisions that depend on them may not match.
+`handoff` skips the entry.
+
 1. Detect, and write the review sheet:
 
    ```powershell
