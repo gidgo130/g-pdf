@@ -61,6 +61,12 @@ SHORT_LINE = 15             # characters: a Tesseract line too short to judge by
 GIANT_BOX = 5.0             # x the body size and its own size: a box no text line has
 MARGIN_WORDS = 3
 MARGINALIA_WORDS = 12       # a Tesseract unit this short with mostly unknown words: marginalia
+SAME_INK = 0.5              # share of the narrower word's width: two words of a scan line
+#                             overlapping by this much may be the same ink read twice ...
+SAME_INK_WIDE = 1.8         # ... unless the wider box is this many times its letters at the
+#                             line's character width: a pen stroke stretched it over the next
+#                             word ("gathering, the" 2.5, "adelante la" 2.4; the widest box of
+#                             a real double reading, Cartucho's "se se", 1.75)
 PEN_THIN = 0.4              # x the page's line height: a fragment this flat is no printed line
 #                             (Cartucho's pen strokes 0.1-0.3; the flattest print in the
 #                             corpus, Schwartz's footnote fragments, 0.42)
@@ -201,6 +207,9 @@ def read_pages(doc, selection, job, counts) -> tuple[list[Page], float]:
             for ln in kept:
                 ln.col = 0 if ln.x1 <= g else 1
         p.lines = tl.merge_fragments(kept)
+        if p.scan_layer:
+            for ln in p.lines:
+                same_ink(p, ln, job["nodict"])
         if not p.tesseract:
             for ln in p.lines:
                 tl.superscripts(ln)
@@ -254,6 +263,69 @@ def pen_marks(p: Page, fragments: list, nodict: bool) -> list:
             p.drop(row, "pen_mark")
             gone.update(id(w) for w in row.words)
     return [ln for ln in fragments if id(ln.words[0]) not in gone]
+
+
+def _letters(text: str) -> str:
+    return "".join(c for c in cleanup.fold(text) if c.isalpha())
+
+
+def _read_twice(a, b, char: float | None, word) -> bool:
+    """Words a and b (a line's neighbours, a first) are the same ink read twice: their boxes
+    overlap by >= SAME_INK of the narrower one's width, and the narrower one's letters are
+    the wider one's, or appear in them where its box sits (its centre within that stretch of
+    the wider box, the wider word's letters spread evenly over it): "fe" over the start of
+    "fechar", "n" over the end of "un". A pen stroke can stretch a box over the next word:
+    other letters there are another word (Cartucho p. 30: "prólogo" over "de"), and so is
+    the whole pair when the wider box is > SAME_INK_WIDE x its letters at the line's
+    character width ``char``. Neither is a word of the language (``word``) that matches
+    only the end of the word before it, where a stretched box covers the next word (Schwartz
+    p. 584 "acusa a los", p. 446 "temiéndola a un")."""
+    narrow, wide = sorted((a, b), key=lambda w: w.width)
+    s, t = _letters(narrow.text), _letters(wide.text)
+    if (not s or not t or cleanup.has_leader(wide.text)
+            or min(a.x1, b.x1) - max(a.x0, b.x0) < SAME_INK * narrow.width):
+        return False
+    if char and wide.width > SAME_INK_WIDE * len(wide.text) * char:
+        return False
+    if s == t:
+        return True
+    centre, step = (narrow.x0 + narrow.x1) / 2, wide.width / len(t)
+    at = [i for i in range(len(t) - len(s) + 1) if t.startswith(s, i)
+          and wide.x0 + i * step <= centre <= wide.x0 + (i + len(s)) * step]
+    return bool(at) and not (narrow is b and at == [len(t) - len(s)] and word(narrow))
+
+
+def same_ink(p: Page, line, nodict: bool) -> None:
+    """On a scan layer, a word Tesseract read twice where a pen stroke split its line into
+    overlapping fragments ("se se pueden fe fechar", "Traen un un"): of two neighbours read
+    from the same ink (_read_twice), the known word stays over an unknown one, otherwise the
+    longer (the first of two alike); the other is dropped as ``overlap_duplicate``. With
+    ``nodict``, the longer. A word printed twice ("que que") has boxes of its own."""
+    def known(w):
+        t = _letters(w.text)
+        return not nodict and len(t) >= 2 and quality.known(t, p.lang)
+
+    singles = quality.ONE_LETTER_WORDS.get(p.lang, quality.ONE_LETTER_ANY)
+
+    def word(w):                     # with nodict, any token may be a word
+        t = _letters(w.text)
+        return nodict or known(w) or (len(t) == 1 and t in singles)
+
+    per = [w.width / len(w.text) for w in line.words if len(w.text) >= 3]
+    char = statistics.median(per) if per else None
+    out = []
+    for w in line.words:
+        if out and _read_twice(out[-1], w, char, word):
+            a = out[-1]
+            if known(a) != known(w):
+                keep, lose = (a, w) if known(a) else (w, a)
+            else:
+                keep, lose = (a, w) if len(_letters(a.text)) >= len(_letters(w.text)) else (w, a)
+            p.dropped.append(("overlap_duplicate", lose.text))
+            out[-1] = keep
+        else:
+            out.append(w)
+    line.words = out
 
 
 # ---------------------------------------------------------------------------- labels, heads

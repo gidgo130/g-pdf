@@ -1140,3 +1140,37 @@ def test_short_real_lines_survive_among_pen_marks(tmp_path, scan_font):
     assert "en la casa de mi madre" in allt and "18" in allt
     pen = [d["text"] for d in rows[0]["dropped"] if d["reason"] == "pen_mark"]
     assert pen == ["A A E e EE"] * len(real)
+
+
+def test_a_word_read_twice_over_the_same_ink_is_dropped(tmp_path, scan_font):
+    # Cartucho p. 30 "se se pueden fe fechar", p. 58 "Traen un un rfuerto": Tesseract split
+    # a pen-marked line into overlapping fragments and read words twice; a word printed
+    # twice ("que que") does not overlap, and a word whose box an inflated neighbour covers
+    # is another word (p. 30 "prólogo" [437-702] over "de" [599-643])
+    path = tmp_path / "twice.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc, font="cour")
+    for k in range(3):
+        s.line(" ".join(words(3400 + k, 7)))
+    cw = width("x", font="cour")                     # Courier: every character as wide
+    y = s.y
+    s.text(X0, y, "Los hechos de estos cuadros se")
+    # fragments a little apart, as on p. 30, written out of order so MuPDF keeps them apart
+    s.text(X0 + 39 * cw + 1, y + 0.8, "fechar con exactitud")  # "fechar" under "fe"
+    s.text(X0 + 28 * cw + 1, y + 0.4, "se pueden fe")          # "se" over "se"
+    s.y += PITCH
+    s.line("y dijo que que no, como al final del prólogo")
+    s.text(X0 + 40 * cw, s.y - PITCH, "de la primera")    # "de" inside "prólogo"'s box
+    # a word of the language over the end of the word before is the next word under a
+    # stretched box (Schwartz p. 584 "acusa a los"); "n" over the end of "un" is not
+    s.text(X0 + 24 * cw + 2, s.y + 0.8, "n fusilado")
+    s.text(X0 + 10 * cw + 1, s.y + 0.4, "a los dos de un")
+    s.line("y nos acusa")
+    save(doc, path)
+    records, rows, *_ = run(path, scan=True)
+    allt = " ".join(texts(records))
+    assert "Los hechos de estos cuadros se pueden fechar con exactitud" in allt
+    assert "y dijo que que no, como al final del prólogo de la primera" in allt
+    assert "y nos acusa a los dos de un fusilado" in allt
+    twice = [d["text"] for d in rows[0]["dropped"] if d["reason"] == "overlap_duplicate"]
+    assert twice == ["se", "fe", "n"]
