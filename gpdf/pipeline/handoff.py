@@ -14,7 +14,7 @@ only read: the structure folder (structure.json, <stem>.sections.json), the expo
 (export.json, <stem>.jsonl, .pages.jsonl, .apparatus.jsonl), the working files (hashed
 again) and the catalogue's decisions (for exclusions). An entry whose export changed
 since structure ran, or whose working file changed since the export, is skipped. Files
-are written atomically; nothing in OUTDIR is ever deleted: .gpdf.jsonl files whose hash
+are written atomically and only when their content (all but "made") changes; nothing in OUTDIR is ever deleted: .gpdf.jsonl files whose hash
 is no longer current are listed for the owner to remove. No chunking: the app does that.
 """
 
@@ -50,6 +50,8 @@ class Written:
     source: str
     file_name: str
     path: Path
+    made: str                 # when the file's content last changed
+    changed: bool             # written this run (False: content as it was, left untouched)
     title: str | None
     counts: dict
     metadata_confirmed: bool
@@ -339,20 +341,39 @@ def _one(structure: Path, text: Path, to: Path, stem: str, rec: dict, source: st
     if problems:
         raise HandoffError("the lines do not validate: " + "; ".join(problems[:5]))
     path = to / f"{want}{SUFFIX}"
-    catalogue.write_text(path, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+    old = _made_if_same(path, rows)
+    if old:
+        rows[0]["made"] = old
+    else:
+        catalogue.write_text(path, _dump(rows))
     paras = [r for r in rows if r["type"] == "para"]
     kinds: dict[str, int] = {}
     for p in paras:
         kinds[p["kind"]] = kinds.get(p["kind"], 0) + 1
     ok, why = confirmed(sections.get("decisions") or {})
     return Written(stem=stem, sha=want, source=source, file_name=rows[0]["file_name"],
-                   path=path,
-                   title=rows[0]["title"],
+                   path=path, made=rows[0]["made"], changed=not old, title=rows[0]["title"],
                    counts={"sections": len(rows) - 1 - len(paras), "paras": len(paras),
                            "kinds": kinds, "chars": sum(len(p["text"]) for p in paras),
                            "pages": rows[0]["pages"]},
                    metadata_confirmed=rows[0]["metadata_confirmed"], structure_confirmed=ok,
                    why_unconfirmed=why)
+
+
+def _dump(rows: list[dict]) -> str:
+    return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+
+
+def _made_if_same(path: Path, rows: list[dict]) -> str | None:
+    """The ``made`` of the file at ``path`` if its content is ``rows`` except ``made``."""
+    try:
+        text = path.read_text("utf-8")
+        made = json.loads(text.split("\n", 1)[0]).get("made")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(made, str) or not made:
+        return None
+    return made if _dump([dict(rows[0], made=made), *rows[1:]]) == text else None
 
 
 def _write_index(to: Path, res: Result) -> Path:
@@ -361,7 +382,7 @@ def _write_index(to: Path, res: Result) -> Path:
     data = {"format": FORMAT, "made_with": f"g-pdf {__version__}", "made": now,
             "files": {w.sha: {"file": w.path.name, "file_name": w.file_name,
                               "source_sha256": w.source, "entry_stem": w.stem,
-                              "title": w.title, "counts": w.counts, "made": now,
+                              "title": w.title, "counts": w.counts, "made": w.made,
                               "metadata_confirmed": w.metadata_confirmed,
                               "structure_confirmed": w.structure_confirmed}
                       for w in res.written},
@@ -377,7 +398,8 @@ def report(res: Result) -> str:
     for w in res.written:
         struct = ("confirmed" if w.structure_confirmed
                   else f"not confirmed ({w.why_unconfirmed})")
-        out.append(f"{w.file_name} -> {w.path.name}: {w.counts['paras']} paras, "
+        out.append(f"{w.file_name} -> {w.path.name} "
+                   f"({'written' if w.changed else 'unchanged'}): {w.counts['paras']} paras, "
                    f"{w.counts['sections']} sections; metadata "
                    f"{'confirmed' if w.metadata_confirmed else 'not confirmed'}; structure "
                    f"{struct}")
@@ -391,6 +413,8 @@ def report(res: Result) -> str:
         out.append(f"{len(res.not_current)} file(s) in {res.out} are no longer current (remove "
                    "them yourself): " + ", ".join(res.not_current))
     size = sum(p.stat().st_size for p in res.out.glob(f"*{SUFFIX}"))
-    out.append(f"wrote {len(res.written)} handoff file(s) and {res.index.name}, skipped "
+    changed = sum(w.changed for w in res.written)
+    out.append(f"wrote {changed} handoff file(s) ({len(res.written) - changed} unchanged) "
+               f"and {res.index.name}, skipped "
                f"{len(res.skipped)}; folder {res.out}: {size / 1e6:.1f} MB of handoff files")
     return "\n".join(out)

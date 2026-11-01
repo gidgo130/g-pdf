@@ -32,6 +32,10 @@ def snapshot(folder):
     return {p: (sha(p), os.stat(p).st_mtime_ns) for p in folder.rglob("*") if p.is_file()}
 
 
+def state(path):
+    return sha(path), os.stat(path).st_mtime_ns
+
+
 def structure(text, out, capsys):
     assert cli.main(["structure", "--text", str(text), "--out", str(out)]) == 0
     capsys.readouterr()
@@ -248,6 +252,66 @@ def test_two_entries_with_one_source_refuse_the_run(made, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "share the source" in err and "c" * 64 in err
     assert not to.exists()
+
+
+def add_poem(text, tmp_path):
+    """A second entry in the export folder: a one-line .txt."""
+    src = tmp_path / "src" / "poema.txt"
+    src.write_text("A Roosevelt\n", "utf-8")
+    unit = {"entry": "t" * 64, "seq": 1, "kind": "heading", "text": "A Roosevelt",
+            "lines": [1, 1], "labels": [None, None], "label_inferred": False, "note": None,
+            "lang": "es", "flags": []}
+    (text / "poema.jsonl").write_text(json.dumps(unit) + "\n", "utf-8")
+    (text / "poema.pages.jsonl").write_text(json.dumps(
+        {"entry": "t" * 64, "lines": [1, 1], "kind": "body", "removed": {}, "dropped": []})
+        + "\n", "utf-8")
+    log = json.loads((text / "export.json").read_text("utf-8"))
+    log["entries"]["t" * 64] = {"rel": "poema.txt", "input": str(src),
+                                "input_sha256": sha(src), "stem": "poema", "flags": {},
+                                "counts": {}}
+    (text / "export.json").write_text(json.dumps(log), "utf-8")
+    return src
+
+
+def test_a_file_and_its_made_change_only_when_its_content_changes(made, tmp_path, monkeypatch,
+                                                                    capsys):
+    text, out, to, pdf_sha = made
+    poem = to / f"{sha(add_poem(text, tmp_path))}{ho.SUFFIX}"
+    libro = to / f"{pdf_sha}{ho.SUFFIX}"
+    structure(text, out, capsys)
+
+    def handoff(when):
+        monkeypatch.setattr(ho.catalogue, "now", lambda: when)
+        assert cli.main(["handoff", "--structure", str(out), "--to", str(to)]) == 0
+        return capsys.readouterr().out, json.loads((to / ho.INDEX).read_text("utf-8"))
+
+    stdout, idx = handoff("2026-11-01T10:00:00-06:00")
+    assert f"libro.pdf -> {libro.name} (written)" in stdout
+    assert f"poema.txt -> {poem.name} (written)" in stdout
+    files = {libro: state(libro), poem: state(poem)}
+
+    stdout, idx = handoff("2026-11-01T11:00:00-06:00")                 # nothing changed
+    assert f"libro.pdf -> {libro.name} (unchanged)" in stdout
+    assert f"poema.txt -> {poem.name} (unchanged)" in stdout
+    assert "wrote 0 handoff file(s) (2 unchanged)" in stdout
+    assert {p: state(p) for p in files} == files
+    assert lines(libro)[0]["made"] == lines(poem)[0]["made"] == "2026-11-01T10:00:00-06:00"
+    assert idx["made"] == "2026-11-01T11:00:00-06:00"
+    assert {r["made"] for r in idx["files"].values()} == {"2026-11-01T10:00:00-06:00"}
+
+    (out / sd.DECISIONS).write_text(json.dumps({"schema": 1, "entries": {"e" * 64: {
+        "metadata": {"title": "Isla", "confirmed": True}, "ops": []}}}), "utf-8")
+    structure(text, out, capsys)
+    stdout, idx = handoff("2026-11-01T12:00:00-06:00")                 # libro's metadata
+    assert f"libro.pdf -> {libro.name} (written)" in stdout
+    assert f"poema.txt -> {poem.name} (unchanged)" in stdout
+    assert "wrote 1 handoff file(s) (1 unchanged)" in stdout
+    assert state(poem) == files[poem] and state(libro) != files[libro]
+    f = lines(libro)[0]
+    assert (f["title"], f["made"]) == ("Isla", "2026-11-01T12:00:00-06:00")
+    assert idx["files"][pdf_sha]["made"] == "2026-11-01T12:00:00-06:00"
+    assert idx["files"][poem.name[:64]]["made"] == "2026-11-01T10:00:00-06:00"
+    assert not list(to.glob(".gpdf-*.tmp"))
 
 
 def test_handoff_refuses_a_structure_folder_without_a_run_log(tmp_path, capsys):
