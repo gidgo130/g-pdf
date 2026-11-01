@@ -9,7 +9,7 @@ search app does that.
 
 ```
 OUTDIR/<sha256>.gpdf.jsonl     one per entry
-OUTDIR/handoff.json            index of the files written by the last run
+OUTDIR/handoff.json            index of the current files (written or left unchanged by the last run)
 ```
 
 - `<sha256>` is the SHA-256 (lowercase hex) of the exact PDF or `.txt` file the
@@ -32,6 +32,8 @@ OUTDIR/handoff.json            index of the files written by the last run
   the `file` line and in `handoff.json`) is the time the content last
   changed, so a reader can rebuild exactly the files whose `made` moved. A
   run that changes nothing leaves the file and its `made` as they were.
+  Any field counts, including `file_name` (the owner renamed the working file
+  on his computer).
 
 ## `handoff.json`
 
@@ -60,10 +62,14 @@ OUTDIR/handoff.json            index of the files written by the last run
 }
 ```
 
-`files` lists only the files written by the last run. A file under
-`not_current` has a hash that no current working file has: ignore it. A
-`skipped` entry was not rewritten. If an older file with its hash is still in
-OUTDIR, that file is from an earlier run.
+`files` lists every current handoff file: those the last run wrote and those
+it left unchanged. Read this index rather than the folder: OUTDIR also keeps
+old files, which g-pdf never deletes. A file under `not_current` has a hash
+that no current working file has: ignore it. A `skipped` entry could not be
+refreshed by this run (for example its working file was missing) and is not in
+`files`; any earlier handoff file for it stays in OUTDIR. A reader should not
+drop an entry (matched by `entry_stem`) only because it is missing from a run
+that has skips.
 
 ## Lines of a `.gpdf.jsonl` file
 
