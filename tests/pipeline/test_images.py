@@ -210,3 +210,36 @@ def test_jpeg_half_keeps_source_tables_and_flate_half_is_lossless():
     assert doc.xref_get_key(x, "ColorSpace")[1] == "/DeviceRGB"
     pix = pymupdf.Pixmap(doc, x)
     assert np.array_equal(np.frombuffer(pix.samples, np.uint8).reshape(64, 40, 3), grad)
+
+
+@pytest.mark.parametrize("cs", ["[/DeviceGray]", "[ /DeviceGray ]", "indirect"])
+def test_one_element_colour_space_array_is_plain_device_gray(cs):
+    doc = pymupdf.open()
+    a = marked()
+    page, x = g4_page(doc, a)
+    if cs == "indirect":
+        n = doc.get_new_xref()
+        doc.update_object(n, "/DeviceGray")
+        cs = f"[{n} 0 R]"
+    doc.xref_set_key(x, "ColorSpace", cs)
+    src, why = images.examine(page)
+    assert why == [] and src.kind == images.G4
+    assert np.array_equal(images.upright_pixels(page, src).pixels < 128, a)
+
+
+def test_one_element_colour_space_array_is_accepted_by_the_flatten_check():
+    doc = pymupdf.open()
+    page, x = g4_page(doc, marked())
+    doc.xref_set_key(x, "ColorSpace", "[/DeviceGray]")
+    page.draw_line((10, 10), (60, 10))                # a drawing: not splittable as is
+    src, why = images.examine(page)
+    assert src is not None and src.flatten and why[0].startswith("will be flattened")
+
+
+@pytest.mark.parametrize("cs", ["[/DeviceGray /DeviceRGB]", "[/Indexed /DeviceRGB 1 <000000ffffff>]"])
+def test_other_colour_space_arrays_stay_refused(cs):
+    doc = pymupdf.open()
+    page, x = g4_page(doc, marked())
+    doc.xref_set_key(x, "ColorSpace", cs)
+    src, why = images.examine(page)
+    assert src is None and any("colour space" in r for r in why)

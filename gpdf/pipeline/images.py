@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import io
 import math
+import re
 from dataclasses import dataclass
 
 import numpy as np
@@ -110,6 +111,22 @@ def _resolve(doc, xref, key):
     return "other", v
 
 
+def _colorspace(doc, xref) -> str:
+    """The image's ColorSpace as a plain value. A one-element array ``[/X]`` (also
+    ``[n 0 R]`` pointing at a name) is the same as ``/X``; anything else is returned as is."""
+    t, v = _resolve(doc, xref, "ColorSpace")
+    if t != "array":
+        return v
+    m = re.fullmatch(r"\[\s*(/[^\s/\[\]<>()]+|\d+\s+\d+\s+R)\s*\]", v.strip())
+    if not m:
+        return v
+    inner = m.group(1)
+    if inner.startswith("/"):
+        return inner
+    target = doc.xref_object(int(inner.split()[0]), compressed=True).strip()
+    return target if re.fullmatch(r"/[^\s/\[\]<>()]+", target) else v
+
+
 def _filters(doc, xref) -> list[str]:
     t, v = _resolve(doc, xref, "Filter")
     if t == "null":
@@ -180,7 +197,7 @@ def _flatten_source(page, infos) -> SourceImage | None:
         if doc.xref_get_key(x, "ImageMask")[1] == "true":
             continue
         bpc_t, bpc = _resolve(doc, x, "BitsPerComponent")
-        if bpc_t != "int" or int(bpc) != 1 or _resolve(doc, x, "ColorSpace")[1] != "/DeviceGray":
+        if bpc_t != "int" or int(bpc) != 1 or _colorspace(doc, x) != "/DeviceGray":
             return None
     pix = page.get_pixmap(dpi=COLOUR_CHECK_DPI, colorspace=pymupdf.csRGB, annots=False)
     a = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.stride)[:, : pix.width * 3]
@@ -221,7 +238,7 @@ def _examine_one(page, info) -> tuple[SourceImage | None, list[str]]:
         reasons.append("cannot split: image has transparency (SMask/Mask)")
     bpc_t, bpc = _resolve(doc, x, "BitsPerComponent")
     bpc = int(bpc) if bpc_t == "int" else 0
-    cs = _resolve(doc, x, "ColorSpace")[1]
+    cs = _colorspace(doc, x)
     n = {"/DeviceGray": 1, "/DeviceRGB": 3}.get(cs)
     if bpc not in (1, 8):
         reasons.append(f"cannot split: {bpc} bits per component")
