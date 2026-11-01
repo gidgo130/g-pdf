@@ -4,7 +4,10 @@ verified bookmarks, running-head runs, heading units) become parts, sections and
 subsections that tile every exported unit, each with a title, an author, a role, a
 confidence and its evidence; the result is written as OUTDIR/<stem>.sections.json and
 summed up in OUTDIR/structure.json. The export folder and the working files are only
-read (the PDF for its outline, page count and metadata).
+read: each working PDF is opened for its outline, page count and metadata. One gone from
+its recorded path is looked for by its hash under the catalogue's roots and its old folder
+(catalogue.locate_export_entry, as handoff does) and read where it is now; one not found,
+or changed since the export, is not read, and the run says so (exit 2).
 
 Levels: 1 = part (front matter, a bibliography, an anthology's critical part, notes,
 plates, index, back), 2 = section (an essay, a text, a chapter, a canto, an act, a
@@ -18,7 +21,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import time
 from collections import Counter
@@ -144,6 +146,8 @@ class Entry:
     rel: str = ""
     flags: dict = field(default_factory=dict)
     units_sha: str = ""              # sha256 of <stem>.jsonl: the export the seqs refer to
+    moved: tuple | None = None       # (recorded path, path found) of a moved working file
+    unread: str | None = None        # why the working file was not read
 
 
 def _jsonl(path: Path) -> list[dict]:
@@ -164,9 +168,10 @@ def load_export(text_dir) -> dict:
     return data
 
 
-def load_entry(text_dir, id_: str, rec: dict) -> Entry:
+def load_entry(text_dir, id_: str, rec: dict, cat: dict | None = None) -> Entry:
     """One entry's units, page rows and apparatus, plus the working PDF's outline, page
-    count and metadata (the file is opened read-only and closed)."""
+    count and metadata (the file is opened read-only and closed). A PDF gone from its
+    recorded path is looked for under the catalogue ``cat`` (None: not looked for)."""
     text_dir = Path(text_dir)
     stem = rec["stem"]
     units = _jsonl(text_dir / f"{stem}.jsonl")
@@ -175,11 +180,19 @@ def load_entry(text_dir, id_: str, rec: dict) -> Entry:
     apparatus = _jsonl(app_path) if app_path.is_file() else []
     units_sha = hashlib.sha256((text_dir / f"{stem}.jsonl").read_bytes()).hexdigest()
     kind = "txt" if str(rec["input"]).lower().endswith(".txt") else "pdf"
-    toc, count, meta = [], 0, {}
-    if kind == "pdf" and os.path.isfile(rec["input"]):
+    toc, count, meta, moved, unread = [], 0, {}, None, None
+    found = (catalogue.locate_export_entry(cat or catalogue.empty(), id_, rec)
+             if kind == "pdf" else None)
+    if found and found.status in ("changed", "missing"):
+        why = "changed since the export" if found.status == "changed" else "not found"
+        unread = (f"working file {why} ({rec['input']}): its bookmarks, page count and "
+                  "metadata were not read; decisions that depend on bookmarks may not match")
+    elif found:
         import pymupdf
 
-        with pymupdf.open(rec["input"]) as doc:
+        if found.status == "moved":
+            moved = (str(rec["input"]), str(found.path))
+        with pymupdf.open(found.path) as doc:
             toc = [list(t[:3]) for t in doc.get_toc()]
             count = len(doc)
             meta = {k: v for k, v in (doc.metadata or {}).items() if v}
@@ -188,7 +201,7 @@ def load_entry(text_dir, id_: str, rec: dict) -> Entry:
                  kind=kind, units=units, rows=rows, apparatus=apparatus, toc=toc,
                  page_count=count or len(rows), metadata=meta,
                  lang=langs.most_common(1)[0][0] if langs else None, rel=rec.get("rel", ""),
-                 flags=rec.get("flags", {}), units_sha=units_sha)
+                 flags=rec.get("flags", {}), units_sha=units_sha, moved=moved, unread=unread)
 
 
 # ---------------------------------------------------------------------------- sections
@@ -1727,6 +1740,9 @@ class RunResult:
     unknown: list = field(default_factory=list)     # its entry ids not in the export
     sheet: Path | None = None
     sheet_bytes: int = 0
+    catalogue: Path | None = None                   # where moved working files are looked for
+    moved: list = field(default_factory=list)       # (stem, recorded path, path found)
+    unread: list = field(default_factory=list)      # (stem, why its working file was not read)
 
 
 def plan_dirs(text_dir, outdir, export: dict) -> None:
@@ -1741,15 +1757,21 @@ def plan_dirs(text_dir, outdir, export: dict) -> None:
                                  f"({rec.get('input')}); put it elsewhere")
 
 
-def run(text_dir, outdir, only=(), decisions=None) -> RunResult:
+def run(text_dir, outdir, only=(), decisions=None, cat=None) -> RunResult:
     """Detect every exported entry (matching ``only``) and apply the owner's decisions:
-    the file ``decisions``, else OUTDIR/structure.decisions.json if there is one."""
+    the file ``decisions``, else OUTDIR/structure.decisions.json if there is one. Moved
+    working files are looked for under the catalogue folder ``cat`` (default:
+    catalogue.DEFAULT_FOLDER if it exists)."""
     from gpdf.pipeline import structure_decisions as sd
 
     t0 = time.perf_counter()
     export = load_export(text_dir)
     plan_dirs(text_dir, outdir, export)
-    res = RunResult(text_dir=Path(text_dir))
+    res = RunResult(text_dir=Path(text_dir), catalogue=catalogue.default_folder(cat))
+    try:
+        known = catalogue.load(res.catalogue) if res.catalogue else None
+    except catalogue.CatalogueError as err:
+        raise StructureError(str(err)) from None
     outdir = Path(outdir)
     if decisions is not None and not Path(decisions).is_file():
         raise StructureError(f"no decisions file {decisions}")
@@ -1768,8 +1790,13 @@ def run(text_dir, outdir, only=(), decisions=None) -> RunResult:
                             or o.lower() in rec.get("rel", "").lower() for o in only):
             continue
         try:
-            e = load_entry(text_dir, id_, rec)
+            e = load_entry(text_dir, id_, rec, known)
             s = detect(e)
+            if e.moved:
+                res.moved.append((e.stem, *e.moved))
+            if e.unread:
+                s.notes.append(e.unread)
+                res.unread.append((e.stem, e.unread))
             s.detected = [x.to_json() for x in s.sections]
             s.detected_metadata = dict(s.metadata)
             mine = dec["entries"].get(id_)
@@ -1800,6 +1827,8 @@ def write_log(outdir, res: RunResult) -> Path:
                                "notes": s.notes, "file": f"{s.entry.stem}{SUFFIX}",
                                "decisions": {k: v for k, v in (s.decisions or {}).items()
                                              if k != "results"}}
+        if s.entry.moved:
+            entries[s.entry.id]["moved"] = list(s.entry.moved)
     dec = [s.decisions for s in res.structures if s.decisions]
     data = {"schema": SCHEMA, "tool_version": __version__, "made": catalogue.now(),
             "seconds": round(res.seconds, 2),
@@ -1809,7 +1838,7 @@ def write_log(outdir, res: RunResult) -> Path:
                                                                   "unmatched")},
                           "entries_not_in_export": res.unknown},
             "entries": entries,
-            "errors": [{"stem": a, "error": b} for a, b in res.errors],
+            "errors": [{"stem": a, "error": b} for a, b in res.errors + res.unread],
             "totals": {"chars_by_role": dict(totals), "entries": len(res.structures)}}
     catalogue.write_text(path, json.dumps(data, indent=1, ensure_ascii=False) + "\n")
     return path
@@ -1884,6 +1913,13 @@ def report(res: RunResult) -> str:
                    "empty: ok")
     for stem, err in res.errors:
         out.append(f"error {stem}: {err}")
+    if res.catalogue is None:
+        out.append("catalogue: none (pass --catalogue): a working file gone from its recorded "
+                   "path is not looked for")
+    for stem, old, new in res.moved:
+        out.append(f"{stem}: moved: {old} -> {new}")
+    for stem, why in res.unread:
+        out.append(f"warning {stem}: {why}")
     totals = Counter()
     for s in res.structures:
         for role, n in s.checks["chars_by_role"].items():
@@ -1911,6 +1947,7 @@ def report(res: RunResult) -> str:
                    "browser")
     else:
         out.append("review sheet not rewritten (--only): run without --only to rewrite it")
-    out.append(f"wrote {len(res.written)} sections file(s), {len(res.errors)} error(s) "
-               f"({res.seconds:.1f} s); run log: {res.log}")
+    out.append(f"wrote {len(res.written)} sections file(s), {len(res.errors)} error(s)"
+               + (f", {len(res.unread)} working file(s) not read" if res.unread else "")
+               + f" ({res.seconds:.1f} s); run log: {res.log}")
     return "\n".join(out)

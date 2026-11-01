@@ -14,7 +14,7 @@
                                                     # apply the confirmed decisions
     gpdf-cli export --catalogue DIR --out OUTDIR [--dry-run]
                                                     # clean, citable text per entry
-    gpdf-cli structure --text DIR --out OUTDIR [--decisions FILE]
+    gpdf-cli structure --text DIR --out OUTDIR [--decisions FILE] [--catalogue DIR]
                                                     # parts, sections, authors and roles
                                                     # of every exported entry
     gpdf-cli handoff --structure DIR [--to OUTDIR]  # gpdf-handoff/1 files for the search
@@ -33,8 +33,9 @@
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
 reviewed (or spreads could not be split), OCR failed on some pages, the survey could
-not read a file or run a trial page, apply or export refused a file, or handoff
-skipped an entry; 1 error (for backup, also a copy that does not match its source).
+not read a file or run a trial page, apply or export refused a file, structure could
+not read a working file (not found, or changed since the export), or handoff skipped an
+entry; 1 error (for backup, also a copy that does not match its source).
 
 With GPDF_BACKUP_DIR set, the commands that read your decisions (split --decisions or
 --sheet-only, survey, apply, export, structure, handoff) first back up private/book-prep
@@ -193,7 +194,11 @@ def build_parser() -> argparse.ArgumentParser:
                                    "contents pages, the verified bookmarks, the running heads "
                                    "and the headings. Writes OUTDIR/<name>.sections.json and "
                                    "OUTDIR/structure.json. The text folder and the working "
-                                   "files are only read.")
+                                   "files are only read (each PDF for its bookmarks, page "
+                                   "count and metadata; one gone from its recorded path is "
+                                   "looked for by its hash under the catalogue's roots and "
+                                   "its old folder). A working file not found is reported "
+                                   "(exit 2).")
     t.add_argument("--text", metavar="DIR", type=Path, required=True,
                    help="the export folder (export.json, <name>.jsonl, .pages.jsonl, "
                         ".apparatus.jsonl)")
@@ -204,6 +209,9 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--decisions", metavar="FILE", type=Path,
                    help="your review decisions to apply over the detection (default: "
                         "OUTDIR/structure.decisions.json if it exists; never written)")
+    t.add_argument("--catalogue", metavar="DIR", type=Path,
+                   help="catalogue folder whose roots are searched for a moved working file "
+                        "(default: private/book-prep/catalogue if it exists)")
     hf = sub.add_parser("handoff", help="write the files the search app reads (gpdf-handoff/1)",
                         description="For every exported entry that is not excluded, write "
                                     "OUTDIR/<sha256 of the working file>.gpdf.jsonl (the "
@@ -629,12 +637,12 @@ def _structure_main(args) -> int:
     from gpdf.pipeline import sections
 
     try:
-        res = sections.run(args.text, args.out, args.only, args.decisions)
+        res = sections.run(args.text, args.out, args.only, args.decisions, args.catalogue)
     except (sections.StructureError, OSError) as e:
         print(f"gpdf-cli: error: {e}", file=sys.stderr)
         return EXIT_ERROR
     print(sections.report(res))
-    return EXIT_ERROR if res.errors else EXIT_OK
+    return EXIT_ERROR if res.errors else EXIT_UNREVIEWED if res.unread else EXIT_OK
 
 
 def _handoff_main(args) -> int:

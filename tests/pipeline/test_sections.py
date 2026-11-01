@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """gpdf-cli structure, the assembly: parts, sections and subsections tiling the units,
 roles, authors, confidence and evidence, the sections files and run log, and that the
-text folder and the working files are only read."""
+text folder and the working files are only read (a working file gone from its recorded
+path is found by its hash; one not found is reported, exit 2)."""
 
 import hashlib
 import json
@@ -287,6 +288,119 @@ def test_cli_structure_refuses_a_missing_export_and_an_out_inside_text(text_dir,
     assert cli.main(["structure", "--text", str(text_dir), "--out", str(text_dir / "s")]) == 1
     assert "inside" in capsys.readouterr().err
     assert not (text_dir / "s").exists()
+
+
+def with_catalogue(tmp_path):
+    """A catalogue folder surveyed from src/, whose entry records libro.pdf as the working
+    file (the size lets a moved file be found by its hash)."""
+    pdf = tmp_path / "src" / "libro.pdf"
+    cat = tmp_path / "catalogue"
+    cat.mkdir()
+    (cat / "catalogue.json").write_text(json.dumps({
+        "schema": 1, "roots": [{"path": str(tmp_path / "src")}], "files": {"e" * 64: {
+            "id": "e" * 64, "path": str(tmp_path / "src" / "orig.pdf"), "size": 1,
+            "working_file": {"path": str(pdf), "sha256": sha(pdf),
+                             "size": pdf.stat().st_size}}}}), "utf-8")
+    return pdf, cat
+
+
+def structure(text, out, *more):
+    return cli.main(["structure", "--text", str(text), "--out", str(out), *more])
+
+
+NOT_READ = ("its bookmarks, page count and metadata were not read; decisions that depend on "
+            "bookmarks may not match")
+
+
+def test_a_renamed_working_file_is_found_by_its_hash_and_still_read(text_dir, tmp_path,
+                                                                     monkeypatch, capsys):
+    from gpdf.pipeline import catalogue
+    from gpdf.pipeline import structure_decisions as sd
+
+    pdf, cat = with_catalogue(tmp_path)
+    out = tmp_path / "structure"
+    out.mkdir()
+    seq16 = sd.unit_hash(anthology().units[15]["text"])
+    (out / sd.DECISIONS).write_text(json.dumps({"schema": 1, "entries": {"e" * 64: {
+        "reviewed": True,
+        "ops": [{"op": "edit", "seq": 16, "level": 2, "hash": seq16, "role": "primary"}]}}}),
+        "utf-8")
+    assert structure(text_dir, out, "--catalogue", str(cat)) == 0
+    capsys.readouterr()
+    first = json.loads((out / "libro.sections.json").read_text("utf-8"))
+    new = tmp_path / "src" / "otra carpeta" / "Libro renombrado.pdf"
+    new.parent.mkdir()
+    os.replace(pdf, new)
+    dec = out / sd.DECISIONS
+
+    def inputs():
+        return (snapshot(tmp_path / "src") | snapshot(text_dir) | snapshot(cat)
+                | {dec: (sha(dec), os.stat(dec).st_mtime_ns)})
+
+    before = inputs()
+    hashed = []
+    real = catalogue.sha256
+    monkeypatch.setattr(catalogue, "sha256", lambda p: hashed.append(p) or real(p))
+    assert structure(text_dir, out, "--catalogue", str(cat)) == 0
+    stdout = capsys.readouterr().out
+    assert inputs() == before
+    assert hashed == [new]                         # only the file of the right size
+    assert f"moved: {pdf} -> {new}" in stdout and "not read" not in stdout
+    again = json.loads((out / "libro.sections.json").read_text("utf-8"))
+    for k in ("input", "pages", "metadata", "sections", "outline", "decisions",
+              "structure_confirmed"):
+        assert again[k] == first[k], k
+    assert again["input"] == str(pdf)              # the recorded path, as export.json has it
+    assert again["metadata"]["title"] == "Las vanguardias en la isla"
+    assert again["outline"]["reanchored"]
+    d = again["decisions"]
+    assert (d["applied"], d["stale"], d["unmatched"], again["structure_confirmed"]) == (
+        1, 0, 0, True)
+    log = json.loads((out / "structure.json").read_text("utf-8"))
+    assert log["entries"]["e" * 64]["moved"] == [str(pdf), str(new)] and log["errors"] == []
+
+
+def test_a_deleted_working_file_is_reported_noted_and_exits_2(text_dir, tmp_path, capsys):
+    pdf, cat = with_catalogue(tmp_path)
+    pdf.unlink()
+    out = tmp_path / "structure"
+    assert structure(text_dir, out, "--catalogue", str(cat)) == 2
+    stdout = capsys.readouterr().out
+    msg = f"working file not found ({pdf}): {NOT_READ}"
+    assert f"warning libro: {msg}" in stdout
+    data = json.loads((out / "libro.sections.json").read_text("utf-8"))
+    assert msg in data["notes"] and data["sections"] and not data["outline"]["confirmed"]
+    log = json.loads((out / "structure.json").read_text("utf-8"))
+    assert msg in log["entries"]["e" * 64]["notes"]
+    assert log["errors"] == [{"stem": "libro", "error": msg}]
+
+
+def test_an_edited_working_file_is_not_read(text_dir, tmp_path, capsys):
+    pdf, cat = with_catalogue(tmp_path)
+    data = pdf.read_bytes()
+    (tmp_path / "src" / "copia.pdf").write_bytes(data)
+    pdf.write_bytes(data[:-1] + b" ")              # same size, other bytes
+    out = tmp_path / "structure"
+    assert structure(text_dir, out, "--catalogue", str(cat)) == 2
+    stdout = capsys.readouterr().out
+    assert f"warning libro: working file changed since the export ({pdf}): {NOT_READ}" in stdout
+    assert "moved:" not in stdout
+
+
+def test_without_a_catalogue_a_renamed_file_is_not_looked_for(text_dir, tmp_path, monkeypatch,
+                                                              capsys):
+    from gpdf.pipeline import catalogue
+
+    pdf = tmp_path / "src" / "libro.pdf"
+    os.replace(pdf, pdf.with_name("renombrado.pdf"))
+    hashed = []
+    monkeypatch.setattr(catalogue, "sha256", lambda p: hashed.append(p))
+    out = tmp_path / "structure"
+    assert structure(text_dir, out) == 2
+    stdout = capsys.readouterr().out
+    assert hashed == []
+    assert "catalogue: none" in stdout
+    assert f"warning libro: working file not found ({pdf}): {NOT_READ}" in stdout
 
 
 def test_contents_lines_kept_in_the_text_are_a_contents_page_not_headings():
