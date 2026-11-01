@@ -61,6 +61,9 @@ SHORT_LINE = 15             # characters: a Tesseract line too short to judge by
 GIANT_BOX = 5.0             # x the body size and its own size: a box no text line has
 MARGIN_WORDS = 3
 MARGINALIA_WORDS = 12       # a Tesseract unit this short with mostly unknown words: marginalia
+PEN_THIN = 0.4              # x the page's line height: a fragment this flat is no printed line
+#                             (Cartucho's pen strokes 0.1-0.3; the flattest print in the
+#                             corpus, Schwartz's footnote fragments, 0.42)
 INDEX_SHARE = 0.4           # lines ending in a page number or with a dot leader
 INDEX_MIN_LINES = 6         # numbered lines (a title page with an ISSN and a year is not)
 LATE = 0.9                  # a two-column page in the last 10% of the file: an index
@@ -187,6 +190,7 @@ def read_pages(doc, selection, job, counts) -> tuple[list[Page], float]:
                 p.drop(ln, reason)
         if p.scan_layer:
             kept = scan_junk(p, kept, job["nodict"])
+            kept = pen_marks(p, kept, job["nodict"])
         kept, p.giants = tl.take_giants(kept, size)
         for g in p.giants:
             if not g.drop_cap:
@@ -222,6 +226,34 @@ def scan_junk(p: Page, fragments: list, nodict: bool) -> list:
         else:
             kept.append(ln)
     return kept
+
+
+def pen_marks(p: Page, fragments: list, nodict: bool) -> list:
+    """On a scan layer, before fragments on one baseline are joined: a reader's pen strokes
+    (Cartucho's underlining) that Tesseract read as text. Their boxes are far flatter than
+    print: < PEN_THIN x the page's line height (the character-weighted median height of its
+    fragments). The flat fragments are joined into rows among themselves, so a stroke on a
+    printed line's baseline is not joined into it, nor a printed fragment into the stroke's
+    row ("AS ADS se" took "el pa-"); a row that does not read as text
+    (cleanup.reads_as_text) is dropped as ``pen_mark``, except a row of numbers (a note
+    marker set small: Schwartz p. 111 "18"), left to the marker and page-number rules.
+    Never with ``nodict``: the test is a word list."""
+    if nodict or not fragments:
+        return fragments
+    heights = sorted((ln.height, ln.chars) for ln in fragments)
+    half, acc = sum(n for _, n in heights) / 2, 0
+    for height, n in heights:
+        acc += n
+        if acc >= half:
+            break
+    limit = PEN_THIN * height
+    gone = set()
+    for row in tl.merge_fragments([ln for ln in fragments if ln.height < limit]):
+        number = any(c.isdigit() for c in row.text) and not any(c.isalpha() for c in row.text)
+        if not number and not cleanup.reads_as_text([w.text for w in row.words], p.lang):
+            p.drop(row, "pen_mark")
+            gone.update(id(w) for w in row.words)
+    return [ln for ln in fragments if id(ln.words[0]) not in gone]
 
 
 # ---------------------------------------------------------------------------- labels, heads

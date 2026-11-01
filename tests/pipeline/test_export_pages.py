@@ -1048,3 +1048,95 @@ def test_speaker_label_starts_the_verse_unit(tmp_path):
     assert ("verse", "Ariel: Voy, voy. Sale.") in kinds        # a one-line speech between
     #                                                             verse speeches: verse too
     assert ("verse", "Próspero: Bien hecho, pajarillo\nMío. Conserva aún\nTu forma invisible.") in kinds
+
+
+# ---------------------------------------------------------------------------- pen marks
+THIN = 2.4                  # pt: a pen stroke's box, ~0.25 x a 10 pt line's (Cartucho 0.1-0.3)
+CHARS = 52                  # Courier 10 pt: a full line of the column, as one fragment
+
+
+def _full(ws, chars=CHARS):
+    """``ws`` spaced out to exactly ``chars`` characters (a justified Tesseract line: one
+    fragment, unlike Sheet.justify's word-by-word placing)."""
+    gaps = len(ws) - 1
+    extra = chars - len(" ".join(ws))
+    return "".join(w + (" " * (1 + extra // gaps + (k < extra % gaps)) if k < gaps else "")
+                   for k, w in enumerate(ws))
+
+
+def _pen_page(path, font="cour"):
+    """Cartucho p. 30: a reader's pen underlining that Tesseract read as rows of junk between
+    the printed lines, one on a printed line's own baseline, one after "perso-" (the hyphen
+    glued it on: "perso-A A E e EE"). Returns the paragraph's text and the junk."""
+    doc = pymupdf.open()
+    s = Sheet(doc, font=font)
+    rows = [words(3200 + k, 7) for k in range(7)]
+    rows[2] = rows[2][:6] + ["perso-"]
+    rows[3] = ["nal"] + rows[3][:6]
+    junk = {0: "E tm e AA o E RA E a pr pr PATITAS TAI PAYA ARAU A",
+            2: "A A E e EE", 3: "AOS e ra DAA A, LITAITEZ NS AAN A e rd 0 AD A",
+            4: "PITA a ti", 5: "HARÁ"}
+    for k, ws in enumerate(rows):
+        y = s.y
+        if k == len(rows) - 1:
+            s.line(" ".join(ws))
+        elif k == 0:
+            s.line(_full(ws, CHARS - 3), x=X0 + 18)
+        else:
+            s.line(_full(ws))
+        if k in junk:
+            s.text(X0 + 30, y + 5, junk[k], THIN)          # between this line and the next
+        if k == 1:
+            s.text(X0 + 120, y + 1, "COTIZA PA $ ni DEE A RIAA", THIN)    # on its baseline
+    save(doc, path)
+    text = " ".join(" ".join(ws) for ws in rows)
+    return text.replace("perso- nal", "personal"), list(junk.values()) + [
+        "COTIZA PA $ ni DEE A RIAA"]
+
+
+def test_pen_marks_between_lines_are_dropped_and_the_paragraph_joins(tmp_path, scan_font):
+    path = tmp_path / "pen.pdf"
+    text, junk = _pen_page(path)
+    records, rows, _, _, counts = run(path, scan=True)
+    assert [(r["kind"], r["text"]) for r in records] == [("prose", text)]
+    pen = [d["text"] for d in rows[0]["dropped"] if d["reason"] == "pen_mark"]
+    assert sorted(pen) == sorted(junk)
+    assert counts["dropped"]["pen_mark"] == len(junk)
+
+
+def test_pen_marks_only_on_scan_layers_and_with_the_word_lists(tmp_path, scan_font):
+    path = tmp_path / "pen.pdf"
+    _pen_page(path)
+    born = tmp_path / "born-digital.pdf"
+    _pen_page(born, font="tiro")
+    for path, kw in ((path, {"scan": True, "nodict": True}),     # no word lists
+                     (born, {})):                                 # born-digital
+        records, rows, *_ = run(path, **kw)
+        assert "PATITAS" in " ".join(texts(records))
+        assert not [d for d in rows[0]["dropped"] if d["reason"] == "pen_mark"]
+
+
+def test_short_real_lines_survive_among_pen_marks(tmp_path, scan_font):
+    path = tmp_path / "short.pdf"
+    doc = pymupdf.open()
+    s = Sheet(doc, font="cour")
+    for k in range(4):
+        s.line(" ".join(words(3300 + k, 7)))
+    real = ["Elías", "Él", "II", "FUSILADOS", "EN EL FUEGO",
+            "Tomás Urbina, Rodolfo Fierro, Elías Acosta, Pablo López",
+            "Tlaloc, Huitzilopochtli, Quetzalcóatl", "Tú me quieres blanca,",
+            "tú me quieres de espuma,", "ISBN 968-411-500-4",
+            "D. R. © 2000, Ediciones Era, S. A. de C. V."]
+    for t in real:
+        s.y += 8
+        s.line(t)
+        s.text(X0 + 20, s.y - 7, "A A E e EE", THIN)
+    s.text(X0, s.y + 6, "en la casa de mi madre", THIN)   # a flat row that reads: kept
+    s.text(X0 + 200, s.y + 14, "18", THIN)                # a note marker set small: kept
+    save(doc, path)
+    records, rows, *_ = run(path, scan=True)
+    allt = "\n".join(texts(records))
+    assert all(t in allt for t in real), allt
+    assert "en la casa de mi madre" in allt and "18" in allt
+    pen = [d["text"] for d in rows[0]["dropped"] if d["reason"] == "pen_mark"]
+    assert pen == ["A A E e EE"] * len(real)

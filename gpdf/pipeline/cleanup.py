@@ -631,6 +631,78 @@ def reported(text: str) -> list[str]:
     return [m.group() for m in _REPORTED.finditer(text)]
 
 
+# ---------------------------------------------------------------------------- pen marks
+PEN_SHORT_ZIPF = 5.2        # zipf in the page language: a two-letter word ("se" 7.1, "él" 5.8,
+#                             "ti" 5.5); wordfreq gives any two letters 3.2-5.0 ("rs" 3.5,
+#                             "pp" 5.0, "ii" 5.0), and two letters are most of a pen stroke
+PEN_WORDS = 0.5             # a row reads as text with more than this share of words ...
+PEN_MIN_WORDS = 2           # ... and at least this many (a lone "HARÁ", "Él": a pen tick)
+WORD, CAPS, JUNK, NEUTRAL, TEXT = "word", "caps", "junk", "neutral", "text"
+_PEN_PUNCT = ".,;:!?¡¿«»“”\"'‘’()[]—–-…"
+_PEN_NUMBER = re.compile(r"[\d.,/:–-]+")
+_PEN_WORD = re.compile(rf"{_L}+(?:[-'’]{_L}+)*")
+
+
+def pen_classes(tokens: list[str], lang: str | None) -> list[str]:
+    """Each token of a scan-layer row for the pen-mark rules (export.pen_marks):
+    WORD   a known word of >= 3 letters (quality.known), a two-letter word of >= PEN_SHORT_ZIPF
+           in the page language, a capitalised unknown word of >= 4 letters (a name:
+           "Urbina", "Huitzilopochtli"), a word broken at the line end ("perso-");
+    CAPS   an all-caps word the lists hold ("FUEGO", but also the pen's "PECERA", "COTIZA");
+    JUNK   a 1-2 letter fragment, an all-caps non-word, a digit/letter mix ("05M") or a
+           stray symbol ("$", "©", "==.");
+    NEUTRAL punctuation, a number or roman numeral, a one-letter word of the language ("y"),
+           an initial or abbreviation ("D.", "p.");
+    TEXT   an unknown lowercase word (an OCR misread: "rfuerto") or one with a stray mark
+           inside ("y.se"): neither word nor junk."""
+    singles = quality.ONE_LETTER_WORDS.get(lang, quality.ONE_LETTER_ANY)
+    out = []
+    for tok in tokens:
+        core = tok.strip(_PEN_PUNCT)
+        if not any(ch.isalnum() for ch in tok):
+            out.append(NEUTRAL if all(ch in _PEN_PUNCT for ch in tok) else JUNK)
+        elif not core or _PEN_NUMBER.fullmatch(core):
+            out.append(NEUTRAL)
+        elif tok.rstrip(_CLOSE)[-1:] in HYPHENS and _PEN_WORD.fullmatch(core):
+            out.append(WORD)
+        elif not _PEN_WORD.fullmatch(core):
+            letters = core.strip("0123456789")
+            out.append(TEXT if letters and not any(ch.isdigit() for ch in letters)
+                       and len(_PEN_WORD.findall(letters)) > 1 else JUNK)
+        elif len(core) == 1:
+            out.append(NEUTRAL if core in singles or roman(core) or tok.endswith(".")
+                       else JUNK)
+        elif core.isupper() and roman(core):
+            out.append(NEUTRAL)
+        else:
+            bare = core.replace("-", "").replace("'", "").replace("’", "")
+            if len(bare) == 2:
+                word = _z(bare.lower(), lang) >= PEN_SHORT_ZIPF
+            else:
+                word = quality.known(bare, lang)
+            if core.isupper():
+                out.append(CAPS if word else JUNK)
+            elif word or (len(bare) >= 4 and bare[0].isupper() and bare[1:].islower()):
+                out.append(WORD)
+            else:
+                out.append(JUNK if len(bare) <= 2 else TEXT)
+    return out
+
+
+def reads_as_text(tokens: list[str], lang: str | None) -> bool:
+    """Whether a row reads as text: >= PEN_MIN_WORDS words, more than PEN_WORDS of its words
+    and junk (pen_classes). An all-caps word counts as a word only in a row of capitals
+    without junk (a title: "EN EL FUEGO"; the word lists hold the pen's "AAA", "TOTO",
+    "PECERA"), else as junk. Only ever asked of rows whose boxes are already far flatter
+    than print (export.pen_marks): a lone word there is a pen tick."""
+    cls = pen_classes(tokens, lang)
+    if CAPS in cls and WORD not in cls and JUNK not in cls:
+        return cls.count(CAPS) >= PEN_MIN_WORDS
+    words = cls.count(WORD)
+    junk = cls.count(JUNK) + cls.count(CAPS)
+    return words >= PEN_MIN_WORDS and words > PEN_WORDS * (words + junk)
+
+
 def artefacts(text: str) -> tuple[str, dict, list[str]]:
     """Unruh's pencil underlines read into the text: a leading "_ "/"~ "/"| " or trailing
     " _"/" ~"/" |" mark dropped, "_" between two letters a space ("may_be"). Cases such as

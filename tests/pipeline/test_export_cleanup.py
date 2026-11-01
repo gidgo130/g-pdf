@@ -319,3 +319,30 @@ def test_unruh_artefacts():
     assert reported == ["also-a-protagonist"]
     text, _, reported = c.artefacts("as.a matter of fact language—when spoken")
     assert text == "as.a matter of fact language—when spoken" and reported == ["as.a"]
+
+
+# ---------------------------------------------------------------------------- pen marks
+@pytest.mark.parametrize("row", [
+    # Cartucho: a reader's pen underlining read by Tesseract (flat rows between the lines)
+    "E tm e AA o E RA E a pr pr PATITAS TAI PAYA ARAU A", "COTIZA PA $ ni DEE A RIAA",
+    "LISA e IVA ONIS ) ACIAECTI T 0 HDANOSIAS DAN AA ALTAS PECERA DTU TA e",
+    "4 lada d+, o A IATA Ma de, ..", "PITA a ti", "rs ant r A", "HARÁ", "e", "Ad Lt",
+    "Él"])                                   # Schwartz p. 28: a pen tick in the margin
+def test_a_pen_row_does_not_read_as_text(row):
+    assert not c.reads_as_text(row.split(), "es")
+
+
+@pytest.mark.parametrize("row", [
+    "en la casa de mi madre", "Tomás Urbina, Rodolfo Fierro", "EN EL FUEGO",
+    "HOMBRES DEL NORTE", "Janeiro, Gernasa, 1974, p. Xv:", "y el rifle de Villa"])
+def test_a_row_of_words_reads_as_text(row):
+    assert c.reads_as_text(row.split(), "es")
+
+
+def test_pen_classes():
+    W, J, N, T = c.WORD, c.JUNK, c.NEUTRAL, c.TEXT
+    row = "Campobello quiere mostrar las pasiones perso- A A E e EE".split()
+    assert c.pen_classes(row, "es") == [W, W, W, W, W, W, J, J, J, N, J]
+    row = "D. R. © 2000, Ediciones Era, II y rfuerto 05M ==. se ti pp".split()
+    assert c.pen_classes(row, "es") == [N, N, J, N, W, W, N, N, T, J, J, W, W, J]
+    assert c.pen_classes(["EN", "EL", "FUEGO", "PATITAS"], "es") == [c.CAPS] * 4
