@@ -30,3 +30,6 @@ tessdata/
 # Personal working notes (kept in the claude.ai G-PDF Project instead)
 HANDOFF.md
 REVIEW_PROMPT.md
+
+# Files saved by Claude outside the repo workflow
+Claude outputs/
