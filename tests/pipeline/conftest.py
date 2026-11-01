@@ -4,6 +4,16 @@
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def no_default_catalogue(monkeypatch, tmp_path):
+    """structure and handoff never read the owner's private/book-prep/catalogue."""
+    try:
+        from gpdf.pipeline import catalogue
+    except ImportError:                     # no numpy: the tests that need it skip
+        return
+    monkeypatch.setattr(catalogue, "DEFAULT_FOLDER", tmp_path / "no-catalogue")
+
+
 @pytest.fixture(scope="session")
 def synth():
     pytest.importorskip("numpy")

@@ -37,7 +37,6 @@ _MAJOR = re.compile(r"^gpdf-handoff/1(\.\d+)?$")
 SUFFIX = ".gpdf.jsonl"
 INDEX = "handoff.json"
 DEFAULT_OUT = Path("private/book-prep/handoff")
-DEFAULT_CATALOGUE = Path("private/book-prep/catalogue")
 _NAME = re.compile(r"^[0-9a-f]{64}" + re.escape(SUFFIX) + "$")
 
 
@@ -270,9 +269,7 @@ def plan(structure, to, text=None, cat=None) -> tuple[Path, dict, dict, Path | N
         if str(src) and catalogue.same_path(to, src):
             raise HandoffError(f"the handoff folder {to} holds a working file "
                                f"({rec.get('input')}); put it elsewhere")
-    if cat is None and DEFAULT_CATALOGUE.is_dir():
-        cat = DEFAULT_CATALOGUE
-    return text, log, export, Path(cat) if cat else None
+    return text, log, export, catalogue.default_folder(cat)
 
 
 def source_sha256(id_: str, rec: dict) -> str:
@@ -290,7 +287,6 @@ def run(structure, to, text=None, cat=None) -> Result:
         known = catalogue.load(cat) if cat else catalogue.empty()
     except catalogue.CatalogueError as e:
         raise HandoffError(str(e)) from None
-    roots = [r["path"] for r in known["roots"]]
     items = sorted(export.get("entries", {}).items(),
                    key=lambda kv: kv[1].get("stem", "").lower())
     sources: dict[str, list[str]] = {}
@@ -313,7 +309,7 @@ def run(structure, to, text=None, cat=None) -> Result:
         current.add(want)
         try:
             res.written.append(_one(structure, text, to, stem, rec, source_sha256(id_, rec),
-                                    roots, _size(known["files"].get(id_), id_, want)))
+                                    known, id_))
         except HandoffError as e:
             res.skipped.append((stem, str(e)))
     for p in sorted(to.glob(f"*{SUFFIX}")):
@@ -323,17 +319,8 @@ def run(structure, to, text=None, cat=None) -> Result:
     return res
 
 
-def _size(entry: dict | None, id_: str, want: str) -> int | None:
-    """The size the catalogue recorded for the file whose sha256 is ``want``: the entry's
-    source or its working file (None: unknown, so a moved file is not searched for)."""
-    wf = (entry or {}).get("working_file") or {}
-    if entry and id_ == want:
-        return entry.get("size")
-    return wf.get("size") if wf.get("sha256") == want else None
-
-
 def _one(structure: Path, text: Path, to: Path, stem: str, rec: dict, source: str,
-         roots=(), size=None) -> Written:
+         known: dict, id_: str) -> Written:
     sec_path = structure / f"{stem}.sections.json"
     if not sec_path.is_file():
         raise HandoffError(f"no {sec_path.name}: run gpdf-cli structure")
@@ -349,8 +336,7 @@ def _one(structure: Path, text: Path, to: Path, stem: str, rec: dict, source: st
         raise HandoffError("the sections file is for another version of the working file: run "
                            "gpdf-cli structure again")
     src = Path(str(rec.get("input", "")))
-    found = catalogue.locate_working_file(src, want, [*roots, src.parent] if src.name else
-                                          roots, size)
+    found = catalogue.locate_export_entry(known, id_, rec)
     if found.status == "missing":
         raise HandoffError(f"the working file {src} is missing")
     if found.status == "changed":

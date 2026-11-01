@@ -34,6 +34,7 @@ CATALOGUE, DECISIONS, SHEET, CACHE, APPLIED_LOG = (
     "applied.json")
 PRESENT, MISSING, ERROR = "present", "missing", "error"
 CONFIRMED, RECONFIRM, PENDING, APPLIED = "confirmed", "needs re-confirm", "pending", "applied"
+DEFAULT_FOLDER = Path("private/book-prep/catalogue")   # structure's and handoff's default
 
 
 class CatalogueError(Exception):
@@ -107,6 +108,33 @@ def locate_working_file(recorded, want, folders, size=None) -> Located:
         return Located(None, "missing")
     hits.sort(key=lambda p: (str(p).lower(), str(p)))
     return Located(hits[0], "moved", hits[1:])
+
+
+def default_folder(cat) -> Path | None:
+    """``cat``, else DEFAULT_FOLDER if it exists (None: no catalogue)."""
+    if cat is None and DEFAULT_FOLDER.is_dir():
+        cat = DEFAULT_FOLDER
+    return Path(cat) if cat else None
+
+
+def recorded_size(entry: dict | None, id_: str, want: str) -> int | None:
+    """The size the catalogue recorded for the file whose sha256 is ``want``: the entry's
+    source or its working file (None: unknown, so a moved file is not searched for)."""
+    wf = (entry or {}).get("working_file") or {}
+    if entry and id_ == want:
+        return entry.get("size")
+    return wf.get("size") if wf.get("sha256") == want else None
+
+
+def locate_export_entry(cat: dict, id_: str, rec: dict) -> Located:
+    """The working file of export.json's entry ``id_`` (``rec``: its recorded ``input``
+    and ``input_sha256``), by locate_working_file under the catalogue ``cat``'s roots and
+    the recorded file's folder, among files of the size ``cat`` recorded for it."""
+    src = Path(str(rec.get("input", "")))
+    roots = [r["path"] for r in cat["roots"]]
+    want = rec.get("input_sha256", "")
+    return locate_working_file(src, want, [*roots, src.parent] if src.name else roots,
+                               recorded_size(cat["files"].get(id_), id_, want))
 
 
 # ---------------------------------------------------------------------------- JSON

@@ -19,11 +19,6 @@ from .test_sections import text_dir  # noqa: F401
 from .test_structure_decisions import h
 
 
-@pytest.fixture(autouse=True)
-def no_default_catalogue(monkeypatch, tmp_path):
-    monkeypatch.setattr(ho, "DEFAULT_CATALOGUE", tmp_path / "no-catalogue")
-
-
 def sha(path):
     return hashlib.sha256(open(path, "rb").read()).hexdigest()
 
