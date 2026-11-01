@@ -1,4 +1,4 @@
-# The g-pdf handoff format (`gpdf-handoff/1`)
+# The g-pdf handoff format (`gpdf-handoff/1.1`)
 
 `gpdf-cli handoff` writes one file per prepared book or article for the search
 app to read. Each file holds the text of one PDF (or `.txt`), divided into
@@ -15,24 +15,36 @@ OUTDIR/handoff.json            index of the files written by the last run
 - `<sha256>` is the SHA-256 (lowercase hex) of the exact PDF or `.txt` file the
   owner uploads to the search app: the working file the text was exported
   from. Use it to match an upload to its handoff file.
+- `source_sha256` (in each file's `file` line and in `handoff.json`) is the
+  SHA-256 of the file g-pdf started from, before any splitting, OCR or text
+  rebuild. It equals `sha256` when the working file is the original used as
+  is. Use it to recognise an original whose processed version has its own
+  handoff file (for example to hide the original and show only the processed
+  version). Among the files listed in `handoff.json` `files`, no two share a
+  `source_sha256`.
 - Files are UTF-8 JSON Lines: one JSON object per line, `\n` line ends.
 - Files are replaced whole (written to a temporary file, then renamed), so a
   reader never sees half a file.
 - g-pdf never deletes anything in OUTDIR. When a working file changes, its new
   hash gets a new file. The old file stays until the owner removes it, and
   `handoff.json` lists it under `not_current`.
+- A handoff file is rewritten only when its content changes. Its `made` (in
+  the `file` line and in `handoff.json`) is the time the content last
+  changed, so a reader can rebuild exactly the files whose `made` moved. A
+  run that changes nothing leaves the file and its `made` as they were.
 
 ## `handoff.json`
 
 ```json
 {
- "format": "gpdf-handoff/1",
+ "format": "gpdf-handoff/1.1",
  "made_with": "g-pdf 0.2.0",
  "made": "2026-10-22T16:05:11-05:00",
  "files": {
   "3f2a…c9": {
    "file": "3f2a…c9.gpdf.jsonl",
    "file_name": "ensayos-de-prueba.pdf",
+   "source_sha256": "3f2a…c9",
    "entry_stem": "ensayos-de-prueba",
    "title": "Ensayos de prueba",
    "counts": {"sections": 4, "paras": 8, "kinds": {"heading": 3, "prose": 2, "note": 1, "quote": 1, "verse": 1},
@@ -63,8 +75,9 @@ document order, then one `para` line per unit of text in reading order.
 | field | type | meaning |
 | --- | --- | --- |
 | `type` | `"file"` | |
-| `schema` | `"gpdf-handoff/1"` | format version; a reader should refuse others |
+| `schema` | `"gpdf-handoff/1.1"` | format version `<major>.<minor>`; a reader accepts any version with the major it knows (`gpdf-handoff/1`, `1.1`, …) and refuses another major. `gpdf-handoff/1` (no minor) is version 1.0 |
 | `sha256` | string | hash of the working file (also the file name) |
+| `source_sha256` | string | hash of the file g-pdf started from (the original before splitting, OCR or rebuild); equals `sha256` when the original was used as is. New in 1.1; absent in 1.0 files, where it equals `sha256` |
 | `file_name` | string | the working file's name |
 | `pages` | int or null | PDF page count; null for a `.txt` |
 | `title`, `author`, `year`, `publisher` | string or null | the book's metadata (`author` may be an editor) |
@@ -72,7 +85,7 @@ document order, then one `para` line per unit of text in reading order.
 | `lang` | string or null | main language (ISO 639-1, e.g. `"es"`) |
 | `structure_confirmed` | bool | the owner ticked "Structure reviewed" for this entry in the structure sheet, no decision is stale or unmatched, and no section is more than one level below its parent. Decisions alone (for example a loaded draft) do not confirm it |
 | `made_with` | string | e.g. `"g-pdf 0.2.0"` |
-| `made` | string | ISO 8601 time the file was written |
+| `made` | string | ISO 8601 time the file's content last changed (unchanged when a run rewrites nothing) |
 | `apparatus_pages` | list of int | PDF pages of contents and index pages, which are not in the text |
 
 ### `section`
@@ -154,7 +167,7 @@ An essay collection with a front part and two essays; the second holds a
 quoted poem as a subsection. Each object is on one line, as in the file.
 
 ```json
-{"type": "file", "schema": "gpdf-handoff/1", "sha256": "3f2a…c9", "file_name": "ensayos-de-prueba.pdf", "pages": 12, "title": "Ensayos de prueba", "author": "Editora Ejemplo", "year": "1999", "publisher": "Editorial Ficticia", "metadata_confirmed": true, "lang": "es", "structure_confirmed": true, "made_with": "g-pdf 0.2.0", "made": "2026-10-22T16:05:11-05:00", "apparatus_pages": [2]}
+{"type": "file", "schema": "gpdf-handoff/1.1", "sha256": "3f2a…c9", "source_sha256": "3f2a…c9", "file_name": "ensayos-de-prueba.pdf", "pages": 12, "title": "Ensayos de prueba", "author": "Editora Ejemplo", "year": "1999", "publisher": "Editorial Ficticia", "metadata_confirmed": true, "lang": "es", "structure_confirmed": true, "made_with": "g-pdf 0.2.0", "made": "2026-10-22T16:05:11-05:00", "apparatus_pages": [2]}
 {"type": "section", "id": "s001", "parent": null, "level": 1, "title": "Front matter", "author": null, "role": "front", "first": 1, "last": 1, "pdf_pages": [1, 1], "printed": null, "lang": "es", "confidence": "high"}
 {"type": "section", "id": "s002", "parent": null, "level": 1, "title": "Ensayo uno", "author": "Autora Uno", "role": "criticism", "first": 2, "last": 4, "pdf_pages": [3, 5], "printed": ["1", "3"], "lang": "es", "confidence": "high"}
 {"type": "section", "id": "s003", "parent": null, "level": 1, "title": "Ensayo dos", "author": "Autor Dos", "role": "criticism", "first": 5, "last": 8, "pdf_pages": [6, 9], "printed": ["4", "7"], "lang": "es", "confidence": "medium"}
@@ -174,6 +187,9 @@ even though `s003` (criticism) also covers it.
 
 ## Changes to the format
 
-A change that breaks readers gets a new `schema` (`gpdf-handoff/2`). New
-optional fields may be added to `gpdf-handoff/1`: readers should ignore fields
-they do not know.
+A change that breaks readers gets a new major version (`gpdf-handoff/2`). New
+optional fields get a new minor version (`gpdf-handoff/1.1`, `1.2`, …): readers
+of the same major ignore fields they do not know.
+
+- 1.1 (2026-11): `source_sha256` in the `file` line and in `handoff.json`;
+  a handoff file and its `made` change only when its content changes.
