@@ -61,6 +61,8 @@ def test_a_symbol_both_bold_and_not_on_one_page():
     assert flags.bold_mixed(pg) == ["x"]
     pg = page([EQ(r"\boldsymbol{\xi} + \xi_1", 0.2)])
     assert flags.bold_mixed(pg) == []
+    pg = page([EQ(r"\mathbf{x} = \mathbf{0}", 0.2), EQ(r"x_1 = 0", 0.3)])
+    assert flags.bold_mixed(pg) == []                 # the zero vector against a scalar 0
 
 
 # ---------------------------------------------------------------- 3. stacked operators

@@ -213,7 +213,8 @@ def bold_mixed(page: Page) -> list[str]:
             occ += _symbols(L.tokens(s))
     bold = {(s, sub) for s, sub, b in occ if b}
     plain = {(s, sub) for s, sub, b in occ if not b}
-    return sorted(s + sub for s, sub in bold & plain)
+    # a bare digit (the zero vector against a scalar 0) is on every page: not a signal
+    return sorted(s + sub for s, sub in bold & plain if not (s.isdigit() and not sub))
 
 
 # ---------------------------------------------------------------- 3: stacked operators

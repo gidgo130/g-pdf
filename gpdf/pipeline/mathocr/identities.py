@@ -68,7 +68,8 @@ HINTS = [("density", "density"), ("distribution function", "cdf"), ("survival", 
          ("hazard", "hazard"), ("moment generating", "mgf"), ("characteristic function", "cf"),
          ("probability generating", "pgf")]
 LHS_FN = re.compile(r"^(?P<name>\\bar\{F\}|\\bar F|\\overline\{F\}|\\[A-Za-z]+|[A-Za-z])\s*"
-                    r"(?:_(?:\{(?P<sub>[^{}]*)\}|(?P<sub1>[A-Za-z0-9])))?\s*\((?P<args>[^()]*)\)$")
+                    r"(?:_(?:\{(?P<sub>(?:[^{}]|\{[^{}]*\})*)\}|(?P<sub1>[A-Za-z0-9])))?"
+                    r"\s*\((?P<args>[^()]*)\)$")
 PR_RE = re.compile(r"^\\Pr\s*[\[(]\s*(?P<inner>.*)[\])]$")
 E_RE = re.compile(r"^E\s*[\[(]\s*(?P<inner>.*?)\s*[\])]$")
 REL_VAR = re.compile(r"(>|\\ge|\\geq|<|\\le|\\leq)\s*([A-Za-z](?:_\{?[A-Za-z0-9]+\}?)?)")
@@ -142,7 +143,9 @@ _CLEAN = [
     (re.compile(r"\\(hspace|vspace)\*?\s*\{[^{}]*\}"), " "),
     (re.compile(r"\\mathrm\{e\}"), "e"),
     (re.compile(r"\\mathrm\{d\}"), "d"),
-    (re.compile(r"\\operatorname\*?\{exp\}"), r"\\exp"),
+    (re.compile(r"\\operatorname\s*\*?\s*\{\s*exp\s*\}"), r"\\exp"),
+    (re.compile(r"\\operatorname\s*\*?\s*\{\s*P\s*r\s*\}"), r"\\Pr"),
+    (re.compile(r"\s*([_^{}])\s*"), r"\1"),          # the engine's "X _ {1}" is X_{1}
 ]
 _INDICATOR = [
     re.compile(r"\\(mathbf|mathbb|boldsymbol|pmb|bm)\{1\}(?:_\{[^{}]*\}|\([^()]*\))?"),
@@ -222,7 +225,8 @@ def equations(latex: str) -> list[tuple[str, str]]:
 # ---------------------------------------------------------------- classification
 
 def _canon(name: str) -> str:
-    return name.replace("{", "").replace("}", "").replace(" ", "")
+    """x_{1} / x _ {1} / \\theta -> x_1 / theta (sympy's names, without braces)."""
+    return name.replace("{", "").replace("}", "").replace(" ", "").replace("\\", "")
 
 
 def classify(lhs: str, before: str = "") -> tuple[str | None, list[str], str]:

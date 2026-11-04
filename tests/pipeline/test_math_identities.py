@@ -53,9 +53,22 @@ def test_preprocess_splits_aligned_rows_and_equality_chains():
     (r"\psi(t)", "the moment generating function is", "mgf", ["t"]),
     (r"\psi(x)", "", None, []),
     (r"L_4(h; R)", "", None, []),
+    # the engine's spacing
+    (r"\bar {F} _ {X _ {1}, X _ {2}} (x _ {1}, x _ {2})", "", "survival", ["x_1", "x_2"]),
+    (r"M _ {X _ {1}, X _ {2}} (t _ {1}, t _ {2})", "", "mgf", ["t_1", "t_2"]),
+    (r"\operatorname * {P r} [ X > x ]", "", "survival", ["x"]),
+    (r"p _ {\Theta} (\theta)", "", "density", ["theta"]),
 ])
 def test_classification_by_the_left_side_or_the_text_before(lhs, before, kind, variables):
     assert I.classify(lhs, before)[:2] == (kind, variables)
+
+
+def test_greek_variables_and_spaced_latex_are_checked():
+    r = check(r"p _ {\Theta} (\theta) = \lambda e ^ {- \lambda \theta}, \qquad \theta > 0")
+    assert (r.kind, r.status, r.support) == ("density", "passed", "(0,inf)")
+    r = check(r"M _ {X _ {1}, X _ {2}} (t _ {1}, t _ {2}) = \{1 - 2 t _ {1} - 2 t _ {2} - 2 t _ {1} t _ {2} \} ^ {- \alpha}")
+    assert r.kind == "mgf" and r.status in ("passed", "failed", "inconclusive")
+    assert [c.identity for c in r.checks] == ["M(0) = 1", "H(0) - g g^T is PSD"]
 
 
 # ---------------------------------------------------------------- the checks
