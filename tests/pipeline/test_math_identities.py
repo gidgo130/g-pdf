@@ -208,6 +208,14 @@ def test_timeout_skips_the_formula(monkeypatch):
     assert (r.status, r.reason) == ("skipped", "timeout")
 
 
+def test_the_deadline_stops_a_formula_inside_its_integrals(monkeypatch):
+    monkeypatch.setattr(I, "TIME_LIMIT", 0.002)
+    t0 = __import__("time").monotonic()
+    r = check(r"f(x) = \frac{1}{\Gamma(\alpha)} \beta^{\alpha} x^{\alpha - 1} e^{-\beta x}")
+    assert (r.status, r.reason) == ("skipped", "timeout")
+    assert __import__("time").monotonic() - t0 < 1.0        # it did not finish the work
+
+
 def test_counts_over_a_page():
     ctx = I.Context()
     results = [check(r"f(x) = \lambda e^{-\lambda x}", ctx=ctx),

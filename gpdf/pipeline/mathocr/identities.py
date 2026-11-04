@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import random
 import re
-import threading
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -77,6 +77,11 @@ T_VAR = re.compile(r"(?<![A-Za-z\\])t(?:_\{?(\d+)\}?)?")
 RELATION = re.compile(r"<|>|\\le\b|\\ge\b|\\leq\b|\\geq\b|\\ne\b|\\neq\b|\\in\b")
 NOT_IDENTITY = re.compile(r"\\(doteq|approx|propto|equiv|sim|cong)\b")
 UNSUPPORTED = re.compile(r"\\begin\{(cases|[pbvB]?matrix|smallmatrix)\}|\\text\b|\\mathrm\{(?!e\}|d\})")
+
+
+class _Timeout(BaseException):
+    """The display's time budget is spent (not an Exception: the numeric error handlers
+    must not swallow it)."""
 
 
 @dataclass
@@ -367,16 +372,24 @@ def _status(outcomes: list) -> str:
 class _Checker:
     """Runs the checks of one expression at every draw; collects Check records."""
 
-    def __init__(self, e: _Expr, ctx: Context):
-        self.e, self.ctx = e, ctx
+    def __init__(self, e: _Expr, ctx: Context, deadline: float):
+        self.e, self.ctx, self.deadline = e, ctx, deadline
         self.checks: list[Check] = []
         self.supports: Counter = Counter()
 
+    def tick(self) -> None:
+        """Checked before every draw and at every function evaluation (so inside the
+        quadratures): past the deadline the display is abandoned."""
+        if time.monotonic() > self.deadline:
+            raise _Timeout()
+
     def params(self, k: int, extra=()) -> dict:
+        self.tick()
         names = sorted(set(self.e.params) | set(extra))
         return {n: _draw(n, k) for n in names}
 
     def call(self, e: _Expr, pvals: dict, *xs):
+        self.tick()
         return _real(e.fn(*xs, *[pvals[p] for p in e.params]))
 
     def record(self, identity: str, outcomes: list, details: list[dict]) -> str:
@@ -637,28 +650,22 @@ def check_display(latex: str, before: str = "", ctx: Context | None = None) -> R
             exprs.append(_Expr(kind, sub, variables, parsed[0], parsed[1], lhs))
     if not exprs:
         return Result(kind, "skipped", reason="does not parse")
-    done = {"checks": [], "supports": Counter(), "finished": False}
-
-    def work():
+    mpmath.mp.dps = 15
+    deadline = time.monotonic() + TIME_LIMIT
+    checks, supports = [], Counter()
+    try:
         _slow_start()
         for e in exprs:
-            c = _Checker(e, ctx)
+            c = _Checker(e, ctx, deadline)
             c.run()
-            done["checks"] += c.checks
-            done["supports"] += c.supports
-        done["finished"] = True
-
-    mpmath.mp.dps = 15
-    th = threading.Thread(target=work, daemon=True)
-    th.start()
-    th.join(TIME_LIMIT)
-    if not done["finished"]:
+            checks += c.checks
+            supports += c.supports
+    except _Timeout:
         return Result(kind, "skipped", reason="timeout")
     for e in exprs:
         ctx.exprs.append(e)
-    checks = done["checks"]
     status = _overall(checks) if checks else "skipped"
-    support = done["supports"].most_common(1)[0][0] if done["supports"] else None
+    support = supports.most_common(1)[0][0] if supports else None
     return Result(kind, status, checks, support, None if checks else "nothing to check",
                   NOTE if status == "failed" else None)
 
