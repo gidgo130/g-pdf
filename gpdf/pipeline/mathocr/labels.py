@@ -195,21 +195,22 @@ def fit(cands: dict[int, list[tuple]]) -> Fit:
         glob = Counter()
         for p in rng:
             glob.update(votes[p])
+        need = min(MIN_SUPPORT, sum(1 for p in rng if votes[p]))   # a lone page: itself
         accepted, key = {}, {}
         for p in rng:
-            own = [(support[p][k], k) for k in votes[p] if support[p][k] >= MIN_SUPPORT]
+            own = [(support[p][k], k) for k in votes[p] if support[p][k] >= need]
             if own:
                 accepted[p] = key[p] = max(own)[1]
         for p in rng:
             if p in accepted:
                 continue
             near = [(n, -min(abs(q - p) for q in rng if accepted.get(q) == k), k)
-                    for k, n in support[p].items() if n >= MIN_SUPPORT and any(
+                    for k, n in support[p].items() if n >= need and any(
                         accepted.get(q) == k for q in rng)]
             if near:
                 key[p] = max(near)[2]
             else:
-                best = [(n, k) for k, n in glob.items() if n >= MIN_SUPPORT]
+                best = [(n, k) for k, n in glob.items() if n >= need]
                 key[p] = max(best)[1] if best else None
             if votes[p]:
                 for k in sorted(votes[p]):

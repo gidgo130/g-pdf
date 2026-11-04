@@ -30,6 +30,10 @@
     gpdf-cli manual-check --extracts DIR --pages DIR --config FILE --report DIR [FILE ...]
                                                     # quotes, numbers, table rows and page
                                                     # tags of the extracts against the pages
+    gpdf-cli math-export BOOK.pdf --out DIR [--pages RANGE] [--mineru PATH]
+                                                    # per-page Markdown + LaTeX (atlas format),
+                                                    # review queue, identity checks (MinerU,
+                                                    # installed separately; see docs/math-export.md)
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
 reviewed (or spreads could not be split), OCR failed on some pages, the survey could
@@ -287,6 +291,41 @@ def build_parser() -> argparse.ArgumentParser:
                     help="folder for check.json and check.md (not inside --extracts)")
     mc.add_argument("files", metavar="FILE", nargs="*",
                     help="only these extracts (names in --extracts, or paths)")
+    me = sub.add_parser("math-export", help="a math book or paper as per-page Markdown + LaTeX",
+                        description="Run MinerU (installed separately, both tiers) over BOOK.pdf "
+                                    "or a page range of it and write OUTDIR/<stem>/: "
+                                    "pages/pNNN.md + pNNN.flags.json in the atlas page format, "
+                                    "text.md, review.jsonl (the formulas worth a second look, "
+                                    "with crops), meta.json and run.json. Raw engine output is "
+                                    "cached per page under OUTDIR/<stem>/cache, so a stopped "
+                                    "run resumes. The identity checks need the mathcheck "
+                                    "extra and are skipped without it.")
+    me.add_argument("input", metavar="BOOK", type=Path, help="the PDF")
+    me.add_argument("--out", metavar="OUTDIR", type=Path, required=True,
+                    help="folder for the output (created if missing)")
+    me.add_argument("--pages", metavar="RANGE",
+                    help="only these file pages (1-based), e.g. 63-81,123-139")
+    me.add_argument("--mineru", metavar="PATH",
+                    help="the mineru-kit executable or its venv folder (default: $GPDF_MINERU, "
+                         "then PATH)")
+    me.add_argument("--mineru-home", metavar="DIR",
+                    help="MinerU's model folder's parent (default: $MINERU_HOME or ~/.mineru)")
+    me.add_argument("--allow-unpinned", action="store_true",
+                    help="run even when the engine version or its model files differ from "
+                         "the pins (recorded in meta.json)")
+    me.add_argument("--dpi", type=int, default=300, help="page render for the engine (default 300)")
+    me.add_argument("--crop-dpi", type=int, default=300, help="review crops (default 300)")
+    me.add_argument("--check-identities", dest="identities", action="store_true", default=None,
+                    help="require the identity checks (error without the mathcheck extra)")
+    me.add_argument("--no-check-identities", dest="identities", action="store_false",
+                    help="skip the identity checks")
+    me.add_argument("--inline", choices=("per-page", "per-span"), default="per-page",
+                    help="inline-math flags as one item per page (default) or per span")
+    me.add_argument("--cache", metavar="DIR", type=Path,
+                    help="engine output cache (default OUTDIR/<stem>/cache)")
+    me.add_argument("--tesseract", metavar="PATH",
+                    help="Tesseract for page numbers the engine and the PDF text lack "
+                         "(default: $GPDF_TESSERACT, PATH, then the Windows install folder)")
     return p
 
 
@@ -317,6 +356,8 @@ def main(argv: list[str] | None = None) -> int:
         return _manual_pages_main(args, parser)
     if args.command == "manual-check":
         return _manual_check_main(args)
+    if args.command == "math-export":
+        return _math_export_main(args, parser)
     if args.sheet_only:
         for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
                          ("--report", args.report), ("--accept-flagged", args.accept_flagged)):
@@ -695,6 +736,23 @@ def _manual_check_main(args) -> int:
         return EXIT_ERROR
     print(manual_check.report(res))
     return EXIT_ERROR if res.failed else EXIT_OK
+
+
+def _math_export_main(args, parser) -> int:
+    from gpdf.pipeline.mathocr import engine, run
+
+    if args.dpi < 72 or args.crop_dpi < 72:
+        parser.error("--dpi and --crop-dpi must be at least 72")
+    opts = run.Options(args.input, args.out, args.pages, args.mineru, args.mineru_home, args.dpi,
+                       args.allow_unpinned, args.identities, args.tesseract, args.cache,
+                       args.inline == "per-page", args.crop_dpi)
+    try:
+        summary = run.run(opts, progress=print)
+    except (run.MathExportError, engine.EngineError, OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    print(run.report(summary))
+    return EXIT_OK
 
 
 def _run_exports(export, todo, out, jobs):

@@ -117,6 +117,16 @@ def test_roman_front_matter_and_a_number_inside_the_running_head():
     assert fit.steps == []                      # a change of style is not a step
 
 
+def test_a_lone_page_keeps_its_number_but_two_disagreeing_pages_keep_none():
+    fit = labels.fit({44: [("a", 431, None)]})
+    assert fit.labels[44].printed == "431" and fit.rejected == []
+    assert fit.runs == [{"pages": [44, 44], "printed": ["431", "431"], "offset": 387,
+                         "style": "a", "found": 1}]
+    fit = labels.fit({44: [("a", 431, None)], 45: [("a", 9, None)]})
+    assert fit.labels[44].printed is None and fit.labels[45].printed is None
+    assert len(fit.rejected) == 2 and fit.runs == []
+
+
 def test_a_page_with_nothing_to_go_on_gets_no_label():
     fit = labels.fit({1: [], 2: []})
     assert fit.labels[1].printed is None and fit.labels[1].inferred is None
