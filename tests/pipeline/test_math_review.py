@@ -1,0 +1,148 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""gpdf-cli math-apply-review on a hand-made export folder: accept, replace, flag, a
+stale decision, an unknown id, idempotence, untouched pages, grouped inline spans,
+text.md rebuilt, dry run, bad decisions."""
+
+import json
+
+import pytest
+
+from gpdf import cli
+from gpdf.pipeline.mathocr import review
+
+P1 = ('<!-- page printed="54" file="1" -->\n\nSome prose with \\(a_1\\) inline.\n\n'
+      "$$\nx^2 = 1\n\\tag{3.1}\n$$\n\n$$\n\\left( y \\right) = 2\n$$\n")
+P2 = ('<!-- page printed="55" file="2" -->\n\nMore \\(u\\) and \\(v\\) here.\n\n$$\nz = 3\n$$\n')
+P3 = '<!-- page printed="56" file="3" -->\n\nUntouched.\n'
+ITEMS = [
+    {"id": "p001-d01", "file": 1, "printed": "54", "kind": "disagree", "reasons": ["tiers disagree"],
+     "tag": "3.1", "latex_primary": "x^2 = 1", "latex_second": "x^3 = 1", "crop": "crops/p001-d01.png"},
+    {"id": "p001-d02", "file": 1, "printed": "54", "kind": "syntax", "reasons": ["x"],
+     "tag": None, "latex_primary": "\\left( y \\right) = 2", "latex_second": None, "crop": None},
+    {"id": "p001-i01", "file": 1, "printed": "54", "kind": "inline", "reasons": ["x"],
+     "tag": None, "latex_primary": "a_1", "latex_second": "a_2", "crop": None},
+    {"id": "p002-inline", "file": 2, "printed": "55", "kind": "inline", "reasons": ["x"],
+     "tag": None, "latex_primary": None, "latex_second": None, "crop": None,
+     "spans": [{"paragraph": 1, "latex_primary": "u", "latex_second": "u'"},
+               {"paragraph": 1, "latex_primary": "v", "latex_second": "w"}]},
+]
+
+
+@pytest.fixture
+def root(tmp_path):
+    r = tmp_path / "book"
+    (r / "pages").mkdir(parents=True)
+    for n, md in ((1, P1), (2, P2), (3, P3)):
+        (r / "pages" / f"p{n:03d}.md").write_text(md, "utf-8")
+        (r / "pages" / f"p{n:03d}.flags.json").write_text(json.dumps(
+            [{"type": "summary", "display_formulas": 2}]), "utf-8")
+    (r / "review.jsonl").write_text("".join(json.dumps(i) + "\n" for i in ITEMS), "utf-8")
+    (r / "text.md").write_text("\n".join([P1, P2, P3]), "utf-8")
+    return r
+
+
+def decide(tmp_path, *decisions):
+    path = tmp_path / "review_decisions.jsonl"
+    path.write_text("".join(json.dumps(d) + "\n" for d in decisions), "utf-8")
+    return path
+
+
+def flags_of(root, n):
+    return json.loads((root / "pages" / f"p{n:03d}.flags.json").read_text("utf-8"))
+
+
+def test_accept_replace_and_flag(root, tmp_path):
+    dec = decide(tmp_path,
+                 {"id": "p001-d01", "action": "replace", "latex": "x^2 = 1 + 0"},
+                 {"id": "p001-d02", "action": "accept"},
+                 {"id": "p001-i01", "action": "flag", "flag_type": "possible_source_typo",
+                  "note": "the page prints a_1 too"})
+    rep = review.apply(root, dec)
+    assert [a["action"] for a in rep.applied] == ["replace", "accept", "flag"]
+    assert rep.refused == [] and rep.pages == [1]
+    md = (root / "pages" / "p001.md").read_text("utf-8")
+    assert "$$\nx^2 = 1 + 0\n\\tag{3.1}\n$$" in md                 # the tag stays
+    assert "\\left( y \\right) = 2" in md and "\\(a_1\\)" in md
+    fl = flags_of(root, 1)
+    assert fl[-1]["type"] == "summary"
+    assert {"type": "possible_source_typo", "eq": "p001-i01", "latex": "a_1",
+            "note": "the page prints a_1 too"} in fl
+    reviewed = [f for f in fl if f["type"] == "reviewed"]
+    assert reviewed == [{"type": "reviewed", "id": "p001-d01", "action": "replace", "latex": "x^2 = 1 + 0"},
+                        {"type": "reviewed", "id": "p001-d02", "action": "accept"},
+                        {"type": "reviewed", "id": "p001-i01", "action": "flag",
+                         "flag_type": "possible_source_typo", "note": "the page prints a_1 too"}]
+    text = (root / "text.md").read_text("utf-8")
+    assert "x^2 = 1 + 0" in text and text.count("<!-- page printed=") == 3
+    assert (root / "pages" / "p003.md").read_text("utf-8") == P3        # untouched
+    assert flags_of(root, 3) == [{"type": "summary", "display_formulas": 2}]
+
+
+def test_the_same_decisions_twice_change_nothing_more(root, tmp_path):
+    dec = decide(tmp_path, {"id": "p001-d01", "action": "replace", "latex": "x^2 = 1 + 0"},
+                 {"id": "p001-i01", "action": "replace", "latex": "a_i"})
+    review.apply(root, dec)
+    before = {p.name: p.read_bytes() for p in (root / "pages").iterdir()}
+    before["text.md"] = (root / "text.md").read_bytes()
+    rep = review.apply(root, dec)
+    assert rep.applied == [] and rep.refused == [] and sorted(rep.already) == ["p001-d01", "p001-i01"]
+    after = {p.name: p.read_bytes() for p in (root / "pages").iterdir()}
+    after["text.md"] = (root / "text.md").read_bytes()
+    assert after == before
+    assert "\\(a_i\\)" in (root / "pages" / "p001.md").read_text("utf-8")
+
+
+def test_stale_and_unknown_decisions_are_refused_and_listed(root, tmp_path):
+    (root / "pages" / "p001.md").write_text(P1.replace("x^2 = 1", "x^2 = 7"), "utf-8")
+    dec = decide(tmp_path, {"id": "p001-d01", "action": "accept"},
+                 {"id": "p009-d01", "action": "accept"},
+                 {"id": "p001-d02", "action": "accept"},
+                 {"id": "p001-i01", "action": "replace"},
+                 {"id": "p001-i01", "action": "flag", "flag_type": "wrong"},
+                 {"id": "p002-inline", "action": "replace", "latex": "u"})
+    rep = review.apply(root, dec)
+    assert rep.refused == [
+        {"id": "p009-d01", "reason": "unknown id"},
+        {"id": "p001-i01", "reason": "replace needs latex"},
+        {"id": "p001-i01", "reason": "flag_type must be one of formula_uncertain, "
+                                     "possible_source_typo, copy_corrupt, illegible"},
+        {"id": "p002-inline", "reason": "a grouped inline item needs spans [{latex_primary, latex}]"},
+        {"id": "p001-d01", "reason": "latex_primary is no longer in the page"}]
+    assert [a["id"] for a in rep.applied] == ["p001-d02"]
+
+
+def test_grouped_inline_spans_are_replaced_one_by_one(root, tmp_path):
+    dec = decide(tmp_path, {"id": "p002-inline", "action": "replace",
+                            "spans": [{"latex_primary": "v", "latex": "w"}]})
+    rep = review.apply(root, dec)
+    assert rep.refused == [] and rep.pages == [2]
+    assert "More \\(u\\) and \\(w\\) here." in (root / "pages" / "p002.md").read_text("utf-8")
+    dec = decide(tmp_path, {"id": "p002-inline", "action": "replace",
+                            "spans": [{"latex_primary": "q", "latex": "w"}]})
+    assert review.apply(root, dec).refused == [{"id": "p002-inline",
+                                                "reason": "span 'q' is not in the item"}]
+
+
+def test_dry_run_writes_nothing(root, tmp_path):
+    dec = decide(tmp_path, {"id": "p001-d01", "action": "replace", "latex": "x^2 = 1 + 0"})
+    before = (root / "pages" / "p001.md").read_text("utf-8")
+    rep = review.apply(root, dec, dry_run=True)
+    assert [a["id"] for a in rep.applied] == ["p001-d01"] and rep.pages == []
+    assert (root / "pages" / "p001.md").read_text("utf-8") == before
+
+
+def test_cli_exit_codes_and_report(root, tmp_path, capsys):
+    dec = decide(tmp_path, {"id": "p001-d01", "action": "accept"}, {"id": "nope", "action": "accept"})
+    assert cli.main(["math-apply-review", "--export", str(root), "--decisions", str(dec)]) == 2
+    out = capsys.readouterr().out
+    assert "applied 1 decision(s) on 1 page(s)" in out and "refused nope: unknown id" in out
+    assert cli.main(["math-apply-review", "--export", str(root), "--decisions", str(dec)]) == 2
+    assert "1 applied earlier" in capsys.readouterr().out
+    dec = decide(tmp_path, {"id": "p001-d02", "action": "accept"})
+    assert cli.main(["math-apply-review", "--export", str(root), "--decisions", str(dec)]) == 0
+    assert cli.main(["math-apply-review", "--export", str(tmp_path / "none"),
+                     "--decisions", str(dec)]) == 1
+    assert "review.jsonl not found" in capsys.readouterr().err
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text("{not json\n", "utf-8")
+    assert cli.main(["math-apply-review", "--export", str(root), "--decisions", str(bad)]) == 1

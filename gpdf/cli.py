@@ -34,6 +34,9 @@
                                                     # per-page Markdown + LaTeX (atlas format),
                                                     # review queue, identity checks (MinerU,
                                                     # installed separately; see docs/math-export.md)
+    gpdf-cli math-apply-review --export DIR --decisions FILE [--dry-run]
+                                                    # apply the checked review decisions to
+                                                    # the page files; rebuild text.md
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
 reviewed (or spreads could not be split), OCR failed on some pages, the survey could
@@ -326,6 +329,21 @@ def build_parser() -> argparse.ArgumentParser:
     me.add_argument("--tesseract", metavar="PATH",
                     help="Tesseract for page numbers the engine and the PDF text lack "
                          "(default: $GPDF_TESSERACT, PATH, then the Windows install folder)")
+    ma = sub.add_parser("math-apply-review", help="apply the checked math review decisions",
+                        description="Apply review_decisions.jsonl (one {id, action: accept | "
+                                    "replace | flag, latex?, flag_type?, note?} per line) to "
+                                    "the page files of a math-export folder, record each "
+                                    "decision as a `reviewed` flag and rebuild text.md. "
+                                    "Running it again changes nothing. A decision whose id or "
+                                    "latex_primary no longer matches the page is refused and "
+                                    "listed (exit code 2); pages without a decision are never "
+                                    "touched.")
+    ma.add_argument("--export", metavar="DIR", type=Path, required=True,
+                    help="the math-export folder (OUTDIR/<stem>, with pages/ and review.jsonl)")
+    ma.add_argument("--decisions", metavar="FILE", type=Path, required=True,
+                    help="review_decisions.jsonl")
+    ma.add_argument("--dry-run", action="store_true",
+                    help="report what would be applied or refused; write nothing")
     return p
 
 
@@ -358,6 +376,8 @@ def main(argv: list[str] | None = None) -> int:
         return _manual_check_main(args)
     if args.command == "math-export":
         return _math_export_main(args, parser)
+    if args.command == "math-apply-review":
+        return _math_apply_review_main(args)
     if args.sheet_only:
         for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
                          ("--report", args.report), ("--accept-flagged", args.accept_flagged)):
@@ -753,6 +773,18 @@ def _math_export_main(args, parser) -> int:
         return EXIT_ERROR
     print(run.report(summary))
     return EXIT_OK
+
+
+def _math_apply_review_main(args) -> int:
+    from gpdf.pipeline.mathocr import review
+
+    try:
+        rep = review.apply(args.export, args.decisions, args.dry_run)
+    except (review.ReviewError, OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    print(review.report(rep))
+    return EXIT_UNREVIEWED if rep.refused else EXIT_OK
 
 
 def _run_exports(export, todo, out, jobs):
