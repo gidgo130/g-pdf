@@ -19,7 +19,7 @@ def cat(items: list[dict], idx) -> list[str]:
     return out
 
 
-def align(ref: list[dict], cand: list[dict]):
+def align(ref: list[dict], cand: list[dict], min_sim: float = MIN_SIM):
     """ref/cand: dicts with 'toks' and 'tag'. Returns (pairs [(ref idx list, cand idx
     list)], unmatched ref indices, unmatched cand indices)."""
     pairs, used_r, used_c = [], set(), set()
@@ -39,11 +39,11 @@ def align(ref: list[dict], cand: list[dict]):
     for a in range(1, n + 1):
         for b in range(1, m + 1):
             s = sim[a - 1][b - 1]
-            S[a][b] = max(S[a - 1][b], S[a][b - 1], S[a - 1][b - 1] + (s if s > MIN_SIM else -1))
+            S[a][b] = max(S[a - 1][b], S[a][b - 1], S[a - 1][b - 1] + (s if s > min_sim else -1))
     a, b = n, m
     while a and b:
         s = sim[a - 1][b - 1]
-        if s > MIN_SIM and S[a][b] == S[a - 1][b - 1] + s:
+        if s > min_sim and S[a][b] == S[a - 1][b - 1] + s:
             pairs.append(([R[a - 1]], [C[b - 1]]))
             used_r.add(R[a - 1])
             used_c.add(C[b - 1])
