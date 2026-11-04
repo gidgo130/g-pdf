@@ -37,6 +37,9 @@
     gpdf-cli math-apply-review --export DIR --decisions FILE [--dry-run]
                                                     # apply the checked review decisions to
                                                     # the page files; rebuild text.md
+    gpdf-cli math-score --ref DIR_or_text.md --cand DIR_or_text.md --out DIR [--pages RANGE]
+                                                    # score a transcription against a reference
+                                                    # (score.json, REPORT.md; numbers on screen)
 
 Exit codes: 0 ok; 2 finished, but flagged pages were left whole because they were not
 reviewed (or spreads could not be split), OCR failed on some pages, the survey could
@@ -344,6 +347,24 @@ def build_parser() -> argparse.ArgumentParser:
                     help="review_decisions.jsonl")
     ma.add_argument("--dry-run", action="store_true",
                     help="report what would be applied or refused; write nothing")
+    ms = sub.add_parser("math-score", help="score a math transcription against a reference",
+                        description="Compare the candidate's pages with the reference's (pNNN.md "
+                                    "folders, math-export folders or text.md files): display "
+                                    "formulas after normalization (exact match, token edit "
+                                    "distance, tags, missed and extra, near-misses split into "
+                                    "value-changing and cosmetic), inline spans, prose character "
+                                    "error rate, page labels; with a review.jsonl beside the "
+                                    "candidate, the share of its wrong formulas some flag covers. "
+                                    "Writes OUTDIR/score.json and OUTDIR/REPORT.md (formulas are "
+                                    "quoted only there); the screen gets numbers.")
+    ms.add_argument("--ref", metavar="DIR_or_text.md", type=Path, required=True,
+                    help="the reference transcription")
+    ms.add_argument("--cand", metavar="DIR_or_text.md", type=Path, required=True,
+                    help="the candidate transcription")
+    ms.add_argument("--out", metavar="OUTDIR", type=Path, required=True,
+                    help="folder for score.json and REPORT.md (created if missing)")
+    ms.add_argument("--pages", metavar="RANGE",
+                    help="only these file pages (1-based), e.g. 63-81,123-139")
     return p
 
 
@@ -378,6 +399,8 @@ def main(argv: list[str] | None = None) -> int:
         return _math_export_main(args, parser)
     if args.command == "math-apply-review":
         return _math_apply_review_main(args)
+    if args.command == "math-score":
+        return _math_score_main(args)
     if args.sheet_only:
         for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
                          ("--report", args.report), ("--accept-flagged", args.accept_flagged)):
@@ -785,6 +808,19 @@ def _math_apply_review_main(args) -> int:
         return EXIT_ERROR
     print(review.report(rep))
     return EXIT_UNREVIEWED if rep.refused else EXIT_OK
+
+
+def _math_score_main(args) -> int:
+    from gpdf.pipeline.mathocr import score
+
+    try:
+        summary, recall = score.run(args.ref, args.cand, args.out, args.pages)
+    except (score.ScoreError, OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    print(score.terminal(summary, recall))
+    print(f"score.json and REPORT.md in {args.out}")
+    return EXIT_OK
 
 
 def _run_exports(export, todo, out, jobs):
