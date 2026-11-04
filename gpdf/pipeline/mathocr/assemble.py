@@ -144,7 +144,7 @@ def _paragraph(block: dict, index: int) -> Paragraph:
         if not isinstance(part, dict):
             part = {"type": "text", "content": str(part)}
         if part.get("type") == "equation_inline":
-            tex = str(part.get("content", "")).strip()
+            tex = _math(str(part.get("content", "")).strip())
             inlines.append(tex)
             if out and out[-1] and not out[-1][-1].isspace() and out[-1][-1].isalnum():
                 out.append(" ")
@@ -159,10 +159,21 @@ def _paragraph(block: dict, index: int) -> Paragraph:
     return Paragraph(index, s, inlines, block.get("bbox"))
 
 
+TAG_NUMBER_RE = re.compile(r"[A-Za-z0-9]+(?:\.[0-9]+)+[a-z]?|[0-9]+[a-z]?")
+
+
+def _math(tex: str) -> str:
+    """Math may not carry the page's delimiters: $, \\( and \\) are invalid inside it."""
+    return tex.replace("$", "").replace(r"\(", "(").replace(r"\)", ")")
+
+
 def _display(block: dict, index: int) -> Display:
     raw = str(block.get("content") or "")
     body, tag = L.split_tag(raw)
-    body = TRAILING_SPACE_RE.sub("", body.strip()).strip()
+    body = _math(TRAILING_SPACE_RE.sub("", body.strip()).strip())
+    if tag:
+        m = TAG_NUMBER_RE.search(tag)
+        tag = m.group(0) if m else None
     return Display(index, body, tag, block.get("bbox"), raw)
 
 

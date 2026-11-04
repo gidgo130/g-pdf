@@ -90,6 +90,19 @@ def test_displays_get_their_tag_on_its_own_line_and_inline_math_its_delimiters()
                             "source": "mineru-standard"}
 
 
+def test_engine_math_cannot_unbalance_the_delimiters_either():
+    # seen from the real engine: a \( inside the tag, a $ inside a formula
+    pg = page([EQ(r"f(x) = e^{-x}, \quad x > 0,\tag{\((1.1)\}", 0.3),
+               EQ(r"g(x) = $y$ + \(z\)", 0.5), P("and ", ("eq", r"a $b$ \(c\)"), y=0.6)])
+    md = pg.render()
+    assert balanced(md)
+    assert [(d.latex, d.tag) for d in pg.displays] == [(r"f(x) = e^{-x}, \quad x > 0,", "1.1"),
+                                                       ("g(x) = y + (z)", None)]
+    assert pg.paragraphs[0].inlines == ["a b (c)"]
+    pg = page([EQ(r"h(x) = 1 \tag{junk}", 0.3)])
+    assert pg.displays[0].tag is None and "junk" not in pg.render()
+
+
 def test_prose_cannot_unbalance_the_math_delimiters():
     pg = page([P("Costs $5 and \\(not math\\) here", ("eq", "x"), "end.")])
     md = pg.render()

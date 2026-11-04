@@ -37,3 +37,4 @@ gpdf = ["assets/*", "pipeline/review_sheet/*", "pipeline/catalogue_sheet/*",
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: needs an external engine (MinerU) and minutes; skipped when it is not configured"]
