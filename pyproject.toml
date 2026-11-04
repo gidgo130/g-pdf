@@ -20,6 +20,9 @@ dev = ["pytest>=8"]
 # Book prep (gpdf-cli split/ocr/survey): pixel work on scanned pages; word lists for the
 # survey's text-quality score.
 prep = ["numpy>=1.26", "Pillow>=10.3", "wordfreq>=3.1,<4"]
+# Math export (gpdf-cli math-export --check-identities): numeric identity checks on the
+# formulas that parse. antlr4 4.11 is the runtime sympy's parse_latex needs.
+mathcheck = ["sympy>=1.12", "mpmath>=1.3", "antlr4-python3-runtime==4.11"]
 
 [project.scripts]
 g-pdf = "gpdf.__main__:main"
