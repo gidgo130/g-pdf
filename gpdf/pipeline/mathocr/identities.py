@@ -49,6 +49,7 @@ LO, HI = 0.3, 2.5
 SEED = "g-pdf mathcheck"
 TOL = 1e-6                 # relative, for identities
 TOL_INT = 1e-3             # for integrals
+TOL_INT_2D = 1e-2          # a bounded-degree cubature is coarser
 LIMIT_TOL = 0.02           # for cdf / survival limits
 BIG = 1e6
 SUPPORTS = {"(0,inf)": ([0.1, 0.5, 1.0, 2.0, 5.0], 1e-9, BIG),
@@ -64,6 +65,8 @@ KINDS = {"f": "density", "p": "density", "g": "density", "F": "cdf", r"\bar{F}":
 GREEK_LOWER = {"alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta", "eta",
                "theta", "vartheta", "iota", "kappa", "lambda", "mu", "nu", "xi", "rho", "varrho",
                "sigma", "varsigma", "tau", "upsilon", "phi", "varphi", "chi", "psi", "omega"}
+FUNCTION_GREEK = {"phi", "varphi", "psi"}             # written before a bracket, a function
+UNKNOWN_CONSTANTS = {"c", "C", "K", "const"}           # a normalizing constant left unnamed
 HINTS = [("density", "density"), ("distribution function", "cdf"), ("survival", "survival"),
          ("hazard", "hazard"), ("moment generating", "mgf"), ("characteristic function", "cf"),
          ("probability generating", "pgf")]
@@ -241,10 +244,17 @@ def classify(lhs: str, before: str = "") -> tuple[str | None, list[str], str]:
     s = _clean(lhs).strip()
     m = PR_RE.match(s)
     if m:
-        rels = REL_VAR.findall(m.group("inner"))
-        if rels:
+        inner = m.group("inner")
+        rels = REL_VAR.findall(inner)
+        terms = _split_top(inner, [","])
+        # Pr[X <= x] or Pr[X_1 > x_1, X_2 > x_2]: one relation per term, one direction;
+        # an interval Pr[a < X < b] or an event with \cap is no distribution function
+        if rels and len(rels) == len(terms) and not re.search(r"\\(cap|cup|mid)\b|\|", inner) \
+                and len({r in (">", r"\ge", r"\geq") for r, _ in rels}) == 1 \
+                and all(len(RELATION.findall(t)) == 1 for t in terms):
             kind = "survival" if rels[0][0] in (">", r"\ge", r"\geq") else "cdf"
             return kind, [_canon(v) for _, v in rels], ""
+        return None, [], ""
     m = E_RE.match(s)
     if m:
         inner = m.group("inner").strip()
@@ -267,7 +277,8 @@ def classify(lhs: str, before: str = "") -> tuple[str | None, list[str], str]:
         return None, [], ""
     name = m.group("name")
     sub = _canon(m.group("sub") or m.group("sub1") or "")
-    variables = [_canon(a) for a in m.group("args").split(",") if a.strip()]
+    args = m.group("args").split(";")[0]              # p(x; \lambda): parameters after ";"
+    variables = [_canon(a) for a in args.split(",") if a.strip()]
     if any(VECTOR.search(v) for v in variables) or VECTOR.search(sub):
         return None, [], ""                          # p_X(x) with bold vectors, (t_1, ..., t_k)
     kind = KINDS.get(name)
@@ -310,7 +321,7 @@ def _to_sympy(rhs: str, variables: list[str]):
         return isinstance(a, AppliedUndef) and (
             (a.func.__name__ == "Gamma" and len(a.args) == 1)
             or (a.func.__name__ == "B" and len(a.args) == 2)
-            or (a.func.__name__ == "Phi" and len(a.args) == 1))
+            or (a.func.__name__ in ("Phi", "phi") and len(a.args) == 1))
 
     def mapped(a):
         n = a.func.__name__
@@ -318,19 +329,25 @@ def _to_sympy(rhs: str, variables: list[str]):
             return sympy.gamma(a.args[0])
         if n == "B":
             return sympy.beta(*a.args)
+        if n == "phi":                                   # the standard normal density
+            return sympy.exp(-a.args[0] ** 2 / 2) / sympy.sqrt(2 * sympy.pi)
         return (1 + sympy.erf(a.args[0] / sympy.sqrt(2))) / 2
 
     expr = expr.replace(known, mapped)
 
     def juxtaposed(a):
-        """\\lambda(z - 1): a parameter times a bracket, not a function call."""
+        """\\lambda(z - 1): a Greek parameter times a bracket, not a function call. A
+        Latin letter before a bracket (g(x), f_1(x), q(t)) stays a function: unknown,
+        so the display is skipped."""
         base = a.func.__name__.split("_")[0]
-        return isinstance(a, AppliedUndef) and len(a.args) == 1 and (
-            base in GREEK_LOWER or (len(base) == 1 and base.islower()))
+        return isinstance(a, AppliedUndef) and len(a.args) == 1 and base in GREEK_LOWER \
+            and base not in FUNCTION_GREEK
 
     expr = expr.replace(juxtaposed, lambda a: sympy.Symbol(a.func.__name__) * a.args[0])
     if expr.atoms(AppliedUndef):
         return None
+    if any(_canon(s.name) in UNKNOWN_CONSTANTS for s in expr.free_symbols):
+        return None                                      # "c e^{...}": c is not known
     syms = sorted(expr.free_symbols, key=lambda x: x.name)
     var_syms = []
     for v in variables:
@@ -430,6 +447,8 @@ class _Checker:
                 cand = (abs(total - 1), name, nn, total)
                 if best is None or cand[0] < best[0]:
                     best = cand
+                if cand[0] <= (TOL_INT if len(e.variables) == 1 else TOL_INT_2D):
+                    break                                 # this support is the one
             if best is None:
                 nonneg.append(None)
                 integ.append(None)
@@ -439,7 +458,7 @@ class _Checker:
             _, name, nn, total = best
             self.supports[name] += 1
             nonneg.append(nn)
-            integ.append(abs(total - 1) <= TOL_INT)
+            integ.append(abs(total - 1) <= (TOL_INT if len(e.variables) == 1 else TOL_INT_2D))
             det_n.append({"params": p, "support": name})
             det_i.append({"params": p, "support": name, "integral": float(total)})
         self.record("non-negative", nonneg, det_n)

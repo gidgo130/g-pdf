@@ -201,6 +201,31 @@ def test_vector_arguments_integrals_and_series_are_skipped():
     assert r.status == "skipped" and not r.checks
 
 
+def test_normal_density_notation_and_unknown_functions_from_kbj():
+    # phi(.) is the standard normal density, Phi(.) its cdf: the skew-normal density passes
+    r = check(r"p(z; \lambda) = 2 \varphi(z) \Phi(\lambda z)".replace(r"\varphi", r"\phi"))
+    assert (r.kind, r.status, r.support) == ("density", "passed", "(-inf,inf)")
+    r = check(r"p(x_1, x_2) = \phi(x_1) \phi(x_2)")
+    assert (r.kind, r.status, r.support) == ("density", "passed", "(-inf,inf)")
+    # a Latin letter before a bracket is an unknown function, not a product: skipped
+    r = check(r"p(x_1, x_2) = e^{-(x_1^2 + x_2^2)/2} g(\tan^{-1}(x_2 / x_1))")
+    assert (r.status, r.reason) == ("skipped", "does not parse")
+    r = check(r"\bar{F}(t) = p(-\log B(t))")
+    assert r.status == "skipped"
+    # an unnamed normalizing constant cannot be checked
+    r = check(r"p(x_1, x_2) = c e^{-(x_1^2 x_2^2 + x_1^2 + x_2^2)/2}")
+    assert (r.status, r.reason) == ("skipped", "does not parse")
+    # an interval probability or an event is no distribution function
+    assert I.classify(r"\Pr[a_1 < \chi_4^2 < a_2]")[0] is None
+    assert I.classify(r"\Pr[(T > t) \cap (I = i)]")[0] is None
+    assert I.classify(r"\Pr[X_1 > x_1, X_2 \le x_2]")[0] is None
+    assert I.classify(r"\Pr[X_1 > x_1, X_2 > x_2]")[0] == "survival"
+    # a bivariate normal density passes the cubature at its coarser tolerance
+    r = check(r"p(x_1, x_2) = [2 \pi \sqrt{1 - (0.5)^2}]^{-1} \exp\left\{-\frac{1}{2(1 - (0.5)^2)}"
+              r"(x_1^2 - 2 (0.5) x_1 x_2 + x_2^2)\right\}")
+    assert (r.kind, r.status, r.support) == ("density", "passed", "(-inf,inf)")
+
+
 def test_a_matrix_display_is_skipped_not_flagged():
     r = check(r"\boldsymbol{\xi} = \begin{pmatrix} 0 \\ 0 \end{pmatrix}")
     assert (r.kind, r.status) == (None, "skipped")
