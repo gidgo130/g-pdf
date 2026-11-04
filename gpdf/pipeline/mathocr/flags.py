@@ -450,14 +450,60 @@ def crop(doc, file: int, bbox, path: Path, dpi: int = 300) -> None:
     pg.get_pixmap(dpi=dpi, clip=clip, colorspace=pymupdf.csGRAY).save(str(path))
 
 
+INK = 128                 # grey below this is ink
+LINE_DPI = 150
+LINE_GAP = 3              # ink-free pixel rows that separate two text lines at LINE_DPI
+
+
+def line_boxes(doc, file: int, bbox) -> list[list[float]]:
+    """The text lines inside ``bbox`` (page fractions) as boxes, from the rows of ink."""
+    import pymupdf
+
+    pg = doc[file - 1]
+    r = pg.rect
+    clip = pymupdf.Rect(r.x0 + bbox[0] * r.width, r.y0 + bbox[1] * r.height,
+                        r.x0 + bbox[2] * r.width, r.y0 + bbox[3] * r.height)
+    if clip.is_empty:
+        return [list(bbox)]
+    pix = pg.get_pixmap(dpi=LINE_DPI, clip=clip, colorspace=pymupdf.csGRAY)
+    s, w, stride = pix.samples, pix.width, pix.stride
+    lines, start, end, gap = [], None, 0, 0
+    for y in range(pix.height):
+        ink = w and min(s[y * stride:y * stride + w]) < INK
+        if ink:
+            if start is None:
+                start = y
+            end, gap = y, 0
+        elif start is not None:
+            gap += 1
+            if gap >= LINE_GAP:
+                lines.append((start, end))
+                start = None
+    if start is not None:
+        lines.append((start, end))
+    out = []
+    for y0, y1 in lines:
+        if y1 - y0 < 2:
+            continue
+        top = (clip.y0 + y0 / pix.height * clip.height - r.y0) / r.height
+        bottom = (clip.y0 + (y1 + 1) / pix.height * clip.height - r.y0) / r.height
+        out.append([bbox[0], top, bbox[2], bottom])
+    return out or [list(bbox)]
+
+
 def write_crops(doc, items: list[Item], crops_dir: Path, dpi: int = 300) -> None:
+    """One crop per item; a grouped inline item gets one crop per text line of each
+    flagged paragraph."""
     crops_dir = Path(crops_dir)
     for it in items:
-        if it.bboxes and len(it.bboxes) > 1:
-            for k, bb in enumerate(it.bboxes, 1):
-                name = f"{it.id}-{k}.png"
-                crop(doc, it.file, bb, crops_dir / name, dpi)
-                it.crops.append(f"{crops_dir.name}/{name}")
+        if it.bboxes:
+            k = 0
+            for bb in it.bboxes:
+                for line in (line_boxes(doc, it.file, bb) if bb else [None]):
+                    k += 1
+                    name = f"{it.id}-{k}.png"
+                    crop(doc, it.file, line, crops_dir / name, dpi)
+                    it.crops.append(f"{crops_dir.name}/{name}")
             it.crop = it.crops[0]
         else:
             name = f"{it.id}.png"

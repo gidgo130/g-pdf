@@ -199,6 +199,31 @@ def test_grouped_inline_items_make_one_item_per_page():
     assert it.record()["spans"] == it.spans
 
 
+def test_grouped_inline_items_get_a_crop_per_text_line(tmp_path):
+    path = tmp_path / "lines.pdf"
+    doc = pymupdf.open()
+    pg = doc.new_page(width=300, height=400)
+    for k in range(3):
+        pg.insert_text((40, 100 + 16 * k), "a line of text with words", fontsize=11)
+    doc.save(str(path))
+    doc.close()
+    doc = pymupdf.open(str(path))
+    bbox = [0.1, 85 / 400, 0.9, 155 / 400]
+    boxes = flags.line_boxes(doc, 1, bbox)
+    assert len(boxes) == 3 and all(b[1] < b[3] for b in boxes)
+    assert boxes[0][3] <= boxes[1][1] <= boxes[1][3] <= boxes[2][1]
+    assert boxes[0][0] == 0.1 and boxes[0][2] == 0.9
+    it = flags.Item("p001-inline", 1, "1", "inline", ["x"], None, None, None, bbox=bbox,
+                    bboxes=[bbox], spans=[])
+    flags.write_crops(doc, [it], tmp_path / "crops", dpi=100)
+    doc.close()
+    assert it.crops == ["crops/p001-inline-1.png", "crops/p001-inline-2.png",
+                        "crops/p001-inline-3.png"] and it.crop == it.crops[0]
+    assert all((tmp_path / c).stat().st_size > 0 for c in it.crops)
+    assert flags.line_boxes(pymupdf.open(str(path)), 1, [0.1, 0.5, 0.9, 0.6]) == [
+        [0.1, 0.5, 0.9, 0.6]]                        # blank region: the box itself
+
+
 def test_the_syntax_whitelist_covers_standard_math():
     missing = {c for c in ("alpha", "varepsilon", "Gamma", "infty", "partial", "cdots", "ldots",
                            "left", "right", "frac", "sqrt", "binom", "sum", "prod", "int",
