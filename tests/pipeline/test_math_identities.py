@@ -181,6 +181,26 @@ def test_a_new_section_forgets_the_pairs():
     assert "F' = f" not in [c.identity for c in r.checks]
 
 
+def test_vector_arguments_integrals_and_series_are_skipped():
+    # seen on KBJ file 124/125: a multivariate normal density with bold vectors must not be
+    # checked as a one-variable density, and an mgf defined by a multiple integral must not be
+    # evaluated numerically at all (one evaluation ran for 40 minutes)
+    r = check(r"p _ {\boldsymbol {Z}} (\boldsymbol {z}) = (2 \pi) ^ {- k / 2} | \boldsymbol {A} | ^ {1 / 2} "
+              r"\exp \left\{- \frac {1}{2} (\boldsymbol {z} - \boldsymbol {\zeta}) ^ {T} \boldsymbol {A} "
+              r"(\boldsymbol {z} - \boldsymbol {\zeta}) \right\}")
+    assert (r.kind, r.status, r.reason) == (None, "skipped", "unclassified")
+    r = check(r"M _ {\boldsymbol {X}} (\boldsymbol {t}) = C \int_ {- \infty} ^ {\infty} \dots "
+              r"\int_ {- \infty} ^ {\infty} \exp \left\{ \boldsymbol{t}^T \boldsymbol{x} \right\} dx")
+    assert r.status == "skipped" and not r.checks
+    r = check(r"M _ {\boldsymbol {X}} (t _ {1}, \dots , t _ {k}) = E \left[ e ^ {\boldsymbol {t} ^ {T} \boldsymbol {X}} \right]")
+    assert (r.kind, r.status) == (None, "skipped")
+    assert I.classify(r"E[e^{\boldsymbol{t}^T \boldsymbol{X}}]")[0] is None
+    r = check(r"G(z) = \sum_{n=0}^{\infty} b_n z^n")
+    assert r.status == "skipped" and not r.checks
+    r = check(r"f(x) = \prod_{i=1}^{k} (1 + x_i)^{-1}")
+    assert r.status == "skipped" and not r.checks
+
+
 def test_a_matrix_display_is_skipped_not_flagged():
     r = check(r"\boldsymbol{\xi} = \begin{pmatrix} 0 \\ 0 \end{pmatrix}")
     assert (r.kind, r.status) == (None, "skipped")

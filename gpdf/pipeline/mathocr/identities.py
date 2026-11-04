@@ -76,7 +76,9 @@ REL_VAR = re.compile(r"(>|\\ge|\\geq|<|\\le|\\leq)\s*([A-Za-z](?:_\{?[A-Za-z0-9]
 T_VAR = re.compile(r"(?<![A-Za-z\\])t(?:_\{?(\d+)\}?)?")
 RELATION = re.compile(r"<|>|\\le\b|\\ge\b|\\leq\b|\\geq\b|\\ne\b|\\neq\b|\\in\b")
 NOT_IDENTITY = re.compile(r"\\(doteq|approx|propto|equiv|sim|cong)\b")
-UNSUPPORTED = re.compile(r"\\begin\{(cases|[pbvB]?matrix|smallmatrix)\}|\\text\b|\\mathrm\{(?!e\}|d\})")
+UNSUPPORTED = re.compile(r"\\begin\{(cases|[pbvB]?matrix|smallmatrix)\}|\\text\b|\\mathrm\{(?!e\}|d\})"
+                         r"|\\(int|iint|iiint|oint|sum|prod|dots|cdots|ldots)(?![A-Za-z])")
+VECTOR = re.compile(r"boldsymbol|mathbf|pmb|^bm|dots")
 
 
 class _Timeout(BaseException):
@@ -246,6 +248,8 @@ def classify(lhs: str, before: str = "") -> tuple[str | None, list[str], str]:
     m = E_RE.match(s)
     if m:
         inner = m.group("inner").strip()
+        if VECTOR.search(inner):
+            return None, [], ""                      # E[e^{t'X}] with vectors: not scalar
         if re.match(r"^(?:e|\\exp)\s*(?:\^)?\s*[{(]?", inner) and ("^" in inner or r"\exp" in inner):
             found = []
             for t in T_VAR.finditer(inner):
@@ -264,6 +268,8 @@ def classify(lhs: str, before: str = "") -> tuple[str | None, list[str], str]:
     name = m.group("name")
     sub = _canon(m.group("sub") or m.group("sub1") or "")
     variables = [_canon(a) for a in m.group("args").split(",") if a.strip()]
+    if any(VECTOR.search(v) for v in variables) or VECTOR.search(sub):
+        return None, [], ""                          # p_X(x) with bold vectors, (t_1, ..., t_k)
     kind = KINDS.get(name)
     if kind is None:
         text = before.lower()
