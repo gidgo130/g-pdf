@@ -471,6 +471,24 @@ It writes `check.json` and `check.md` to `--report` (never into the extracts
 folder) and exits with 1 when a file fails. The conventions are in
 [docs/manual-check.md](docs/manual-check.md).
 
+## Math books and papers (math-export)
+
+`gpdf-cli math-export` turns a PDF of a mathematical book or paper (or a page
+range) into per-page Markdown + LaTeX in the distribution-atlas page format,
+with a review queue of the formulas worth a second look and numeric identity
+checks on the formulas that parse; `math-apply-review` applies the checked
+decisions and `math-score` measures any output against a reference. The engine
+is MinerU, installed separately and run as an external program (never bundled:
+its licence terms differ from g-pdf's). The identity checks need the
+`mathcheck` extra (`pip install -e ".[mathcheck]"`: sympy, mpmath, antlr4).
+Everything is in [docs/math-export.md](docs/math-export.md).
+
+```powershell
+gpdf-cli math-export book.pdf --out out --pages 63-81 --mineru C:\path\venv-mineru
+gpdf-cli math-apply-review --export out\book --decisions review_decisions.jsonl
+gpdf-cli math-score --ref ref_pages --cand out\book --out scores
+```
+
 ## Keyboard shortcuts
 
 | Action | Shortcut |
