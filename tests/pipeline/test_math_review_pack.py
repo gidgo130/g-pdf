@@ -172,3 +172,11 @@ def test_a_span_with_its_own_line_crop_carries_only_that_crop(export, tmp_path):
     brief = (tmp_path / "r" / "batch01" / "BRIEF.md").read_text("utf-8")
     assert "formula_uncertain" in brief and "never `accept`" in brief
 
+
+def test_cli_samples_40_inline_spans_per_chapter_by_default(export, tmp_path):
+    assert cli.main(["math-review-pack", "--export", str(export), "--out", str(tmp_path / "r")]) == 0
+    s = json.loads((tmp_path / "r" / "pack.json").read_text("utf-8"))
+    assert s["inline_sample"] == 40 and s["by_kind"]["inline_span"] == 6     # all, fewer than 40
+    assert cli.main(["math-review-pack", "--export", str(export), "--out", str(tmp_path / "z"),
+                     "--inline-sample", "0"]) == 0
+    assert "inline_span" not in json.loads((tmp_path / "z" / "pack.json").read_text("utf-8"))["by_kind"]

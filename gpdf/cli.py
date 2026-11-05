@@ -384,7 +384,7 @@ def build_parser() -> argparse.ArgumentParser:
                                     "docs/math-review.md), items.jsonl (every engine's reading, "
                                     "crop paths, page context) and decisions.template.jsonl. "
                                     "The display kinds by default; --inline-sample N adds N "
-                                    "random flagged inline spans per chapter. Keep --out in the "
+                                    "random flagged inline spans per chapter (default 40). Keep --out in the "
                                     "run's private folder: the batches hold the book's formulas.")
     mr.add_argument("--export", metavar="DIR", type=Path, required=True,
                     help="the math-export folder (OUTDIR/<stem>, with pages/ and review.jsonl)")
@@ -396,8 +396,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "for every inline item)")
     mr.add_argument("--batch-size", type=int, default=50, help="items per batch (default 50)")
     mr.add_argument("--pages", metavar="RANGE", help="only these file pages (1-based)")
-    mr.add_argument("--inline-sample", type=int, default=0, metavar="N",
-                    help="N random flagged inline spans per chapter, each its own item")
+    mr.add_argument("--inline-sample", type=int, default=40, metavar="N",
+                    help="N random flagged inline spans per chapter, each its own item (default "
+                         "40, all when a chapter has fewer; 0: none)")
     mr.add_argument("--seed", type=int, default=0, help="the inline sample's seed (default 0)")
     ms = sub.add_parser("math-score", help="score a math transcription against a reference",
                         description="Compare the candidate's pages with the reference's (pNNN.md "

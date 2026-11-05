@@ -13,8 +13,9 @@ of 50, and a brief of about a page.
 
 - **Displays, all of them** in the queue, by kind: `disagree`, `marker`, `style`,
   `identity`, `stack`, `tag`, `missing_display`, `syntax` (the pack's default `--kinds`).
-- **Inline math, a sample**: 20 flagged spans per chapter, picked at random with a
-  recorded seed (`--inline-sample 20 --seed S`), each its own item. If the sample finds
+- **Inline math, a sample**: 40 flagged spans per chapter (all of them when there are
+  fewer), picked at random with a recorded seed (`--inline-sample 40`, the default, `--seed
+  S`), each its own item with a crop of its own line. If the sample finds
   **any value error** (a `replace` that changes a value, not only style), review all of
   that chapter's inline items: pack again with `--kinds inline --pages <the chapter>`.
 - **No prose review.** The engine's prose error rate is already under the target.
@@ -22,7 +23,7 @@ of 50, and a brief of about a page.
 ## How
 
 1. Pack: `gpdf-cli math-review-pack --export OUT\<stem> --out REVIEW_DIR --inline-sample
-   20 --seed S [--pages RANGE]` (`--batch-size 50` is the default). `REVIEW_DIR` must
+   40 --seed S [--pages RANGE]` (`--batch-size 50` is the default). `REVIEW_DIR` must
    be in the run's private folder, never a temp or scratch folder.
 2. One subagent per batch, **Sonnet** by default, with a fresh context and this prompt:
    "Read `REVIEW_DIR\batchNN\BRIEF.md` and do what it says." Nothing else goes into the
