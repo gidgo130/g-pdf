@@ -13,7 +13,10 @@ flag_type is one of formula_uncertain, possible_source_typo, copy_corrupt, illeg
 Every applied decision leaves a ``reviewed`` record in the page's flags, which makes a
 second run a no-op. A decision whose id is unknown, or whose latex_primary is no longer
 in the page (and that was not applied before), is refused and listed; the other
-decisions still go through. Pages without a decision are never touched. text.md is
+decisions still go through. A display replace that loses row breaks, alignment points,
+environments or \\left/\\right pairs, unbalances braces, or writes a stray `\\ ` where the
+old text had a `\\\\` row break is refused too, unless it carries "structure_change": true
+and a "reason". Pages without a decision are never touched. text.md is
 rebuilt from the page files.
 """
 
@@ -25,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from gpdf.pipeline.manuals import write_atomic
+from gpdf.pipeline.mathocr import latex as L
 
 ACTIONS = ("accept", "replace", "flag")
 TAG_LINE = re.compile(r"\n\\tag\*?\{[^{}\n]*\}")
@@ -74,7 +78,44 @@ def _record(decision: dict) -> dict:
     for k in ("latex", "tag", "after", "page_text", "flag_type", "note", "spans"):
         if decision.get(k) is not None:
             rec[k] = decision[k]
+    if decision.get("structure_change") is True:
+        rec["structure_change"] = True
+        rec["reason"] = decision.get("reason")
     return rec
+
+
+def structure_problems(old: str | None, new: str) -> list[str]:
+    """What a display replace loses or unbalances: row breaks, alignment points,
+    environments, \\left/\\right pairs, braces; a stray `\\ ` where the old had `\\\\`."""
+    b = L.structure(new)
+    if old is None:
+        return list(b["balance"])
+    a = L.structure(old)
+    out = []
+    if b["row_breaks"] < a["row_breaks"]:
+        out.append(f"row breaks \\\\ {a['row_breaks']} -> {b['row_breaks']}")
+    if b["control_space"] > a["control_space"] and a["row_breaks"]:
+        out.append("a stray `\\ ` where the old had a `\\\\` row break")
+    if b["align"] < a["align"]:
+        out.append(f"alignment & {a['align']} -> {b['align']}")
+    if b["envs"] < a["envs"]:
+        out.append(f"\\begin/\\end environment pairs {a['envs']} -> {b['envs']}")
+    if b["left"] < a["left"]:
+        out.append(f"\\left/\\right pairs {a['left']} -> {b['left']}")
+    out += [p for p in b["balance"] if p not in a["balance"]]
+    return out
+
+
+def _structure_refusal(old: str | None, d: dict) -> str | None:
+    problems = structure_problems(old, d["latex"].strip())
+    if not problems:
+        return None
+    if d.get("structure_change") is True:
+        if isinstance(d.get("reason"), str) and d["reason"].strip():
+            return None
+        return "structure_change needs a reason: " + "; ".join(problems)
+    return ("structure lost: " + "; ".join(problems)
+            + " (if intended, add \"structure_change\": true and a reason)")
 
 
 def _display_block(latex: str, md: str) -> tuple[int, int] | None:
@@ -179,6 +220,10 @@ def _apply_one(d: dict, it: dict, md: str) -> tuple[str, str | None]:
     if where is None:
         return md, "latex_primary is no longer in the page"
     a, b = where
+    if d["action"] == "replace" and not is_inline:
+        why = _structure_refusal(latex, d)
+        if why:
+            return md, why
     if d["action"] == "replace":
         new = d["latex"].strip()
         md, b = md[:a] + new + md[b:], a + len(new)
@@ -198,6 +243,9 @@ def _apply_missing(d: dict, md: str) -> tuple[str, str | None]:
     anchor = d.get("page_text") or d.get("after")
     if not isinstance(anchor, str) or not anchor:
         return md, "a missing display needs 'after' or 'page_text'"
+    why = _structure_refusal(None, d)
+    if why:
+        return md, why
     n = md.count(anchor)
     if n != 1:
         return md, ("anchor text not found in the page" if n == 0

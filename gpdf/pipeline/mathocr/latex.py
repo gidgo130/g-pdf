@@ -454,6 +454,27 @@ def commands(latex: str) -> set[str]:
     return set(CMD_RE.findall(latex))
 
 
+TRAIL_BREAK_RE = re.compile(r"\\\\\s*(?:\[[^\]]*\])?\s*(?=\\end\s*\{|\\tag\b|$)")
+SUBSTACK_RE = re.compile(r"\\substack\s*" + BRACED)
+
+
+def row_breaks(latex: str) -> int:
+    """The `\\\\` row breaks of a display, a trailing one (before \\end or the end) and the
+    rows of a \\substack left out."""
+    s = TRAIL_BREAK_RE.sub(" ", SUBSTACK_RE.sub(" ", latex))
+    return sum(1 for t in TOKEN_RE.findall(s) if t == "\\\\")
+
+
+def structure(latex: str) -> dict:
+    """What a display's layout rests on: row breaks, alignment points, environments,
+    \\left/\\right pairs, control spaces (`\\ `) and balance problems."""
+    toks = TOKEN_RE.findall(latex)
+    return {"row_breaks": row_breaks(latex), "align": toks.count("&"),
+            "envs": len(re.findall(r"\\begin\s*\{", latex)),
+            "left": len(re.findall(r"\\left\b", latex)),
+            "control_space": toks.count("\\ "), "balance": balance_problems(latex)}
+
+
 def balance_problems(latex: str) -> list[str]:
     """Unbalanced braces, \\left/\\right or \\begin/\\end, as short messages."""
     problems = []
