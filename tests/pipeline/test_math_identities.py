@@ -411,3 +411,15 @@ def test_jkk_hypergeometric_chapter_false_alarms_are_gone():
     # a pmf in x whose right side has no x (another index) is not checked
     r = check(r"\Pr [ X = x ] = \binom {2 N - r} {N - r} 2 ^ {r - 2 n}")
     assert r.status == "skipped"
+
+
+def test_a_greek_parameter_before_a_bracket_binds_as_a_product_not_a_power_base():
+    # Consul's generalized Poisson: theta (theta + x lambda)^{x-1} is theta times the power
+    r = check(r"\Pr [ X = x ] = \frac {\theta (\theta + x \lambda) ^ {x - 1} e ^ {- \theta - x \lambda}}"
+              r"{x !}, \qquad x = 0, 1, 2, \dots")
+    # lambda < 1 is needed: the draws above 1 diverge, so inconclusive (never failed)
+    assert (r.kind, r.status) == ("pmf", "inconclusive"), [(c.identity, c.details) for c in r.checks]
+    sums = [c for c in r.checks if c.identity == "sums to 1"][0]
+    assert sums.details["params"]["lambda"] > 1
+    r = check(r"G(z) = e^{\lambda_1 (z - 1)}")
+    assert r.status == "passed"

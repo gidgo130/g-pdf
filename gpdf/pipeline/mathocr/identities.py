@@ -67,6 +67,8 @@ GREEK_LOWER = {"alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta
                "theta", "vartheta", "iota", "kappa", "lambda", "mu", "nu", "xi", "rho", "varrho",
                "sigma", "varsigma", "tau", "upsilon", "phi", "varphi", "chi", "psi", "omega"}
 FUNCTION_GREEK = {"phi", "varphi", "psi"}             # written before a bracket, a function
+GREEK_BRACKET = re.compile(r"(\\(?:" + "|".join(sorted(GREEK_LOWER - FUNCTION_GREEK, key=len, reverse=True))
+                           + r")(?![A-Za-z])(?:_\{[^{}]*\}|_[A-Za-z0-9])?)\s*\(")
 UNKNOWN_CONSTANTS = {"c", "C", "K", "const"}           # a normalizing constant left unnamed
 HINTS = [("density", "density"), ("distribution function", "cdf"), ("survival", "survival"),
          ("hazard", "hazard"), ("moment generating", "mgf"), ("characteristic function", "cf"),
@@ -370,6 +372,9 @@ def _parse(s: str, defs: dict | None = None, depth: int = 0):
     and phi mapped; None when it will not parse or leaves an unknown function."""
     for rx in _INDICATOR:
         s = rx.sub(" 1 ", s)
+    # \theta (a + b)^{k}: parse_latex reads theta(...) as a call and raises the call to
+    # the power; an explicit product keeps the power on the bracket
+    s = GREEK_BRACKET.sub(lambda m: m.group(1) + r" \cdot (", s)
     try:
         expr = parse_latex(s)
     except Exception:  # noqa: BLE001 - any parse failure means "skip"
