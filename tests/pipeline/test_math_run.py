@@ -182,6 +182,38 @@ def test_a_second_run_reuses_the_cache_and_pages_can_be_narrowed(setup, tmp_path
     assert text.count("<!-- page printed=") == 2
 
 
+def test_marker_runs_after_mineru_on_the_math_pages_only(setup, tmp_path, monkeypatch):
+    from gpdf.pipeline.mathocr import marker
+
+    from .fake_marker import make_fake_marker, make_fake_server, make_gguf
+
+    exe, home, pdf, log = setup
+    mexe, server, (gguf, pins) = (make_fake_marker(tmp_path), make_fake_server(tmp_path),
+                                  make_gguf(tmp_path))
+    monkeypatch.setattr(marker, "PINNED_GGUF", pins)
+    mlog = tmp_path / "marker.jsonl"
+    monkeypatch.setenv("FAKE_MARKER_LOG", str(mlog))
+    out = tmp_path / "out"
+    args = ("--pages", "1-5", "--marker", mexe, "--llama-server", server, "--marker-gguf",
+            str(gguf))
+    assert run(exe, home, pdf, out, *args) == 0
+    m = [json.loads(s) for s in mlog.read_text("utf-8").splitlines()]
+    assert len(m) == 1 and m[0]["inputs"] == ["c001.pdf"]
+    cached = sorted(p.name for p in (out / "book" / "cache").rglob("marker/p*.zip"))
+    assert cached == ["p001.zip", "p002.zip", "p003.zip", "p004.zip"]     # p005: no math
+    meta = json.loads((out / "book" / "meta.json").read_text("utf-8"))
+    assert meta["marker"]["packages"]["marker-pdf"] == "2.1.0"
+    assert meta["marker"]["llama_build"] == "11765" and meta["marker"]["gguf"] == pins
+    rec = json.loads((out / "book" / "run.json").read_text("utf-8"))
+    assert rec["engine_seconds"]["marker_pages"] == 4
+    assert rec["engine_seconds"]["marker_parsed"] == 4
+    assert run(exe, home, pdf, out, *args) == 0                     # all cached: no call
+    assert len(mlog.read_text("utf-8").splitlines()) == 1
+    assert run(exe, home, pdf, out, "--pages", "1-5", "--no-marker") == 0
+    meta = json.loads((out / "book" / "meta.json").read_text("utf-8"))
+    assert meta["marker"] is None
+
+
 def test_engine_problems_are_errors_not_tracebacks(setup, tmp_path, monkeypatch, capsys):
     exe, home, pdf, log = setup
     out = tmp_path / "out"

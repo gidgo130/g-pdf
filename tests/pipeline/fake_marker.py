@@ -47,7 +47,7 @@ for n, pdf in enumerate(sorted(Path(argv[0]).glob("*.pdf")), 1):
     doc = pymupdf.open(str(pdf))
     kids = []
     for i, pg in enumerate(doc):
-        m = re.search(r"Page (\d+)", pg.get_text())
+        m = re.search(r"[Pp]age (\d+)", pg.get_text())
         stem = f"p{int(m.group(1)):03d}" if m else f"x{i}"
         w, h = pg.rect.width, pg.rect.height
         blocks = pages.get(stem) or [{"block_type": "Text", "bbox": [10, 10, w - 10, 40],

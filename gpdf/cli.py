@@ -316,8 +316,19 @@ def build_parser() -> argparse.ArgumentParser:
                          "then PATH)")
     me.add_argument("--mineru-home", metavar="DIR",
                     help="MinerU's model folder's parent (default: $MINERU_HOME or ~/.mineru)")
+    me.add_argument("--marker", metavar="PATH",
+                    help="Marker as a third opinion on the math pages: the marker executable "
+                         "or its venv folder (default: $GPDF_MARKER; off when neither is set)")
+    me.add_argument("--llama-server", metavar="PATH",
+                    help="llama.cpp's llama-server for Marker (default: $GPDF_LLAMA_SERVER, "
+                         "then PATH)")
+    me.add_argument("--marker-gguf", metavar="DIR",
+                    help="folder with the Surya GGUF files (default: $GPDF_MARKER_GGUF, then "
+                         "the Hugging Face cache)")
+    me.add_argument("--no-marker", dest="use_marker", action="store_false", default=None,
+                    help="no Marker run even when $GPDF_MARKER is set")
     me.add_argument("--allow-unpinned", action="store_true",
-                    help="run even when the engine version or its model files differ from "
+                    help="run even when an engine version or its model files differ from "
                          "the pins (recorded in meta.json)")
     me.add_argument("--dpi", type=int, default=300, help="page render for the engine (default 300)")
     me.add_argument("--crop-dpi", type=int, default=300, help="review crops (default 300)")
@@ -788,7 +799,9 @@ def _math_export_main(args, parser) -> int:
         parser.error("--dpi and --crop-dpi must be at least 72")
     opts = run.Options(args.input, args.out, args.pages, args.mineru, args.mineru_home, args.dpi,
                        args.allow_unpinned, args.identities, args.tesseract, args.cache,
-                       args.inline == "per-page", args.crop_dpi)
+                       args.inline == "per-page", args.crop_dpi, marker=args.marker,
+                       llama_server=args.llama_server, marker_gguf=args.marker_gguf,
+                       use_marker=args.use_marker)
     try:
         summary = run.run(opts, progress=print)
     except (run.MathExportError, engine.EngineError, OSError) as e:

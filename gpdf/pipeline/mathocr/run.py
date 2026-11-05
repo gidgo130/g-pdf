@@ -26,7 +26,7 @@ import pymupdf
 from gpdf import __version__
 from gpdf.pipeline import tesseract
 from gpdf.pipeline.manuals import ManualsError, parse_pages, write_atomic
-from gpdf.pipeline.mathocr import MATHCHECK_HINT, assemble, engine, flags, labels, second
+from gpdf.pipeline.mathocr import MATHCHECK_HINT, assemble, engine, flags, labels, marker, second
 
 SCHEMA = 1
 CROP_DPI = 300
@@ -51,6 +51,10 @@ class Options:
     group_inline: bool = True
     crop_dpi: int = CROP_DPI
     tiers: tuple = engine.TIERS
+    marker: str | None = None                # the marker executable or its venv folder
+    llama_server: str | None = None
+    marker_gguf: str | None = None
+    use_marker: bool | None = None           # None: when --marker or $GPDF_MARKER is given
 
 
 @dataclass
@@ -97,6 +101,21 @@ def _identities_wanted(opt: bool | None, notices: list) -> bool:
     return True
 
 
+def _marker(opts: Options, notices: list) -> marker.Marker | None:
+    import os
+
+    if opts.use_marker is False:
+        return None
+    if opts.use_marker is None and not (opts.marker or os.environ.get(marker.ENV_VAR)):
+        notices.append("Marker not configured (--marker or $GPDF_MARKER): no third opinion")
+        return None
+    mk = marker.prepare(opts.marker, opts.llama_server, opts.marker_gguf,
+                        allow_unpinned=opts.allow_unpinned)
+    if mk.unpinned:
+        notices.append("Marker running unpinned: " + ", ".join(mk.unpinned))
+    return mk
+
+
 def _tesseract(explicit, notices) -> tesseract.Tesseract | None:
     try:
         return tesseract.prepare(labels.OCR_LANG, explicit)
@@ -128,6 +147,7 @@ def run(opts: Options, progress=None) -> Summary:
         eng = engine.prepare(opts.mineru, opts.mineru_home, allow_unpinned=opts.allow_unpinned)
         if eng.unpinned:
             notices.append("running unpinned: " + ", ".join(eng.unpinned))
+        mk = _marker(opts, notices)
         sha = engine.sha256_of(pdf)
         cache = engine.Cache(opts.cache or root / "cache", sha, eng.version, opts.dpi)
         say(f"engine: mineru-kit {eng.version} ({eng.exe})")
@@ -144,6 +164,25 @@ def run(opts: Options, progress=None) -> Summary:
         raw = {t: {p: cache.read(t, p) for p in pages} for t in opts.tiers}
         std = raw[opts.tiers[0]]
         basic = raw[opts.tiers[1]] if len(opts.tiers) > 1 else {}
+
+        # Marker, after MinerU is done (one engine on the GPU at a time), on the math pages
+        third = {}
+        if mk:
+            math_pages = [p for p in pages if marker.has_math(std[p].blocks)
+                          or (p in basic and marker.has_math(basic[p].blocks))]
+            mcache = marker.Cache(opts.cache or root / "cache", sha, mk.version)
+            say(f"marker: {mk.version} with llama.cpp b{mk.llama_build} on {len(math_pages)} "
+                f"math pages ({len(mcache.missing(math_pages))} not cached)")
+            tm = time.time()
+            n_new = marker.run(mk, pdf, math_pages, mcache,
+                               progress=lambda d, n: say(f"  marker: {d}/{n} pages"),
+                               log_dir=root / "logs")
+            engine_seconds["marker"] = round(time.time() - tm, 1)
+            engine_seconds["marker_pages"] = len(math_pages)
+            engine_seconds["marker_parsed"] = n_new
+            if n_new:
+                engine_seconds["marker_per_page"] = round(engine_seconds["marker"] / n_new, 1)
+            third = {p: marker.blocks(mcache.read(p)) for p in math_pages}
 
         # labels
         tess = _tesseract(opts.tesseract, notices)
@@ -227,7 +266,8 @@ def run(opts: Options, progress=None) -> Summary:
                 "made_with": f"g-pdf {__version__}",
                 "source": {"path": str(pdf), "sha256": sha, "page_count": doc.page_count,
                            "pages": pages},
-                "engine": eng.describe(), "dpi": opts.dpi, "crop_dpi": opts.crop_dpi,
+                "engine": eng.describe(), "marker": mk.describe() if mk else None,
+                "dpi": opts.dpi, "crop_dpi": opts.crop_dpi,
                 "tiers": list(opts.tiers), "cache": str(cache.root),
                 "options": {"pages": opts.pages, "group_inline": opts.group_inline,
                             "check_identities": want_ident,
