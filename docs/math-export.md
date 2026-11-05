@@ -262,7 +262,9 @@ gpdf-cli math-apply-review --export OUT\book --decisions review_decisions.jsonl
 ```
 
 `flag_type` is one of `formula_uncertain`, `possible_source_typo`,
-`copy_corrupt`, `illegible`. A replace keeps the display's `\tag`.
+`copy_corrupt`, `illegible`. A replace keeps the display's `\tag`; a `"tag":
+"47.27"` in a display's decision (accept or replace) sets it instead, added
+when the display had none (a number the engine read into the body).
 
 A `missing_display` item has no `latex_primary`; its replace writes the display
 in, either after a piece of page text (`after`) or in place of one

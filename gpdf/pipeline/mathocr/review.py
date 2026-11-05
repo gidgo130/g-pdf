@@ -20,12 +20,14 @@ rebuilt from the page files.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from gpdf.pipeline.manuals import write_atomic
 
 ACTIONS = ("accept", "replace", "flag")
+TAG_LINE = re.compile(r"\n\\tag\*?\{[^{}\n]*\}")
 FLAG_TYPES = ("formula_uncertain", "possible_source_typo", "copy_corrupt", "illegible")
 
 
@@ -176,9 +178,14 @@ def _apply_one(d: dict, it: dict, md: str) -> tuple[str, str | None]:
     where = _inline_span(latex, md) if is_inline else _display_block(latex, md)
     if where is None:
         return md, "latex_primary is no longer in the page"
+    a, b = where
     if d["action"] == "replace":
-        a, b = where
-        md = md[:a] + d["latex"].strip() + md[b:]
+        new = d["latex"].strip()
+        md, b = md[:a] + new + md[b:], a + len(new)
+    if d.get("tag") and not is_inline:          # set the display's \tag (add or change it)
+        line = f"\n\\tag{{{d['tag']}}}"
+        old = TAG_LINE.match(md, b)
+        md = md[:b] + line + md[old.end() if old else b:]
     return md, None
 
 

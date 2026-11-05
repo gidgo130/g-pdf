@@ -155,6 +155,19 @@ def test_a_repeated_inline_span_is_replaced_at_its_occurrence(tmp_path):
                             "the page"}]
 
 
+def test_a_decision_can_set_a_display_tag(root, tmp_path):
+    # p001-d02 has no tag (the number was read into the body); p001-d01's tag was misread
+    dec = decide(tmp_path,
+                 {"id": "p001-d02", "action": "replace", "latex": "(y) = 2", "tag": "3.2"},
+                 {"id": "p001-d01", "action": "accept", "tag": "3.4"})
+    rep = review.apply(root, dec)
+    assert rep.refused == []
+    md = (root / "pages" / "p001.md").read_text("utf-8")
+    assert "$$\nx^2 = 1\n\\tag{3.4}\n$$" in md and "\\tag{3.1}" not in md
+    assert "$$\n(y) = 2\n\\tag{3.2}\n$$" in md
+    assert review.apply(root, dec).already == ["p001-d02", "p001-d01"]
+
+
 def test_dry_run_writes_nothing(root, tmp_path):
     dec = decide(tmp_path, {"id": "p001-d01", "action": "replace", "latex": "x^2 = 1 + 0"})
     before = (root / "pages" / "p001.md").read_text("utf-8")
