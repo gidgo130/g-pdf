@@ -37,6 +37,7 @@
     gpdf-cli math-apply-review --export DIR --decisions FILE [--dry-run]
                                                     # apply the checked review decisions to
                                                     # the page files; rebuild text.md
+    gpdf-cli math-review-pack --export DIR --out DIR [--inline-sample N --seed S]
     gpdf-cli math-score --ref DIR_or_text.md --cand DIR_or_text.md --out DIR [--pages RANGE]
                                                     # score a transcription against a reference
                                                     # (score.json, REPORT.md; numbers on screen)
@@ -373,6 +374,27 @@ def build_parser() -> argparse.ArgumentParser:
                     help="review_decisions.jsonl")
     ma.add_argument("--dry-run", action="store_true",
                     help="report what would be applied or refused; write nothing")
+    mr = sub.add_parser("math-review-pack", help="the math review queue as self-contained batches",
+                        description="Write the review queue of a math-export folder as batches "
+                                    "of --batch-size items: each batchNN/ has BRIEF.md (from "
+                                    "docs/math-review.md), items.jsonl (every engine's reading, "
+                                    "crop paths, page context) and decisions.template.jsonl. "
+                                    "The display kinds by default; --inline-sample N adds N "
+                                    "random flagged inline spans per chapter. Keep --out in the "
+                                    "run's private folder: the batches hold the book's formulas.")
+    mr.add_argument("--export", metavar="DIR", type=Path, required=True,
+                    help="the math-export folder (OUTDIR/<stem>, with pages/ and review.jsonl)")
+    mr.add_argument("--out", metavar="DIR", type=Path, required=True,
+                    help="folder for the batches (created if missing)")
+    mr.add_argument("--kinds", default=",".join(("disagree", "marker", "style", "identity", "stack",
+                                                  "tag", "missing_display", "syntax")),
+                    help="comma-separated item kinds (default: the display kinds; add 'inline' "
+                         "for every inline item)")
+    mr.add_argument("--batch-size", type=int, default=50, help="items per batch (default 50)")
+    mr.add_argument("--pages", metavar="RANGE", help="only these file pages (1-based)")
+    mr.add_argument("--inline-sample", type=int, default=0, metavar="N",
+                    help="N random flagged inline spans per chapter, each its own item")
+    mr.add_argument("--seed", type=int, default=0, help="the inline sample's seed (default 0)")
     ms = sub.add_parser("math-score", help="score a math transcription against a reference",
                         description="Compare the candidate's pages with the reference's (pNNN.md "
                                     "folders, math-export folders or text.md files): display "
@@ -425,6 +447,8 @@ def main(argv: list[str] | None = None) -> int:
         return _math_export_main(args, parser)
     if args.command == "math-apply-review":
         return _math_apply_review_main(args)
+    if args.command == "math-review-pack":
+        return _math_review_pack_main(args)
     if args.command == "math-score":
         return _math_score_main(args)
     if args.sheet_only:
@@ -838,6 +862,21 @@ def _math_apply_review_main(args) -> int:
         return EXIT_ERROR
     print(review.report(rep))
     return EXIT_UNREVIEWED if rep.refused else EXIT_OK
+
+
+def _math_review_pack_main(args) -> int:
+    from gpdf.pipeline.mathocr import pack
+
+    try:
+        summary = pack.pack(args.export, args.out, tuple(k.strip() for k in args.kinds.split(",")
+                                                         if k.strip()),
+                            args.batch_size, args.pages, args.inline_sample, args.seed)
+    except (pack.PackError, OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    print(pack.report(summary))
+    print(f"batches, pack.json and render.py in {args.out}")
+    return EXIT_OK
 
 
 def _math_score_main(args) -> int:
