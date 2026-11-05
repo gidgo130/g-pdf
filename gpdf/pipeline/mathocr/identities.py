@@ -612,8 +612,8 @@ class _Checker:
     def recurrence(self):
         """Both sides at x = 1, 2, 3 with the section's pmf put in for each pmf value."""
         e, pmf = self.e, self.latest_pmf()
-        if pmf is None:
-            return
+        if pmf is None or not set(e.params) <= set(pmf.params):
+            return                       # another parametrization (or no pmf) in the section
         fl, fr = e.fn
         outs, dets = [], []
         for k in range(DRAWS):
@@ -676,16 +676,18 @@ class _Checker:
         self.record(label[which], outs, dets)
 
     def moments(self):
+        """Only a pair in one parametrization: every parameter of the printed mean or
+        variance occurs in the source (a section often prints a distribution in two)."""
         e, ctx = self.e, self.ctx
         if e.kind in MOMENT_KINDS:
             for kind in ("pgf", "mgf", "pmf"):
                 src = ctx.find(kind, nvars=1)
-                if src:
+                if src and set(e.params) <= set(src.params):
                     self.moment_pair(src, e)
         elif e.kind in ("pgf", "mgf", "pmf") and len(e.variables) == 1:
             for kind in MOMENT_KINDS:
                 tgt = ctx.find(kind)
-                if tgt:
+                if tgt and set(tgt.params) <= set(e.params):
                     self.moment_pair(e, tgt)
 
     def call(self, e: _Expr, pvals: dict, *xs):

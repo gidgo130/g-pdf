@@ -381,3 +381,17 @@ def test_side_conditions_with_dots_or_text_no_longer_hide_the_formula():
         (r"\Pr[X = x]", r"\theta^{x}(1 - \theta)"), ("x", "0")]
     assert I.equations(r"\mu = n p \text{ and } \mu_2 = n p q") == [(r"\mu", "n p"), (r"\mu_2", "n p q")]
     assert I.equations(r"G(z) = \sum_{n=0}^{\infty} b_n z^n") == []
+
+
+def test_no_pair_check_across_parametrizations():
+    # JKK 5.1 prints the negative binomial in P, Q and in p, q: a mean in P is not checked
+    # against a PGF in q (no shared parameters), nor a recurrence against a pmf without its
+    # parameters
+    ctx = I.Context()
+    check(r"G(z) = \left(\frac{1 - q}{1 - q z}\right)^{k}", ctx=ctx)
+    r = check(r"\mu = k P", ctx=ctx)
+    assert r.status == "skipped" or not [c for c in r.checks if c.identity.startswith("G'")]
+    ctx = I.Context()
+    check(r"\Pr[X = x] = \frac{e^{-\theta}\theta^{x}}{x!}", ctx=ctx)
+    r = check(r"\frac{p_{x+1}}{p_x} = \frac{\lambda}{x + 1}", ctx=ctx)
+    assert not r.checks
