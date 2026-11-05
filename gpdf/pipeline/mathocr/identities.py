@@ -80,9 +80,30 @@ REL_VAR = re.compile(r"(>|\\ge|\\geq|<|\\le|\\leq)\s*([A-Za-z](?:_\{?[A-Za-z0-9]
 T_VAR = re.compile(r"(?<![A-Za-z\\])t(?:_\{?(\d+)\}?)?")
 RELATION = re.compile(r"<|>|\\le\b|\\ge\b|\\leq\b|\\geq\b|\\ne\b|\\neq\b|\\in\b")
 NOT_IDENTITY = re.compile(r"\\(doteq|approx|propto|equiv|sim|cong)\b")
-UNSUPPORTED = re.compile(r"\\begin\{(cases|[pbvB]?matrix|smallmatrix)\}|\\text\b|\\mathrm\{(?!e\}|d\})"
+UNSUPPORTED_ENV = re.compile(r"\\begin\{(cases|[pbvB]?matrix|smallmatrix)\}")
+UNSUPPORTED = re.compile(r"\\text\b|\\mathrm\{(?!e\}|d\})"
                          r"|\\(int|iint|iiint|oint|sum|prod|dots|cdots|ldots)(?![A-Za-z])")
 VECTOR = re.compile(r"boldsymbol|mathbf|pmb|^bm|dots")
+# words between the equations of a row ("and", "for", "if") separate them like \quad
+TEXT_WORD = re.compile(r"\\(?:text|mathrm|textrm|mbox)\s*\{\s*(?![ed]\s*\})[^{}]*\}")
+VAR_NAME = re.compile(r"\\(?:operatorname\*?|mathrm|text|textrm|mbox)\s*\{\s*[Vv]\s*a\s*r\s*\}")
+E_NAME = re.compile(r"\\(?:operatorname\*?|mathrm|mathbb|text|mathsf)\s*\{\s*E\s*\}")
+CHOOSE = re.compile(r"\{\s*([^{}]*?)\s*\\choose\s*([^{}]*?)\s*\}")
+DISCRETE = ("pmf", "pmf_point", "recurrence", "pgf")
+MOMENT_KINDS = ("mean", "variance")
+DEF_NAMES = {"q", "Q"} | {"c", "C", "K"}              # names a section may define: C = ...
+INT_PARAMS = {"n": [5, 6, 8, 10], "m": [5, 6, 8, 10], "M": [5, 6, 8, 10], "N": [12, 15, 18, 21]}
+PROB_PARAMS = {"p", "theta", "pi", "omega", "q"}
+PROB_LO, PROB_HI = 0.1, 0.9
+REC_POINTS = [1, 2, 3]
+PMF_VARS = "xyknrjim"
+PMF_TERM = re.compile(
+    r"\\Pr\s*[\[(]\s*X\s*=\s*(?P<a>[^\[\]()]+?)\s*[\])]"
+    r"|(?<![A-Za-z\\])P\s*\(\s*X\s*=\s*(?P<b>[^()]+?)\s*\)"
+    r"|(?<![A-Za-z\\])[pP]_\{(?P<c>[^{}]+)\}"
+    r"|(?<![A-Za-z\\])[pP]_(?P<d>[A-Za-z])(?![A-Za-z])")
+MEAN_LHS = re.compile(r"^(?:\\mu|\\mu(?:_\{?1\}?)?(?:'|\^\{?\\prime\}?)(?:_\{?1\}?)?)$")
+VARIANCE_LHS = re.compile(r"^(?:\\Var\s*[\[(]\s*X\s*[\])]|\\sigma\^\{?2\}?|\\mu_\{?2\}?)$")
 
 
 class _Timeout(BaseException):
@@ -115,18 +136,22 @@ class _Expr:
     fn: object
     params: list[str]
     lhs: str
+    terms: list = field(default_factory=list)     # recurrence: (symbol, shift | None, const)
 
 
 class Context:
-    """The classified expressions of the current section, for the pair checks."""
+    """The classified expressions of the current section, for the pair checks, and the
+    constants the section defines (``C = ...``, ``q = 1 - p``), as LaTeX."""
 
     def __init__(self):
         self.exprs: list[_Expr] = []
         self.section = ""
+        self.defs: dict[str, str] = {}
 
-    def new_section(self, heading: str) -> None:
+    def new_section(self, heading: str, defs: dict | None = None) -> None:
         self.section = heading
         self.exprs = []
+        self.defs = dict(defs or {})
 
     def find(self, kind: str, sub: str | None = None, nvars: int | None = None,
              sub_first: str | None = None) -> _Expr | None:
@@ -157,6 +182,8 @@ _CLEAN = [
     (re.compile(r"\\operatorname\s*\*?\s*\{\s*exp\s*\}"), r"\\exp"),
     (re.compile(r"\\operatorname\s*\*?\s*\{\s*P\s*r\s*\}"), r"\\Pr"),
     (re.compile(r"\s*([_^{}])\s*"), r"\1"),          # the engine's "X _ {1}" is X_{1}
+    (re.compile(r"\\prime"), "'"),
+    (re.compile(r"\^\{'\}"), "'"),
 ]
 _INDICATOR = [
     re.compile(r"\\(mathbf|mathbb|boldsymbol|pmb|bm)\{1\}(?:_\{[^{}]*\}|\([^()]*\))?"),
@@ -198,19 +225,33 @@ def _split_top(s: str, seps) -> list[str]:
     return out
 
 
+SEPARATORS = [",", ";", r"\qquad", r"\quad"]
+
+
 def _strip_conditions(rhs: str) -> str:
     """The expression before a top-level comma, semicolon or \\quad (a side condition)."""
-    first = _split_top(rhs, [",", ";", r"\qquad", r"\quad"])[0]
+    first = _split_top(rhs, SEPARATORS)[0]
     return first.strip().rstrip(".,;").strip()
 
 
+def _pre(body: str) -> str:
+    """Names the classifier knows (Var, E, binomials) in one spelling; words between
+    equations become separators."""
+    body = VAR_NAME.sub(r"\\Var ", body)
+    body = E_NAME.sub("E", body)
+    body = CHOOSE.sub(r"\\binom{\1}{\2}", body)
+    body = TEXT_WORD.sub(" ; ", body)
+    return re.sub(r"\\q?quad\b", " ; ", body)       # _clean would make spaces of them
+
+
 def equations(latex: str) -> list[tuple[str, str]]:
-    """(lhs, rhs) pairs of a display: aligned rows and = chains split, conditions
-    dropped; empty for a display that is no identity."""
+    """(lhs, rhs) pairs of a display: aligned rows, = chains and equations separated by a
+    comma, \\quad or a word split; side conditions dropped; an equation whose side holds a
+    sum, an integral or dots is left out. Empty for a display that is no identity."""
     body, _ = L.split_tag(latex)
-    if NOT_IDENTITY.search(body) or UNSUPPORTED.search(body):
+    if NOT_IDENTITY.search(body) or UNSUPPORTED_ENV.search(body):
         return []
-    body = ALIGN_ENV.sub(" ", body)
+    body = ALIGN_ENV.sub(" ", _pre(body))
     rows = [r.replace("&", " ") for r in re.split(r"\\\\(?:\[[^\]]*\])?", body)]
     eqs, lhs = [], None
     for row in rows:
@@ -223,14 +264,33 @@ def equations(latex: str) -> list[tuple[str, str]]:
                 lhs = parts[0].strip()
             elif lhs is None:
                 continue
-            for r in parts[1:]:
-                r = _strip_conditions(r)
+            k = 1
+            while k < len(parts):
+                pieces = _split_top(parts[k], SEPARATORS)
+                r = pieces[0].strip().rstrip(".,;").strip()
                 if r:
                     eqs.append((lhs, r))
+                if len(pieces) > 1 and k + 1 < len(parts):
+                    # "mu = np, sigma^2 = npq": the last piece before the next "=" is a
+                    # new left-hand side; a condition without "=" ends the chain
+                    lhs = pieces[-1].strip()
+                    if not lhs:
+                        break
+                k += 1
         elif eqs and not RELATION.search(row):
             l, r = eqs[-1]
             eqs[-1] = (l, r + " " + _strip_conditions(row))
-    return eqs
+    return [(l, r) for l, r in eqs if not UNSUPPORTED.search(l) and not UNSUPPORTED.search(r)]
+
+
+def definitions(latex: str) -> dict[str, str]:
+    """The constants a display defines (``C = ...``, ``q = 1 - p``): {name: LaTeX}."""
+    out = {}
+    for lhs, rhs in equations(latex):
+        name = _canon(lhs)
+        if name in DEF_NAMES and name not in _canon(rhs).split():
+            out.setdefault(name, rhs)
+    return out
 
 
 # ---------------------------------------------------------------- classification
@@ -243,6 +303,10 @@ def _canon(name: str) -> str:
 def classify(lhs: str, before: str = "") -> tuple[str | None, list[str], str]:
     """(kind, variables, subscript) of a left-hand side."""
     s = _clean(lhs).strip()
+    if MEAN_LHS.match(s):
+        return "mean", [], ""
+    if VARIANCE_LHS.match(s):
+        return "variance", [], ""
     m = PR_RE.match(s)
     if m:
         inner = m.group("inner")
@@ -297,9 +361,9 @@ def classify(lhs: str, before: str = "") -> tuple[str | None, list[str], str]:
 
 # ---------------------------------------------------------------- SymPy
 
-def _to_sympy(rhs: str, variables: list[str]):
-    """(fn(vars..., params...), params) or None when the expression will not parse."""
-    s = _clean(rhs)
+def _parse(s: str, defs: dict | None = None, depth: int = 0):
+    """A sympy expression of cleaned LaTeX, the section's constants put in, Gamma, B, Phi
+    and phi mapped; None when it will not parse or leaves an unknown function."""
     for rx in _INDICATOR:
         s = rx.sub(" 1 ", s)
     try:
@@ -341,12 +405,31 @@ def _to_sympy(rhs: str, variables: list[str]):
         Latin letter before a bracket (g(x), f_1(x), q(t)) stays a function: unknown,
         so the display is skipped."""
         base = a.func.__name__.split("_")[0]
-        return isinstance(a, AppliedUndef) and len(a.args) == 1 and base in GREEK_LOWER \
-            and base not in FUNCTION_GREEK
+        return isinstance(a, AppliedUndef) and len(a.args) == 1 and (
+            (base in GREEK_LOWER and base not in FUNCTION_GREEK) or base == "Xi")
 
     expr = expr.replace(juxtaposed, lambda a: sympy.Symbol(a.func.__name__) * a.args[0])
     if expr.atoms(AppliedUndef):
         return None
+    if defs and depth < 2:
+        put = {}
+        for sym in expr.free_symbols:
+            if _canon(sym.name) in defs:
+                d = _parse(_clean(defs[_canon(sym.name)]), defs, depth + 1)
+                if d is not None:
+                    put[sym] = d
+        expr = expr.subs(put)
+    # the books' conventions, also where p (or P) is not in this expression: q = 1 - p, Q = 1 + P
+    names = {_canon(x.name): x for x in expr.free_symbols}
+    if "q" in names and not (defs and "q" in defs):
+        expr = expr.subs(names["q"], 1 - names.get("p", sympy.Symbol("p")))
+    if "Q" in names and not (defs and "Q" in defs):
+        expr = expr.subs(names["Q"], 1 + names.get("P", sympy.Symbol("P")))
+    return expr
+
+
+def _lambdify(expr, variables: list[str]):
+    """(fn(vars..., params...), params) or None."""
     if any(_canon(s.name) in UNKNOWN_CONSTANTS for s in expr.free_symbols):
         return None                                      # "c e^{...}": c is not known
     syms = sorted(expr.free_symbols, key=lambda x: x.name)
@@ -362,8 +445,53 @@ def _to_sympy(rhs: str, variables: list[str]):
     return fn, [_canon(p.name) for p in params]
 
 
-def _draw(name: str, k: int) -> float:
+def _to_sympy(rhs: str, variables: list[str], defs: dict | None = None):
+    """(fn(vars..., params...), params) or None when the expression will not parse."""
+    expr = _parse(_clean(rhs), defs)
+    return None if expr is None else _lambdify(expr, variables)
+
+
+def _pmf_terms(s: str):
+    """The pmf values a side names (Pr[X = x + 1], p_x, P(X = 0)): the side with each
+    replaced by a symbol, and [(symbol, variable, shift, constant)]; None when a term's
+    argument is neither the variable plus an integer nor (for Pr/P) a number."""
+    terms = []
+
+    def repl(m):
+        arg = next(g for g in m.groups() if g is not None).strip()
+        subscript = m.group("c") is not None or m.group("d") is not None
+        try:
+            a = parse_latex(arg)
+        except Exception:  # noqa: BLE001
+            if subscript:
+                return m.group(0)
+            raise ValueError(arg) from None
+        free = sorted(a.free_symbols, key=lambda x: x.name)
+        if not free:
+            if subscript:                    # p_1, p_2: weights or parameters, not pmf values
+                return m.group(0)
+            terms.append((f"Xi_{{{len(terms)}}}", None, None, a))
+        elif len(free) == 1 and free[0].name in PMF_VARS and (a - free[0]).is_integer:
+            terms.append((f"Xi_{{{len(terms)}}}", free[0].name, int(a - free[0]), None))
+        else:
+            if subscript:
+                return m.group(0)
+            raise ValueError(arg)
+        return rf" \Xi_{{{len(terms) - 1}}} "
+
+    try:
+        out = PMF_TERM.sub(repl, s)
+    except ValueError:
+        return None
+    return out, terms
+
+
+def _draw(name: str, k: int, discrete: bool = False) -> float:
     rng = random.Random(f"{SEED}:{k}:{name}")
+    if discrete and name in INT_PARAMS:
+        return INT_PARAMS[name][k % len(INT_PARAMS[name])]
+    if discrete and name in PROB_PARAMS:
+        return PROB_LO + (k + rng.random()) * (PROB_HI - PROB_LO) / DRAWS
     return LO + (k + rng.random()) * (HI - LO) / DRAWS
 
 
@@ -400,6 +528,7 @@ class _Checker:
         self.e, self.ctx, self.deadline = e, ctx, deadline
         self.checks: list[Check] = []
         self.supports: Counter = Counter()
+        self.discrete = e.kind in DISCRETE
 
     def tick(self) -> None:
         """Checked before every draw and at every function evaluation (so inside the
@@ -407,10 +536,157 @@ class _Checker:
         if _clock() > self.deadline:
             raise _Timeout()
 
-    def params(self, k: int, extra=()) -> dict:
+    def params(self, k: int, extra=(), discrete: bool | None = None) -> dict:
+        """Positive draws; for a discrete distribution n, m, N are integers and p, theta
+        lie in (0.1, 0.9)."""
         self.tick()
         names = sorted(set(self.e.params) | set(extra))
-        return {n: _draw(n, k) for n in names}
+        d = self.discrete if discrete is None else discrete
+        return {n: _draw(n, k, d) for n in names}
+
+    # ---- probability mass functions
+    def pmf_support(self, e: _Expr, p: dict):
+        """(support, sum, non-negative) of the support whose sum is nearest 1: {0,1,...},
+        {1,2,...} or {0..n} for an integer parameter n; None when nothing evaluates."""
+        cands = [("{0,1,...}", 0, None), ("{1,2,...}", 1, None)]
+        cands += [(f"{{0..{n}}}", 0, int(p[n])) for n in sorted(INT_PARAMS) if n in e.params]
+        best = None
+        for name, lo, hi in cands:
+            try:
+                f = lambda x: self.call(e, p, x)              # noqa: E731
+                head = [f(x) for x in range(lo, lo + 4 if hi is None else min(hi, lo + 3) + 1)]
+                if hi is None:
+                    total = _real(mpmath.nsum(f, [lo, mpmath.inf]))
+                else:
+                    total = _real(mpmath.fsum(f(x) for x in range(lo, hi + 1)))
+            except (ValueError, ZeroDivisionError, OverflowError, TypeError, ArithmeticError):
+                continue
+            cand = (abs(total - 1), name, total, all(v >= -TOL for v in head), lo, hi)
+            if best is None or cand[0] < best[0]:
+                best = cand
+            if cand[0] <= TOL_INT:
+                break
+        return best
+
+    def pmf_moments(self, e: _Expr, p: dict):
+        best = self.pmf_support(e, p)
+        if best is None or best[0] > TOL_INT:
+            raise ValueError("no support sums to 1")
+        _, _, _, _, lo, hi = best
+        f1 = lambda x: x * self.call(e, p, x)                 # noqa: E731
+        f2 = lambda x: x * x * self.call(e, p, x)             # noqa: E731
+        if hi is None:
+            m1, m2 = mpmath.nsum(f1, [lo, mpmath.inf]), mpmath.nsum(f2, [lo, mpmath.inf])
+        else:
+            m1 = mpmath.fsum(f1(x) for x in range(lo, hi + 1))
+            m2 = mpmath.fsum(f2(x) for x in range(lo, hi + 1))
+        m1, m2 = _real(m1), _real(m2)
+        return m1, m2 - m1 ** 2
+
+    def pmf(self):
+        e = self.e
+        if len(e.variables) != 1:
+            return
+        nonneg, sums, det_n, det_s = [], [], [], []
+        for k in range(DRAWS):
+            p = self.params(k)
+            best = self.pmf_support(e, p)
+            if best is None:
+                nonneg.append(None)
+                sums.append(None)
+                det_n.append({"params": p})
+                det_s.append({"params": p})
+                continue
+            dist, name, total, nn, _, _ = best
+            self.supports[name] += 1
+            nonneg.append(nn)
+            sums.append(dist <= TOL_INT)
+            det_n.append({"params": p, "support": name})
+            det_s.append({"params": p, "support": name, "sum": float(total)})
+        self.record("non-negative", nonneg, det_n)
+        self.record("sums to 1", sums, det_s)
+
+    def latest_pmf(self) -> _Expr | None:
+        return self.ctx.find("pmf", nvars=1)
+
+    def recurrence(self):
+        """Both sides at x = 1, 2, 3 with the section's pmf put in for each pmf value."""
+        e, pmf = self.e, self.latest_pmf()
+        if pmf is None:
+            return
+        fl, fr = e.fn
+        outs, dets = [], []
+        for k in range(DRAWS):
+            p = self.params(k, pmf.params, discrete=True)
+            res, ok = [], True
+            try:
+                points = REC_POINTS if e.variables else [None]
+                for x in points:
+                    vals = []
+                    for _, var, shift, const in e.terms:
+                        at = const if var is None else x + shift
+                        if at < 0:
+                            raise ValueError("outside the support")
+                        vals.append(self.call(pmf, p, at))
+                    xs = [x] if e.variables else []
+                    a = self.call_side(fl, e, p, xs, vals)
+                    b = self.call_side(fr, e, p, xs, vals)
+                    res.append((a, b))
+                    if abs(a - b) > 1e-6 * max(abs(a), abs(b), mpmath.mpf(10) ** -300):
+                        ok = False
+                outs.append(ok)
+                dets.append({"params": p, "with": pmf.lhs,
+                             "values": [[float(a), float(b)] for a, b in res]})
+            except (ValueError, ZeroDivisionError, OverflowError, TypeError, ArithmeticError):
+                outs.append(None)
+                dets.append({"params": p, "with": pmf.lhs})
+        self.record("recurrence" if e.kind == "recurrence" else "pmf at a point", outs, dets)
+
+    def call_side(self, fn, e: _Expr, p: dict, xs: list, vals: list):
+        self.tick()
+        return _real(fn(*xs, *vals, *[p[q] for q in e.params]))
+
+    # ---- printed mean and variance against a generating function or the pmf
+    def moment_pair(self, src: _Expr, tgt: _Expr):
+        label = {"mgf": ("M'(0) = mean", "M''(0) - M'(0)^2 = variance"),
+                 "pgf": ("G'(1) = mean", "G''(1) + G'(1) - G'(1)^2 = variance"),
+                 "pmf": ("sum x p(x) = mean", "sum x^2 p(x) - mean^2 = variance")}[src.kind]
+        which = 0 if tgt.kind == "mean" else 1
+        outs, dets = [], []
+        for k in range(DRAWS):
+            p = self.params(k, set(src.params) | set(tgt.params),
+                            discrete=src.kind in DISCRETE or self.discrete)
+            try:
+                if src.kind == "pmf":
+                    derived = self.pmf_moments(src, p)[which]
+                else:
+                    at = 0 if src.kind == "mgf" else 1
+                    f = lambda t: src.fn(t, *[p[q] for q in src.params])     # noqa: E731
+                    d1 = _real(mpmath.diff(f, at))
+                    d2 = _real(mpmath.diff(f, at, 2)) if which else 0
+                    derived = d1 if not which else (
+                        d2 - d1 ** 2 if src.kind == "mgf" else d2 + d1 - d1 ** 2)
+                printed = self.call(tgt, p)
+                outs.append(_close(derived, printed, 1e-5))
+                dets.append({"params": p, "with": src.lhs if tgt is self.e else tgt.lhs,
+                             "derived": float(derived), "printed": float(printed)})
+            except (ValueError, ZeroDivisionError, OverflowError, TypeError, ArithmeticError):
+                outs.append(None)
+                dets.append({"params": p})
+        self.record(label[which], outs, dets)
+
+    def moments(self):
+        e, ctx = self.e, self.ctx
+        if e.kind in MOMENT_KINDS:
+            for kind in ("pgf", "mgf", "pmf"):
+                src = ctx.find(kind, nvars=1)
+                if src:
+                    self.moment_pair(src, e)
+        elif e.kind in ("pgf", "mgf", "pmf") and len(e.variables) == 1:
+            for kind in MOMENT_KINDS:
+                tgt = ctx.find(kind)
+                if tgt:
+                    self.moment_pair(e, tgt)
 
     def call(self, e: _Expr, pvals: dict, *xs):
         self.tick()
@@ -450,6 +726,10 @@ class _Checker:
                     best = cand
                 if cand[0] <= (TOL_INT if len(e.variables) == 1 else TOL_INT_2D):
                     break                                 # this support is the one
+            if len(e.variables) == 1 and (best is None or best[0] > TOL_INT):
+                disc = self.pmf_support(e, p)               # a pmf written f(x) or p(x)
+                if disc is not None and disc[0] <= TOL_INT:
+                    best = (disc[0], disc[1], disc[3], disc[2])
             if best is None:
                 nonneg.append(None)
                 integ.append(None)
@@ -619,19 +899,17 @@ class _Checker:
             if marg:
                 self.pair("joint survival at x_2 = 0 = marginal", marg, lambda p: [
                     (self.call(e, p, x, 0.0), self.call(marg, p, x)) for x in PAIR_POINTS])
-        if e.kind in ("mgf", "mean"):
-            other = ctx.find("mean" if e.kind == "mgf" else "mgf", e.sub,
-                             0 if e.kind == "mgf" else 1)
-            if other and (e.kind == "mean" or one):
-                M, mean = (other, e) if e.kind == "mean" else (e, other)
-                self.pair("M'(0) = mean", other, lambda p: [
-                    (_real(mpmath.diff(lambda t: M.fn(t, *[p[q] for q in M.params]), 0)),
-                     self.call(mean, p))])
+        self.moments()
 
     def run(self):
         k = self.e.kind
         if k == "density":
             self.density()
+        elif k == "pmf":
+            self.pmf()
+        elif k in ("recurrence", "pmf_point"):
+            self.recurrence()
+            return
         elif k == "cdf":
             self.cdf_like(False)
         elif k == "survival":
@@ -658,6 +936,51 @@ def _overall(checks: list[Check]) -> str:
     return "skipped"
 
 
+def _expression(lhs: str, rhs: str, before: str, ctx: Context):
+    """(kind, _Expr or None) of one equation: a pmf (Pr[X = x] = ..., p_x = ...), a pmf
+    value at a point, a recurrence (pmf values on either side), or by its left-hand side."""
+    cl, cr = _clean(lhs), _clean(rhs)
+    tl, tr = _pmf_terms(cl), _pmf_terms(cr)
+    if tl is None or tr is None:
+        return None, None
+    (sl, terms_l), (sr, terms_r) = tl, tr
+    if len(terms_l) == 1 and sl.strip() == r"\Xi_{0}" and not terms_r:
+        sym, var, shift, const = terms_l[0]
+        if var is not None and shift == 0:                 # Pr[X = x] = ...
+            parsed = _to_sympy(rhs, [var], ctx.defs)
+            return "pmf", (_Expr("pmf", "", [var], parsed[0], parsed[1], lhs)
+                           if parsed else None)
+        if var is None:                                    # Pr[X = 0] = ...
+            terms_l = [(sym, None, None, const)]
+    if terms_l or terms_r:
+        kind = "pmf_point" if all(t[1] is None for t in terms_l + terms_r) else "recurrence"
+        terms = terms_l + [(rf"Xi_{{{len(terms_l) + i}}}", v, s, c)
+                           for i, (_, v, s, c) in enumerate(terms_r)]
+        # the right side's symbols are renumbered after the left side's
+        for i in reversed(range(len(terms_r))):
+            sr = sr.replace(rf"\Xi_{{{i}}}", rf"\Xi_{{{len(terms_l) + i}}}")
+        variables = sorted({t[1] for t in terms if t[1] is not None})
+        if len(variables) > 1:
+            return None, None
+        el, er = _parse(sl, ctx.defs), _parse(sr, ctx.defs)
+        if el is None or er is None:
+            return kind, None
+        names = variables + [_canon(t[0]) for t in terms]
+        both = sympy.Tuple(el, er)
+        lam = _lambdify(both, names)
+        if lam is None:
+            return kind, None
+        fn, params = lam
+        fl = lambda *a, _f=fn: _f(*a)[0]                  # noqa: E731
+        fr = lambda *a, _f=fn: _f(*a)[1]                  # noqa: E731
+        return kind, _Expr(kind, "", variables, (fl, fr), params, lhs, terms)
+    kind, variables, sub = classify(lhs, before)
+    if kind is None:
+        return None, None
+    parsed = _to_sympy(rhs, variables, ctx.defs)
+    return kind, (_Expr(kind, sub, variables, parsed[0], parsed[1], lhs) if parsed else None)
+
+
 def check_display(latex: str, before: str = "", ctx: Context | None = None) -> Result:
     """Classify and check one display; never raises for a formula that will not do."""
     if not AVAILABLE:                       # pragma: no cover - depends on extras
@@ -666,14 +989,17 @@ def check_display(latex: str, before: str = "", ctx: Context | None = None) -> R
     eqs = equations(latex)
     if not eqs:
         return Result(None, "skipped", reason="no identity")
-    kind, variables, sub = classify(eqs[0][0], before)
+    kind, exprs, first = None, [], True
+    for lhs, rhs in eqs:
+        k, e = _expression(lhs, rhs, before if first else "", ctx)
+        first = False
+        if k is None:
+            continue
+        kind = kind or k
+        if e is not None:
+            exprs.append(e)
     if kind is None:
         return Result(None, "skipped", reason="unclassified")
-    exprs = []
-    for lhs, rhs in eqs:
-        parsed = _to_sympy(rhs, variables)
-        if parsed:
-            exprs.append(_Expr(kind, sub, variables, parsed[0], parsed[1], lhs))
     if not exprs:
         return Result(kind, "skipped", reason="does not parse")
     mpmath.mp.dps = 15

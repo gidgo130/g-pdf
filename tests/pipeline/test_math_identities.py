@@ -297,3 +297,87 @@ def test_counts_over_a_page():
                check(r"M(t) = \exp\{\mu t - \frac{1}{2}\sigma^2 t^2\}", ctx=ctx)]
     assert I.counts(results) == {"checked": 2, "passed": 1, "failed": 1, "inconclusive": 0,
                                  "skipped": 1}
+
+
+# ---------------------------------------------------------------- discrete distributions
+
+@pytest.mark.parametrize("latex", [
+    r"\Pr[X = x] = \binom{n}{x} p^{x} q^{n - x}, \quad x = 0, 1, \ldots, n",
+    r"\Pr [ X = x ] = \frac{e^{-\theta} \theta^{x}}{x!}, \qquad x = 0, 1, 2, \ldots",
+    r"p_x = \frac{\Gamma(k + x)}{x! \, \Gamma(k)} \left(\frac{P}{Q}\right)^{x} \left(1 - \frac{P}{Q}\right)^{k}",
+    r"\Pr[X = x] = \frac{\theta^{x}}{-x \log(1 - \theta)}, \quad x = 1, 2, \ldots",
+    r"\Pr[X = x] = {n \choose x} p^{x} (1 - p)^{n - x}",
+])
+def test_correct_pmfs_sum_to_one(latex):
+    r = check(latex)
+    assert (r.kind, r.status) == ("pmf", "passed"), [(c.identity, c.status, c.details) for c in r.checks]
+    assert {c.identity for c in r.checks} >= {"non-negative", "sums to 1"}
+
+
+def test_a_pmf_with_a_wrong_exponent_fails_and_carries_its_numbers():
+    r = check(r"\Pr[X = x] = \frac{e^{-\theta} \theta^{x + 1}}{x!}")
+    assert (r.kind, r.status) == ("pmf", "failed")
+    bad = [c for c in r.checks if c.status == "failed"]
+    assert bad[0].identity == "sums to 1" and {"params", "support", "sum"} <= set(bad[0].details)
+
+
+def test_a_discrete_density_written_as_f_is_not_a_false_alarm():
+    r = check(r"f(x) = \frac{e^{-\lambda} \lambda^{x}}{x!}")
+    assert r.status == "passed"
+
+
+def test_printed_mean_and_variance_against_the_pgf_mgf_and_pmf():
+    ctx = I.Context()
+    check(r"G(z) = (q + p z)^{n}", ctx=ctx)
+    r = check(r"\mu = n p, \qquad \operatorname{Var}(X) = n p q", ctx=ctx)
+    ok = {c.identity for c in r.checks if c.status == "passed"}
+    assert {"G'(1) = mean", "G''(1) + G'(1) - G'(1)^2 = variance"} <= ok
+    r = check(r"\operatorname{Var}(X) = n p^{2} q", ctx=ctx)            # printed wrong
+    assert r.status == "failed" and r.kind == "variance"
+    ctx = I.Context()
+    check(r"\Pr[X = x] = \frac{e^{-\theta} \theta^{x}}{x!}", ctx=ctx)
+    r = check(r"E[X] = \theta", ctx=ctx)
+    assert "sum x p(x) = mean" in [c.identity for c in r.checks if c.status == "passed"]
+    r = check(r"\mu_2 = \theta^{2}", ctx=ctx)
+    assert r.status == "failed"
+    ctx = I.Context()
+    check(r"M(t) = (q + p e^{t})^{n}", ctx=ctx)
+    r = check(r"\sigma^{2} = n p q", ctx=ctx)
+    assert "M''(0) - M'(0)^2 = variance" in [c.identity for c in r.checks if c.status == "passed"]
+
+
+def test_recurrences_and_point_values_against_the_pmf():
+    ctx = I.Context()
+    check(r"\Pr[X = x] = \binom{n}{x} p^{x} q^{n - x}", ctx=ctx)
+    r = check(r"\frac{\Pr[X = x + 1]}{\Pr[X = x]} = \frac{(n - x) p}{(x + 1) q}", ctx=ctx)
+    assert (r.kind, r.status) == ("recurrence", "passed")
+    r = check(r"p_{x + 1} = \frac{(n - x) p}{(x + 1) q} p_{x}", ctx=ctx)
+    assert r.status == "passed"
+    r = check(r"(x + 1) p_{x + 1} = (n - x) \frac{p}{q} p_{x}", ctx=ctx)
+    assert r.status == "passed"
+    r = check(r"\frac{\Pr[X = x + 1]}{\Pr[X = x]} = \frac{(n - x) p}{x q}", ctx=ctx)
+    assert r.status == "failed" and r.checks[0].identity == "recurrence"
+    r = check(r"\Pr[X = 0] = q^{n}", ctx=ctx)
+    assert (r.kind, r.status) == ("pmf_point", "passed")
+    r = check(r"\Pr[X = 0] = p^{n}", ctx=ctx)
+    assert r.status == "failed"
+    # mixture weights p_1, p_2 are no pmf values
+    r = check(r"\Pr[X = x] = p_1 \frac{e^{-\theta_1}\theta_1^x}{x!} + p_2 \frac{e^{-\theta_2}\theta_2^x}{x!}",
+              ctx=I.Context())
+    assert r.kind == "pmf" and r.status in ("inconclusive", "failed", "passed")
+
+
+def test_a_constant_printed_in_the_section_is_used():
+    ctx = I.Context()
+    ctx.new_section("## 7.1 Logarithmic", defs={"C": r"-1 / \log(1 - \theta)"})
+    r = check(r"\Pr[X = x] = C \frac{\theta^{x}}{x}", ctx=ctx)
+    assert (r.kind, r.status) == ("pmf", "passed")
+    assert I.definitions(r"C = \frac{1}{\Gamma(\alpha)}, \qquad q = 1 - p") == {
+        "C": r"\frac{1}{\Gamma(\alpha)}", "q": "1 - p"}
+
+
+def test_side_conditions_with_dots_or_text_no_longer_hide_the_formula():
+    assert I.equations(r"\Pr[X = x] = \theta^{x} (1 - \theta), \quad x = 0, 1, \ldots") == [
+        (r"\Pr[X = x]", r"\theta^{x}(1 - \theta)"), ("x", "0")]
+    assert I.equations(r"\mu = n p \text{ and } \mu_2 = n p q") == [(r"\mu", "n p"), (r"\mu_2", "n p q")]
+    assert I.equations(r"G(z) = \sum_{n=0}^{\infty} b_n z^n") == []

@@ -365,7 +365,19 @@ def _identities(assembled, items_of, ranges, say) -> dict:
 
     counts = {}
     for a, b in ranges:
+        # first pass: the constants each section defines (C = ..., q = 1 - p), so a pmf
+        # printed before its "where C = ..." is still checked
+        defs, sec = [{}], 0
+        for pg in assembled:
+            if a <= pg.file <= b:
+                for it in pg.items:
+                    if it.kind == "heading" and it.md.startswith("##"):
+                        defs.append({})
+                    elif it.kind == "display":
+                        for k, v in identities.definitions(it.display.latex).items():
+                            defs[-1].setdefault(k, v)
         ctx = identities.Context()
+        ctx.new_section("", defs[0])
         for pg in assembled:
             if not a <= pg.file <= b:
                 continue
@@ -374,7 +386,8 @@ def _identities(assembled, items_of, ranges, say) -> dict:
             n = 0
             for it in pg.items:
                 if it.kind == "heading" and it.md.startswith("##"):
-                    ctx.new_section(it.md)
+                    sec += 1
+                    ctx.new_section(it.md, defs[sec])
                 if it.kind == "para":
                     before = it.md[-300:]
                 if it.kind != "display":

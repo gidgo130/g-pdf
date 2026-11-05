@@ -279,3 +279,31 @@ def test_identity_pass_runs_when_the_extra_is_installed(setup, tmp_path):
     assert rec["pages"][0]["identities"] == {"checked": 1, "passed": 1, "failed": 0,
                                              "inconclusive": 0, "skipped": 0}
     assert rec["totals"]["identities"]["skipped"] == 3
+
+
+def test_section_constants_and_identity_items_from_the_pass():
+    pytest.importorskip("sympy")
+    pytest.importorskip("antlr4")
+    from types import SimpleNamespace as NS
+
+    from gpdf.pipeline.mathocr import run as R
+
+    def disp(latex):
+        return NS(kind="display", md="", display=NS(latex=latex, tag=None, bbox=None))
+
+    def page(file, *items):
+        return NS(file=file, items=list(items), label=NS(marker=str(file)))
+
+    pages = [page(1, NS(kind="heading", md="## 7.1 Logarithmic", display=None),
+                  disp(r"\Pr[X = x] = C \frac{\theta^{x}}{x}, \quad x = 1, 2, \ldots"),
+                  NS(kind="para", md="where", display=None),
+                  disp(r"C = -1 / \log(1 - \theta)")),
+             page(2, NS(kind="heading", md="## 7.2 Poisson", display=None),
+                  disp(r"\Pr[X = x] = \frac{e^{-\theta} \theta^{x + 1}}{x!}"))]
+    items = {1: [], 2: []}
+    counts = R._identities(pages, items, [(1, 2)], lambda s: None)
+    assert counts[1]["passed"] == 1 and counts[2]["failed"] == 1
+    assert items[1] == []                                   # C came from the section
+    it = items[2][0]
+    assert it.kind == "identity" and it.extra["identity"] == ["sums to 1"]
+    assert it.extra["identity_details"][0]["support"] == "{0,1,...}"

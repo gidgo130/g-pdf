@@ -253,9 +253,27 @@ Checks, at four stratified positive draws of every parameter:
   in 1-D and the Hessian minus the outer product of the gradient PSD in 2-D
   (this is what catches a sign error such as exp{−½ t′Σt}, which still equals
   1 at 0);
+- pmf (`\Pr[X = x]`, `P(X = x)`, `p_x`; a density `f(x)` / `p(x)` that integrates to
+  nothing near 1 is tried as a pmf too): non-negative, sums to 1 over {0, 1, …},
+  {1, 2, …} or {0..n} for an integer parameter n (the support that worked is reported);
 - pairs in the same section (between headings, within a page run): F′ = f,
-  h = f/S, S = 1 − F, a joint survival at x₂ = 0 against the marginal, M′(0)
-  against a printed mean.
+  h = f/S, S = 1 − F, a joint survival at x₂ = 0 against the marginal;
+- a printed mean (`E[X]`, `\mu`, `\mu'_1`) and variance (`\operatorname{Var}(X)`, `\sigma^2`,
+  `\mu_2`) against the section's MGF (M′(0), M″(0) − M′(0)²), PGF (G′(1),
+  G″(1) + G′(1) − G′(1)²) and pmf (Σ x p(x), Σ x² p(x) − mean²), by numerical derivatives
+  and sums;
+- a recurrence (pmf values on either side: `\frac{\Pr[X = x+1]}{\Pr[X = x]} = …`,
+  `p_{x+1} = … p_x`, `(x+1) p_{x+1} = …`) and a point value (`\Pr[X = 0] = …`) against the
+  section's pmf, both sides at x = 1, 2, 3.
+
+For a discrete distribution (pmf, PGF, recurrence) n, m, M and N are drawn as integers and
+p, θ, π, ω in (0.1, 0.9); everywhere q is 1 − p and Q is 1 + P (JKK's negative binomial)
+unless the section defines them. A section's constants (`C = …`, `c`, `K`, `q`, `Q`
+printed as a display anywhere in the section, before or after the formula) are put in;
+an unnamed constant still skips the display. Equations separated by a comma, `\quad` or a
+word (`\mu = np, \quad \sigma^2 = npq`) are checked one by one; side conditions with
+dots (`x = 0, 1, \ldots`) are dropped, and an equation with a sum, an integral or dots in
+it is left out.
 
 Parameter constraints are unknown, so a check that fails for some draws and
 passes for others is **inconclusive**: counted, not flagged. Each display gets
@@ -263,7 +281,9 @@ about 5 s; on timeout it is skipped. A failure becomes an `identity` review
 item (or joins the display's existing item) with the identity, the parameter
 values and the numbers, and a note that it may be a printed error rather than
 a misread: the reviewer compares the crop and, if the LaTeX matches the page,
-marks `possible_source_typo` instead of changing it. `run.json` has the
+marks `possible_source_typo` instead of changing it; the packed item carries the check
+as `identity_check` (`kind`, `failed`, `numbers`), and math-apply-review gives such a
+flag `"subtype": "math_error"` (a decision may also set `subtype` itself). `run.json` has the
 per-page counts: checked, passed, failed, inconclusive, skipped.
 
 ## Applying the review
