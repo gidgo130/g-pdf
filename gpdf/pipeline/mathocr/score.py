@@ -118,6 +118,7 @@ def load_units(mds: dict[str, str], flags: dict[str, list],
                     and units[b]["md"].split("\n", 1)[1].lstrip("\n").startswith("$$"):
                 j = {"raw": ia[-1]["raw"] + "\n%% page break %%\n" + ib[0]["raw"],
                      "toks": ia[-1]["toks"] + ib[0]["toks"], "tag": ib[0]["tag"] or ia[-1]["tag"],
+                     "parts": [L.norm_str(ia[-1]["toks"]), L.norm_str(ib[0]["toks"])],
                      "page": a + "+" + b}
                 units[a]["items"] = ia[:-1]
                 units[b]["items"] = [j] + ib[1:]
@@ -171,7 +172,10 @@ def score(ref_units: dict, cand_units: dict) -> tuple[dict, dict]:
                                  "ref_raw": "\n".join(R[i]["raw"] for i in ri),
                                  "cand_raw": "\n".join(C[i]["raw"] for i in ci),
                                  "ref_norm": L.norm_str(a), "cand_norm": L.norm_str(b),
-                                 "cand_norms": [L.norm_str(C[i]["toks"]) for i in ci],
+                                 # a joined split display: each half too, so a review
+                                 # item quoting one half covers the joined formula
+                                 "cand_norms": [n for i in ci for n in
+                                                [L.norm_str(C[i]["toks"]), *C[i].get("parts", [])]],
                                  "page_typo_flags": typo})
             tot["matched"] += len(ri)
             tot["exact"] += len(ri) if d == 0 else 0

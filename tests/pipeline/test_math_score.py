@@ -147,6 +147,21 @@ def test_cli_prints_numbers_only(tmp_path, capsys):
     assert "not found" in capsys.readouterr().err
 
 
+def test_an_item_on_one_half_of_a_split_display_covers_the_joined_error(tmp_path):
+    ref_pages = {"p050": '<!-- page printed="1" file="50" -->\n\nText\n\n$$\na = b + c\n$$\n',
+                 "p051": '<!-- page printed="2" file="51" -->\n$$\n+ d\n\\tag{5.1}\n$$\n'}
+    cand_pages = {"p050": ref_pages["p050"],
+                  "p051": '<!-- page printed="2" file="51" -->\n$$\n- d\n\\tag{5.1}\n$$\n'}
+    flags_ = {"p051": [{"type": "page_anomaly", "what": "split_display", "note": "x"}]}
+    item = {"id": "p051-d01", "file": 51, "kind": "disagree", "reasons": ["tiers disagree"],
+            "tag": "5.1", "latex_primary": "- d", "latex_second": "+ d"}
+    ref = write(tmp_path / "ref", ref_pages, flags_)
+    cand = write(tmp_path / "cand", cand_pages, flags_, [item])
+    s, recall = score.run(ref, cand, tmp_path / "out")
+    assert recall["by_class"]["value_changing"]["covered"] == 1
+    assert recall["unflagged_value_changing"] == []
+
+
 def test_inline_and_missing_display_recall(tmp_path):
     ref_pages = dict(REF)
     ref_pages["p012"] = REF["p012"] + "\n$$\nG(z) = e^{z - 1}\n\tag{1.4}\n$$\n"
