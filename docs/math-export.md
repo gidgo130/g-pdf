@@ -366,6 +366,23 @@ listed by an inline item of the page) with the number of spans flagged; and the
 its page whose reading is close). `score.json` and `REPORT.md` quote the
 formulas; the screen gets numbers only.
 
+## Checking page structure
+
+```powershell
+gpdf-cli math-check-pages REF_OR_OUT_DIR [--out check.json]
+```
+
+Runs on any folder of `pNNN.md` / `pNNN.flags.json` (a reference transcription or
+math-export output; an export folder is read through `pages/`) or on a `text.md` split by
+its page markers. Per page: balanced `$$` and `\( \)`; in multi-line environments
+(`aligned`, `array`, `cases`, the matrices, ...) a line ending in a single `\` (or a
+`\[2ex]` with one backslash) where a `\\` row break was meant (`single_backslash_break`),
+and an environment of several lines without any row break (`no_row_breaks`); balanced
+braces, `\begin`/`\end` and `\left`/`\right` in every display and inline span; a flags
+file that parses as a JSON list of objects (`flags_json`, `flags_missing`). The screen gets
+counts by kind and the pages; `--out` lists each problem with its formula. Exit code 2 when
+there are problems. Run it on a reference before scoring against it.
+
 ## Tests
 
 `tests/pipeline/test_math_*.py` use hand-written fake engine outputs of our own

@@ -39,6 +39,7 @@
                                                     # the page files; rebuild text.md
     gpdf-cli math-review-pack --export DIR --out DIR [--inline-sample N --seed S]
     gpdf-cli math-score --ref DIR_or_text.md --cand DIR_or_text.md --out DIR [--pages RANGE]
+    gpdf-cli math-check-pages DIR [--out FILE.json]       # delimiters, row breaks, braces, flags
                                                     # score a transcription against a reference
                                                     # (score.json, REPORT.md; numbers on screen)
 
@@ -416,6 +417,18 @@ def build_parser() -> argparse.ArgumentParser:
                     help="folder for score.json and REPORT.md (created if missing)")
     ms.add_argument("--pages", metavar="RANGE",
                     help="only these file pages (1-based), e.g. 63-81,123-139")
+    mk = sub.add_parser("math-check-pages", help="structural checks on a folder of math pages",
+                        description="Check every pNNN.md / pNNN.flags.json of DIR (a reference "
+                                    "or math-export output): balanced display and inline math "
+                                    "delimiters, row breaks in multi-line environments (a single "
+                                    "backslash at a line end where a double one was meant), "
+                                    "braces, begin/end and left/right pairs, flags files that "
+                                    "parse. Counts and pages on screen (exit code 2 when there "
+                                    "are problems); the formulas only in --out.")
+    mk.add_argument("folder", metavar="DIR", type=Path,
+                    help="the pages folder, a math-export folder with pages/, or a text.md")
+    mk.add_argument("--out", metavar="FILE", type=Path,
+                    help="write every problem, with its formula, to this JSON file")
     return p
 
 
@@ -454,6 +467,8 @@ def main(argv: list[str] | None = None) -> int:
         return _math_review_pack_main(args)
     if args.command == "math-score":
         return _math_score_main(args)
+    if args.command == "math-check-pages":
+        return _math_check_pages_main(args)
     if args.sheet_only:
         for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
                          ("--report", args.report), ("--accept-flagged", args.accept_flagged)):
@@ -880,6 +895,20 @@ def _math_review_pack_main(args) -> int:
     print(pack.report(summary))
     print(f"batches, pack.json and render.py in {args.out}")
     return EXIT_OK
+
+
+def _math_check_pages_main(args) -> int:
+    from gpdf.pipeline.mathocr import check
+
+    try:
+        res = check.check_pages(args.folder)
+        if args.out:
+            check.write(res, args.out)
+    except (check.CheckError, OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    print(check.report(res))
+    return EXIT_UNREVIEWED if res["problems"] else EXIT_OK
 
 
 def _math_score_main(args) -> int:
