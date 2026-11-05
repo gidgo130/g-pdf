@@ -274,7 +274,11 @@ span); the text must occur exactly once in the page. `tag` gives it a `\tag`:
  "page_text": "$$\n...\n$$\n\nand \\(...\\),", "tag": "47.120"}
 ```
 
-Accept and flag on such an item change no text. Every
+Accept and flag on such an item change no text.
+
+An inline span whose `\(…\)` occurs more than once in the page needs
+`"occurrence": n` (1-based, in page order) in its replace; without it the
+decision is refused rather than applied to the first one. Every
 applied decision leaves a `reviewed` record in the page's flags, so running
 the same file again changes nothing. A decision whose id is unknown, or whose
 `latex_primary` is no longer in the page, is refused and listed (exit code 2);

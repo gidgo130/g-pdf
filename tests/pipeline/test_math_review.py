@@ -123,6 +123,38 @@ def test_grouped_inline_spans_are_replaced_one_by_one(root, tmp_path):
                                                 "reason": "span 'q' is not in the item"}]
 
 
+def test_a_repeated_inline_span_is_replaced_at_its_occurrence(tmp_path):
+    md = ('<!-- page printed="57" file="5" -->\n\nFirst \\(x_1\\) and \\(y\\) here.\n\n'
+          "Then \\(x_1\\) again, and \\(x_1\\) once more with \\(y\\).\n")
+    item = {"id": "p005-inline", "file": 5, "printed": "57", "kind": "inline", "reasons": ["x"],
+            "tag": None, "latex_primary": None, "latex_second": None, "crop": None,
+            "spans": [{"paragraph": 2, "latex_primary": "x_1", "latex_second": "x_2"},
+                      {"paragraph": 2, "latex_primary": "y", "latex_second": "z"}]}
+    r = tmp_path / "book"
+    (r / "pages").mkdir(parents=True)
+    (r / "pages" / "p005.md").write_text(md, "utf-8")
+    (r / "pages" / "p005.flags.json").write_text("[]", "utf-8")
+    (r / "review.jsonl").write_text(json.dumps(item) + "\n", "utf-8")
+    # without its occurrence a repeated span is refused, never applied to the first one
+    rep = review.apply(r, decide(tmp_path, {"id": "p005-inline", "action": "replace",
+                                            "spans": [{"latex_primary": "x_1", "latex": "x_2"}]}))
+    assert rep.refused == [{"id": "p005-inline", "reason": "span 'x_1' occurs 3 times in the "
+                            "page: give its occurrence"}]
+    rep = review.apply(r, decide(tmp_path, {"id": "p005-inline", "action": "replace", "spans": [
+        {"latex_primary": "x_1", "latex": "x_2", "occurrence": 3},
+        {"latex_primary": "y", "latex": "z", "occurrence": 2},
+        {"latex_primary": "x_1", "latex": "x_{11}", "occurrence": 2}]}))
+    assert rep.refused == []
+    assert (r / "pages" / "p005.md").read_text("utf-8").endswith(
+        "First \\(x_1\\) and \\(y\\) here.\n\n"
+        "Then \\(x_{11}\\) again, and \\(x_2\\) once more with \\(z\\).\n")
+    (r / "pages" / "p005.flags.json").write_text("[]", "utf-8")
+    rep = review.apply(r, decide(tmp_path, {"id": "p005-inline", "action": "replace", "spans": [
+        {"latex_primary": "y", "latex": "w", "occurrence": 2}]}))
+    assert rep.refused == [{"id": "p005-inline", "reason": "span 'y' has no occurrence 2 in "
+                            "the page"}]
+
+
 def test_dry_run_writes_nothing(root, tmp_path):
     dec = decide(tmp_path, {"id": "p001-d01", "action": "replace", "latex": "x^2 = 1 + 0"})
     before = (root / "pages" / "p001.md").read_text("utf-8")

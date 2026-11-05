@@ -209,14 +209,29 @@ def _apply_grouped(d: dict, it: dict, md: str) -> tuple[str, str | None]:
     if d["action"] != "replace":
         missing = [p for p in primaries if _inline_span(p, md) is None]
         return md, ("latex_primary is no longer in the page" if missing else None)
+    # a span repeated in the page is placed by its occurrence (1-based, in page order);
+    # every place is found in the page as it stands before any span is replaced
+    edits = {}
     for s in d["spans"]:
-        if s["latex_primary"] not in primaries:
-            return md, f"span {s['latex_primary']!r} is not in the item"
-        where = _inline_span(s["latex_primary"], md)
-        if where is None:
+        p = s["latex_primary"]
+        if p not in primaries:
+            return md, f"span {p!r} is not in the item"
+        where, i = [], md.find("\\(" + p + "\\)")
+        while i >= 0:
+            where.append(i + 2)
+            i = md.find("\\(" + p + "\\)", i + 1)
+        if not where:
             return md, "latex_primary is no longer in the page"
-        a, b = where
-        md = md[:a] + s["latex"].strip() + md[b:]
+        occ = s.get("occurrence")
+        if occ is None and len(where) > 1:
+            return md, f"span {p!r} occurs {len(where)} times in the page: give its occurrence"
+        occ = 1 if occ is None else occ
+        if not isinstance(occ, int) or not 1 <= occ <= len(where) or where[occ - 1] in edits:
+            return md, f"span {p!r} has no occurrence {occ} in the page"
+        edits[where[occ - 1]] = (len(p), s["latex"].strip())
+    for a in sorted(edits, reverse=True):
+        n, new = edits[a]
+        md = md[:a] + new + md[a + n:]
     return md, None
 
 
