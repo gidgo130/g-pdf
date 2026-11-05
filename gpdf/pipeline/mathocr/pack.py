@@ -124,6 +124,9 @@ def _display_item(it: dict, root: Path, md: str) -> dict:
            "latex_primary": it.get("latex_primary"), "latex_second": it.get("latex_second")}
     if it.get("latex_marker") is not None:
         out["latex_marker"] = it["latex_marker"]
+    if it.get("identity"):          # the numeric check that failed, with its numbers
+        out["identity_check"] = {"kind": it.get("identity_kind"), "failed": it["identity"],
+                                 "numbers": it.get("identity_details", [])}
     out["crops"] = _abs(root, it.get("crops") or [it.get("crop")])
     out["context"] = _display_context(it.get("latex_primary"), md)
     if it.get("latex_primary") is None:

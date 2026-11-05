@@ -76,7 +76,8 @@ missing factor, an exponent), decide `flag` with `possible_source_typo` and say 
 looks wrong in the note; never plain `accept`.
 
 - `disagree`, `marker`, `style`, `stack`, `syntax`: a display; check all of it.
-- `identity`: a numeric check failed, and the checker is often wrong. LaTeX matches the
+- `identity`: a numeric check failed (`identity_check` gives which one and its numbers),
+  and the checker is often wrong. LaTeX matches the
   page and the math is fine: `accept` with a reason. It matches but the printed math is
   wrong: flag `possible_source_typo`. It misreads the page: `replace`.
 - `tag`: read the printed number; if it was misread, add `"tag": "<number>"`. If the

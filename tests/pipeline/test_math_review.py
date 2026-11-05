@@ -276,3 +276,23 @@ def test_a_flag_after_a_replace_on_the_same_display_is_not_stale(root, tmp_path)
     assert rep.refused == [] and [a["action"] for a in rep.applied] == ["replace", "flag"]
     assert any(f.get("type") == "copy_corrupt" for f in flags_of(root, 1))
     assert review.apply(root, dec).already == ["p001-d01", "p001-d01"]
+
+
+def test_a_typo_flag_on_an_identity_item_is_a_math_error(root, tmp_path):
+    items = ITEMS + [{"id": "p002-d01", "file": 2, "printed": "55", "kind": "identity",
+                      "reasons": ["identity failed: sums to 1"], "tag": None,
+                      "latex_primary": "z = 3", "latex_second": None, "crop": None,
+                      "identity": ["sums to 1"]}]
+    (root / "review.jsonl").write_text("".join(json.dumps(i) + "\n" for i in items), "utf-8")
+    dec = decide(tmp_path,
+                 {"id": "p002-d01", "action": "flag", "flag_type": "possible_source_typo",
+                  "note": "printed so"},
+                 {"id": "p001-d01", "action": "flag", "flag_type": "possible_source_typo",
+                  "note": "sign", "subtype": "math_error"},
+                 {"id": "p001-d02", "action": "flag", "flag_type": "formula_uncertain", "note": "?"})
+    review.apply(root, dec)
+    f2 = [f for f in flags_of(root, 2) if f["type"] == "possible_source_typo"]
+    assert f2[0]["subtype"] == "math_error"
+    f1 = {f["eq"]: f for f in flags_of(root, 1) if f["type"] in ("possible_source_typo",
+                                                                "formula_uncertain")}
+    assert f1["3.1"]["subtype"] == "math_error" and "subtype" not in f1["p001-d02"]

@@ -188,3 +188,17 @@ def test_the_brief_carries_the_tag_nesting_and_source_typo_rules(export, tmp_pat
     assert "never accept plus tag" in brief.lower()
     assert "nesting" in brief
     assert "looks mathematically wrong" in brief and "never plain `accept`" in brief
+
+
+def test_an_identity_item_carries_the_check_and_its_numbers(tmp_path):
+    r = tmp_path / "book"
+    (r / "pages").mkdir(parents=True)
+    (r / "pages" / "p001.md").write_text('<!-- page printed="1" file="1" -->\n\n$$\nx = 1\n$$\n', "utf-8")
+    it = item("p001-d01", 1, "identity", "x = 1", identity=["sums to 1"], identity_kind="pmf",
+              identity_details=[{"params": {"theta": 0.5}, "support": "{0,1,...}", "sum": 1.5}])
+    (r / "review.jsonl").write_text(json.dumps(it) + "\n", "utf-8")
+    pack.pack(r, tmp_path / "rev")
+    got = lines(tmp_path / "rev" / "batch01" / "items.jsonl")[0]
+    assert got["identity_check"] == {"kind": "pmf", "failed": ["sums to 1"],
+                                     "numbers": [{"params": {"theta": 0.5}, "support": "{0,1,...}",
+                                                  "sum": 1.5}]}

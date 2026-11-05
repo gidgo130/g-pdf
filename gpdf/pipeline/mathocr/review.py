@@ -83,7 +83,8 @@ def load_items(root: Path) -> dict[str, dict]:
 
 def _record(decision: dict) -> dict:
     rec = {"type": "reviewed", "id": decision["id"], "action": decision["action"]}
-    for k in ("latex", "tag", "after", "page_text", "flag_type", "note", "spans", "runs"):
+    for k in ("latex", "tag", "after", "page_text", "flag_type", "subtype", "note", "spans",
+              "runs"):
         if decision.get(k) is not None:
             rec[k] = decision[k]
     if decision.get("structure_change") is True:
@@ -216,6 +217,12 @@ def apply(root, decisions_path, dry_run: bool = False) -> Report:
             if d["action"] == "flag":
                 flag = {"type": d["flag_type"], "eq": it.get("tag") or d["id"],
                         "latex": it.get("latex_primary"), "note": d.get("note", "")}
+                # a printed error a numeric check found: the page's mathematics is wrong
+                subtype = d.get("subtype") or (
+                    "math_error" if d["flag_type"] == "possible_source_typo"
+                    and it.get("identity") else None)
+                if subtype:
+                    flag["subtype"] = subtype
                 if it.get("latex_primary") is None:
                     flag.pop("latex")
                 flags.insert(len(flags) - 1 if flags and flags[-1].get("type") == "summary"
