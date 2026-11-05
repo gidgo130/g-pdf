@@ -140,8 +140,11 @@ def test_math_export_writes_the_atlas_layout(setup, tmp_path, capsys):
     assert by_id["p002-d01"]["kind"] == "disagree" and by_id["p002-d01"]["tag"] == "7.2"
     assert by_id["p002-d01"]["latex_second"] == "x^2 + y^2 = z^3"
     assert by_id["p002-d03"]["kind"] == "stack"
-    assert by_id["p002-inline"]["spans"] == [{"paragraph": 1, "latex_primary": "x_1",
-                                              "latex_second": "x_2"}]
+    span = by_id["p002-inline"]["spans"][0]
+    assert {k: span[k] for k in ("paragraph", "latex_primary", "latex_second")} == {
+        "paragraph": 1, "latex_primary": "x_1", "latex_second": "x_2"}
+    assert span["crop"] == "crops/p002-inline-s1.png" and (root / span["crop"]).is_file()
+    assert len(span["bbox"]) == 4 and len(span["line_box"]) == 4
     assert all((root / it["crop"]).stat().st_size > 0 for it in items)
     assert by_id["p002-inline"]["crops"][0] == "crops/p002-inline-1.png"
     meta = json.loads((root / "meta.json").read_text("utf-8"))

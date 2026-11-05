@@ -383,8 +383,35 @@ def inline_flagged(page: Page, basic_blocks: list[dict], marker_blocks: list[dic
                    "latex_second": b.second}
             if m is not None:
                 rec["latex_marker"] = m.second
+            para = page.paragraphs[b.paragraph]
+            rec["bbox"] = para.bbox
+            rec["at"] = span_position(para.text, b.span)
             out.append(rec)
     return out
+
+
+_INLINE_IN_TEXT = re.compile(r"\\\((.+?)\\\)", re.S)
+_INVISIBLE = {"{", "}", "^", "_", "&"} | STYLE_CMDS | L.DROP_CMDS
+
+
+def _visible_len(tex: str) -> int:
+    """About how many characters a formula prints as: one per symbol or command."""
+    return max(1, sum(1 for t in L.TOKEN_RE.findall(tex) if t not in _INVISIBLE))
+
+
+def span_position(text: str, k: int) -> float:
+    """Where the k-th (0-based) inline span's middle falls in its paragraph, as a fraction
+    of the printed length (prose by characters, math by symbols)."""
+    pos, before, mid = 0, 0, None
+    for i, m in enumerate(_INLINE_IN_TEXT.finditer(text)):
+        before += len(text[pos:m.start()])
+        n = _visible_len(m.group(1))
+        if i == k:
+            mid = before + n / 2
+        before += n
+        pos = m.end()
+    total = before + len(text[pos:])
+    return round(mid / total, 3) if mid is not None and total else 0.5
 
 
 def inline_pairs(page: Page, other_blocks: list[dict]) -> list[Match]:
@@ -598,20 +625,42 @@ def line_boxes(doc, file: int, bbox) -> list[list[float]]:
     return out or [list(bbox)]
 
 
+def span_line_box(lines: list[list[float]], at: float) -> list[float]:
+    """The line a span sits on (by its position in the paragraph) with one line above and
+    one below, as one box."""
+    i = min(len(lines) - 1, max(0, int(at * len(lines))))
+    a, b = lines[max(0, i - 1)], lines[min(len(lines) - 1, i + 1)]
+    return [min(a[0], b[0]), a[1], max(a[2], b[2]), b[3]]
+
+
 def write_crops(doc, items: list[Item], crops_dir: Path, dpi: int = 300) -> None:
     """One crop per item; a grouped inline item gets one crop per text line of each
-    flagged paragraph."""
+    flagged paragraph, and each of its spans a crop of its own line with the lines above
+    and below (``line_box`` and ``crop`` in the span record)."""
     crops_dir = Path(crops_dir)
     for it in items:
         if it.bboxes:
             k = 0
+            lines_of = {}
             for bb in it.bboxes:
-                for line in (line_boxes(doc, it.file, bb) if bb else [None]):
+                lines = line_boxes(doc, it.file, bb) if bb else [None]
+                if bb:
+                    lines_of[tuple(bb)] = lines
+                for line in lines:
                     k += 1
                     name = f"{it.id}-{k}.png"
                     crop(doc, it.file, line, crops_dir / name, dpi)
                     it.crops.append(f"{crops_dir.name}/{name}")
             it.crop = it.crops[0]
+            for n, s in enumerate(it.spans or [], 1):
+                bb = s.get("bbox")
+                if not bb:
+                    continue
+                lines = lines_of.get(tuple(bb)) or line_boxes(doc, it.file, bb)
+                s["line_box"] = span_line_box(lines, s.get("at", 0.5))
+                name = f"{it.id}-s{n}.png"
+                crop(doc, it.file, s["line_box"], crops_dir / name, dpi)
+                s["crop"] = f"{crops_dir.name}/{name}"
         else:
             name = f"{it.id}.png"
             crop(doc, it.file, it.bbox, crops_dir / name, dpi)

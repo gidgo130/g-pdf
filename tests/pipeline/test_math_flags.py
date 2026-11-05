@@ -196,8 +196,10 @@ def test_grouped_inline_items_make_one_item_per_page():
     assert [it.id for it in items] == ["p002-inline"]
     it = items[0]
     assert it.kind == "inline" and it.spans == [
-        {"paragraph": 1, "latex_primary": "x", "latex_second": "x'"},
-        {"paragraph": 2, "latex_primary": "z", "latex_second": "z'"}]
+        {"paragraph": 1, "latex_primary": "x", "latex_second": "x'", "bbox": [0.1, 0.2, 0.9, 0.25],
+         "at": 0.357},
+        {"paragraph": 2, "latex_primary": "z", "latex_second": "z'",
+         "bbox": [0.1, 0.5, 0.9, 0.55], "at": 0.833}]
     assert it.record()["spans"] == it.spans
 
 
@@ -326,11 +328,38 @@ def test_inline_flags_against_basic_marker_either_or_both(mode, flagged):
     marker = [P("a ", ("eq", "x"), " b ", ("eq", "y'"), " c ", ("eq", "z''"), y=0.2)]
     spans = flags.inline_flagged(pg, basic, marker, mode)
     assert [s["latex_primary"] for s in spans] == flagged
-    assert all(set(s) == {"paragraph", "latex_primary", "latex_second", "latex_marker"}
-               for s in spans)
+    assert all(set(s) == {"paragraph", "latex_primary", "latex_second", "latex_marker", "bbox",
+                          "at"} for s in spans)
     # a page Marker did not read falls back to the basic tier
     assert [s["latex_primary"] for s in flags.inline_flagged(pg, basic, None, mode)] == ["x", "z"]
     items = flags.review_items(pg, {"displays": [], "paragraphs": basic},
                                third={"displays": [], "paragraphs": marker}, group_inline=True,
                                inline_with=mode)
     assert items[0].reasons == [f"{len(flagged)} inline spans differ ({mode})"]
+
+
+def test_each_flagged_span_gets_a_crop_of_its_own_line_and_the_lines_around_it(tmp_path):
+    path = tmp_path / "lines.pdf"
+    doc = pymupdf.open()
+    pg = doc.new_page(width=300, height=400)
+    for k in range(6):
+        pg.insert_text((40, 100 + 16 * k), "a line of text with words", fontsize=11)
+    doc.save(str(path))
+    doc.close()
+    doc = pymupdf.open(str(path))
+    bbox = [0.1, 85 / 400, 0.9, 200 / 400]
+    lines = flags.line_boxes(doc, 1, bbox)
+    assert len(lines) == 6
+    spans = [{"paragraph": 1, "latex_primary": "a", "bbox": bbox, "at": 0.0},
+             {"paragraph": 1, "latex_primary": "b", "bbox": bbox, "at": 0.55},
+             {"paragraph": 1, "latex_primary": "c", "bbox": None, "at": 0.5}]
+    it = flags.Item("p001-inline", 1, "1", "inline", ["x"], None, None, None, bbox=bbox,
+                    bboxes=[bbox], spans=spans)
+    flags.write_crops(doc, [it], tmp_path / "crops", dpi=100)
+    doc.close()
+    first, middle, nobox = it.spans
+    assert first["crop"] == "crops/p001-inline-s1.png" and (tmp_path / first["crop"]).is_file()
+    assert first["line_box"] == [0.1, lines[0][1], 0.9, lines[1][3]]      # no line above
+    assert middle["line_box"] == [0.1, lines[2][1], 0.9, lines[4][3]]     # line 4 of 6, +-1
+    assert "crop" not in nobox and "line_box" not in nobox
+    assert len(it.crops) == 6                       # the per-line crops are still there
