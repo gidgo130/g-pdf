@@ -83,7 +83,7 @@ def load_items(root: Path) -> dict[str, dict]:
 
 def _record(decision: dict) -> dict:
     rec = {"type": "reviewed", "id": decision["id"], "action": decision["action"]}
-    for k in ("latex", "tag", "after", "page_text", "flag_type", "note", "spans"):
+    for k in ("latex", "tag", "after", "page_text", "flag_type", "note", "spans", "runs"):
         if decision.get(k) is not None:
             rec[k] = decision[k]
     if decision.get("structure_change") is True:
@@ -153,7 +153,13 @@ def _validate(d: dict, items: dict) -> str | None:
     if d["action"] == "flag" and d.get("flag_type") not in FLAG_TYPES:
         return f"flag_type must be one of {', '.join(FLAG_TYPES)}"
     if d["action"] == "replace":
-        if items[d["id"]].get("spans") is not None:
+        if items[d["id"]].get("kind") == "inline_missing":
+            runs = d.get("runs")
+            if not runs or not all(isinstance(r, dict) and isinstance(r.get("text"), str)
+                                   and r["text"] and isinstance(r.get("latex"), str)
+                                   and r["latex"].strip() for r in runs):
+                return "an inline_missing item needs runs [{text, latex}]"
+        elif items[d["id"]].get("spans") is not None:
             spans = d.get("spans")
             if not spans or not all(isinstance(s, dict) and s.get("latex_primary") and
                                     isinstance(s.get("latex"), str) for s in spans):
@@ -191,7 +197,9 @@ def apply(root, decisions_path, dry_run: bool = False) -> Report:
                 rep.already.append(d["id"])
                 continue
             it = items[d["id"]]
-            if it.get("spans") is not None:
+            if it.get("kind") == "inline_missing":
+                new_md, why = _apply_runs(d, md)
+            elif it.get("spans") is not None:
                 new_md, why = _apply_grouped(d, it, md, flags)
             else:
                 # a display an applied replace changed is found by its new LaTeX
@@ -302,6 +310,32 @@ def _apply_grouped(d: dict, it: dict, md: str, flags: list) -> tuple[str, str | 
         if not isinstance(occ, int) or not 1 <= occ <= len(where) or where[occ - 1] in edits:
             return md, f"span {p!r} has no occurrence {occ} in the page"
         edits[where[occ - 1]] = (len(p), s["latex"].strip())
+    for a in sorted(edits, reverse=True):
+        n, new = edits[a]
+        md = md[:a] + new + md[a + n:]
+    return md, None
+
+
+def _apply_runs(d: dict, md: str) -> tuple[str, str | None]:
+    """An inline_missing replace: each run's page text (in the prose, never inside math)
+    becomes inline math; a text that occurs more than once needs its occurrence."""
+    from gpdf.pipeline.mathocr.flags import prose_occurrences
+
+    if d["action"] != "replace":
+        return md, None
+    edits = {}
+    for r in d["runs"]:
+        where = prose_occurrences(r["text"], md)
+        if not where:
+            return md, f"run {r['text']!r} is not in the page prose"
+        occ = r.get("occurrence")
+        if occ is None and len(where) > 1:
+            return md, (f"run {r['text']!r} occurs {len(where)} times in the page prose: "
+                        "give its occurrence")
+        occ = 1 if occ is None else occ
+        if not isinstance(occ, int) or not 1 <= occ <= len(where) or where[occ - 1] in edits:
+            return md, f"run {r['text']!r} has no occurrence {occ} in the page prose"
+        edits[where[occ - 1]] = (len(r["text"]), "\\(" + r["latex"].strip() + "\\)")
     for a in sorted(edits, reverse=True):
         n, new = edits[a]
         md = md[:a] + new + md[a + n:]

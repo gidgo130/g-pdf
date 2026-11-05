@@ -33,7 +33,8 @@ KIND_OF_REASON = [("tiers disagree", "disagree"), ("no second reading", "disagre
                   ("style differs", "style"), ("both bold", "style"),
                   ("index variables", "stack"), ("relation in the limits", "stack"),
                   ("sum of indices", "stack"), ("unbalanced", "syntax"), ("without", "syntax"),
-                  ("unknown command", "syntax"), ("tag ", "tag"), ("inline", "inline"),
+                  ("unknown command", "syntax"), ("tag ", "tag"),
+                  ("look like math", "inline_missing"), ("inline", "inline"),
                   ("marker disagrees", "marker"), ("standard tier lacks", "missing_display"),
                   ("gave no display", "missing_display"), ("prose", "prose"),
                   ("identity failed", "identity")]

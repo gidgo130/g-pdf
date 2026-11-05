@@ -78,6 +78,11 @@ punctuation, the equation number.
   is null; `page_md` holds the page file). Write the display in full and say where it
   goes: `"page_text"` (an exact, unique piece of `page_md` that it replaces) or
   `"after"` (an exact, unique piece it follows).
+- `inline_missing`: prose that may be math the engine left as text (`runs`, each with its
+  page `text`, why it was picked, a line crop and its `occurrence`). For each run that the
+  page prints as math, write it as inline LaTeX: `replace` with `"runs": [{"text": "<exact
+  page text>", "latex": "...", "occurrence": n}]` (the text may be part of the run; one
+  line for all the item's runs). If none is math, `accept`.
 - `inline_span`: one inline span. Its crop shows the span's line with one line above and
   one below (`context` gives the text around it). Find the span in the crop first. If you
   can't find it there, decide `flag` with `formula_uncertain` and say so in the note,

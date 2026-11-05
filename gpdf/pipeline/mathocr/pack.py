@@ -25,7 +25,7 @@ from gpdf.pipeline.manuals import ManualsError, parse_pages, write_atomic
 
 DISPLAY_KINDS = ("disagree", "marker", "style", "identity", "stack", "tag",
                  "missing_display", "syntax")
-KINDS = DISPLAY_KINDS + ("inline",)
+KINDS = DISPLAY_KINDS + ("inline", "inline_missing")
 BATCH_SIZE = 50
 CONTEXT = 300                   # characters of page text before a display
 SPAN_CONTEXT = 80               # characters each side of an inline span
@@ -165,6 +165,25 @@ def _span_item(it: dict, k: int, s: dict, root: Path, md: str) -> dict:
     return out
 
 
+def _missing_inline_item(it: dict, root: Path, md: str) -> dict:
+    """An inline_missing item: the page's prose runs that look like math, each with its
+    own line crop and its occurrence in the page prose (or the candidates)."""
+    from gpdf.pipeline.mathocr.flags import prose_occurrences
+
+    out = {"key": it["id"], "id": it["id"], "kind": "inline_missing", "file": it["file"],
+           "printed": it.get("printed"), "reasons": it.get("reasons", []), "runs": []}
+    for r in it.get("runs", []):
+        run = {k: r.get(k) for k in ("paragraph", "text", "why", "occurrence", "context")}
+        run["crop"] = _abs(root, [r.get("crop")])[0] if r.get("crop") else None
+        if run["occurrence"] is None:
+            where = prose_occurrences(r["text"], md)
+            run["occurrence_candidates"] = [
+                {"occurrence": n, "context": md[max(0, i - SPAN_CONTEXT):i + len(r["text"])
+                                                + SPAN_CONTEXT]} for n, i in enumerate(where, 1)]
+        out["runs"].append(run)
+    return out
+
+
 def _template(item: dict) -> dict:
     d = {"id": item["id"], "action": "TODO"}
     if item["kind"] == "inline_span":
@@ -203,10 +222,12 @@ def pack(export, out, kinds=DISPLAY_KINDS, batch_size: int = BATCH_SIZE,
 
     packed = []
     for it in items:
-        if it["kind"] in kinds and it["kind"] != "inline":
+        if it["kind"] in kinds and it["kind"] not in ("inline", "inline_missing"):
             packed.append(_display_item(it, root, md_of(it["file"])))
         elif it["kind"] == "inline" and "inline" in kinds:
             packed.append(_inline_item(it, root, md_of(it["file"])))
+        elif it["kind"] == "inline_missing" and "inline_missing" in kinds:
+            packed.append(_missing_inline_item(it, root, md_of(it["file"])))
     sample = {}
     if inline_sample:
         chap = chapters(root / "pages")

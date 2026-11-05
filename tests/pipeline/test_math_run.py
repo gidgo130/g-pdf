@@ -161,7 +161,7 @@ def test_math_export_writes_the_atlas_layout(setup, tmp_path, capsys):
                                "label_source": "engine", "displays": 3, "inline_spans": 1,
                                "items": {"disagree": 1, "stack": 1, "inline": 1}, "dropped": 1,
                                "identities": {}, "marker": False, "no_marker_reading": [],
-                               "inline_flagged": 1}
+                               "inline_flagged": 1, "inline_missing_runs": 0}
     assert rec["cache_bytes"] > 0 and rec["engine_seconds"]["parsed"] == {"standard": 4, "basic": 4}
     out_text = capsys.readouterr().out
     assert "4 pages, 6 displays" in out_text

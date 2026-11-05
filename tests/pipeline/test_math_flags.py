@@ -192,7 +192,8 @@ def test_grouped_inline_items_make_one_item_per_page():
               file=2)
     basic = {"displays": [], "paragraphs": [P("a ", ("eq", "x'"), " b ", ("eq", "y"), y=0.2),
                                             P("c ", ("eq", "z'"), y=0.5)]}
-    items = flags.review_items(pg, basic, group_inline=True)
+    items = [it for it in flags.review_items(pg, basic, group_inline=True)
+             if it.kind != "inline_missing"]          # the fake prose's lone letters
     assert [it.id for it in items] == ["p002-inline"]
     it = items[0]
     assert it.kind == "inline" and it.spans == [
@@ -282,7 +283,7 @@ def test_marker_disagreement_makes_or_joins_an_item():
     assert (d1.kind, d1.reasons) == ("marker", ["marker disagrees"])    # the tiers agree
     assert d1.record()["latex_marker"] == r"e^{(1/2)} t'Rt"
     assert (d2.kind, d2.reasons) == ("disagree", ["tiers disagree", "marker disagrees"])
-    assert stats == {"no_marker_reading": [], "inline_flagged": 0}
+    assert stats == {"no_marker_reading": [], "inline_flagged": 0, "inline_missing_runs": 0}
     assert flags.review_items(pg, basic, third=marker, marker_rule="small")[0].id == "p006-d01"
 
 

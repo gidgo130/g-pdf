@@ -35,7 +35,7 @@ from gpdf.pipeline.mathocr import latex as L
 from gpdf.pipeline.mathocr.assemble import Page, Paragraph, _paragraph
 
 KINDS = ("disagree", "marker", "style", "stack", "syntax", "tag", "missing_display", "inline",
-         "identity", "prose")
+         "inline_missing", "identity", "prose")
 MARKER_RULES = ("any", "value", "small")
 INLINE_WITH = ("basic", "marker", "either", "both")
 STYLE_CMDS = L.STYLE_CMDS
@@ -438,6 +438,96 @@ def inline_pairs(page: Page, other_blocks: list[dict]) -> list[Match]:
     return out
 
 
+# ---------------------------------------------------------------- 8: math left in the prose
+
+GREEK_CHARS = "αβγδεζηθικλμνξοπρστυφχψωϵϑϕϖϱςΓΔΘΛΞΠΣΥΦΨΩ"
+MATH_CHARS = "∞∑∏∫√±∓×÷≤≥≠≈≡∈∉⊂⊆∂∇·∼≃∝"
+SUPSUB = "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻₀₁₂₃₄₅₆₇₈₉′″"
+_LET = "A-Za-z" + GREEK_CHARS
+PROSE_MATH = [
+    # a letter (or Greek) at a relation with a number or another single letter
+    ("relation", re.compile(rf"(?<![\w.])[{_LET}][{SUPSUB}]*\s*[=<>≤≥≠≈∼]\s*"
+                            rf"(?:[-−]?\d+(?:\.\d+)?|[{_LET}])(?![\w])")),
+    # an operator between single letters or numbers (at least one letter: not 31-50)
+    ("operator", re.compile(rf"(?<![\w.])(?:[{_LET}]|\d+)\s*[+\-−*/^]\s*(?:[{_LET}]|\d+)"
+                            rf"(?![\w])")),
+    # a letter with a digit index, x1 or X2
+    ("index", re.compile(r"(?<![\w.])[A-Za-z]\d{1,2}(?![\w]|\.\d)")),
+    # Greek letters and math symbols, with any script digits or primes
+    ("greek", re.compile(rf"[{GREEK_CHARS}{MATH_CHARS}][{SUPSUB}]*")),
+    # a lone letter that is not a word (not a, A, I), an initial (N.), e.g. or (a)
+    ("letter", re.compile(r"(?<![\w.'’(])(?:[B-HJ-Z](?![\w'’).])|[b-hj-z](?![\w'’)]|\.\w))")),
+    # an "a" that cannot be the article (Paper Capture reads alpha as a): before a comma
+    # or a verb, or right after "parameter"
+    ("letter_a", re.compile(r"(?<![\w.'’(])a(?=\s*[,;:)]|\s+(?:is|are|was|tends|increases|"
+                            r"decreases|and|or|of|in|to)\b)|(?<=parameter )a(?![\w'’])"
+                            r"|(?<=parameters )a(?![\w'’])")),
+]
+
+
+def prose_math_runs(text: str) -> list[tuple[int, int, str]]:
+    """(start, end, why) of the prose runs of ``text`` that look like math the engine left
+    as text; inline math (\\( \\)) is never looked at. Overlapping matches are merged."""
+    blank = _INLINE_IN_TEXT.sub(lambda m: "\x00" * len(m.group()), text)
+    hits = []
+    for why, rx in PROSE_MATH:
+        for m in rx.finditer(blank):
+            if why == "operator" and not re.search(f"[{_LET}]", m.group()):
+                continue
+            hits.append([m.start(), m.end(), why])
+    hits.sort()
+    out = []
+    for a, b, why in hits:
+        if out and a < out[-1][1]:
+            out[-1][1] = max(out[-1][1], b)
+            if why not in out[-1][2]:
+                out[-1][2] += "+" + why
+        else:
+            out.append([a, b, why])
+    return [tuple(x) for x in out]
+
+
+def _prose_blank(md: str) -> str:
+    """The page with displays and inline math blanked (same length), so offsets agree."""
+    md = re.sub(r"\$\$.*?\$\$", lambda m: "\x00" * len(m.group()), md, flags=re.S)
+    return _INLINE_IN_TEXT.sub(lambda m: "\x00" * len(m.group()), md)
+
+
+def prose_occurrences(text: str, md: str) -> list[int]:
+    """Offsets of ``text`` in the prose of the page ``md`` (never inside math)."""
+    blank, where = _prose_blank(md), []
+    i = blank.find(text)
+    while i >= 0:
+        where.append(i)
+        i = blank.find(text, i + 1)
+    return where
+
+
+def inline_missing(page: Page) -> list[dict]:
+    """Run records (paragraph, text, why, occurrence in the page prose, context, the
+    paragraph's box and the run's position) of the prose that looks like math."""
+    try:
+        md = page.render()
+    except Exception:  # noqa: BLE001 - an unbalanced page gets no occurrences
+        md = ""
+    out = []
+    for pi, p in enumerate(page.paragraphs):
+        base = md.find(p.text) if md else -1
+        for a, b, why in prose_math_runs(p.text):
+            run = p.text[a:b]
+            occ = None
+            if base >= 0:
+                where = prose_occurrences(run, md)
+                occ = where.index(base + a) + 1 if base + a in where else None
+            out.append({"paragraph": pi + 1, "text": run, "why": why, "occurrence": occ,
+                        "context": p.text[max(0, a - SPAN_CONTEXT):b + SPAN_CONTEXT],
+                        "bbox": p.bbox, "at": round((a + b) / 2 / max(1, len(p.text)), 3)})
+    return out
+
+
+SPAN_CONTEXT = 80
+
+
 # ---------------------------------------------------------------- the queue
 
 def _pid(file: int) -> str:
@@ -558,6 +648,13 @@ def review_items(page: Page, other: dict, runs_tags: dict | None = None,
                                else "no second reading"], None, b["latex_primary"],
                               b["latex_second"], bbox=page.paragraphs[b["paragraph"] - 1].bbox,
                               extra={k2: v for k2, v in b.items() if k2 == "latex_marker"}))
+    runs = inline_missing(page)
+    if stats is not None:
+        stats["inline_missing_runs"] = len(runs)
+    if runs:
+        items.append(Item(f"{pid}-inline-missing", page.file, page.label.marker, "inline_missing",
+                          [f"{len(runs)} prose runs look like math"], None, None, None,
+                          extra={"runs": runs}))
     return items
 
 
@@ -633,6 +730,21 @@ def span_line_box(lines: list[list[float]], at: float) -> list[float]:
     return [min(a[0], b[0]), a[1], max(a[2], b[2]), b[3]]
 
 
+def _span_crops(doc, it: Item, spans: list[dict], lines_of: dict, crops_dir: Path,
+                dpi: int) -> None:
+    """Each span (or prose run) with a paragraph box: its line and the lines around it."""
+    for n, s in enumerate(spans, 1):
+        bb = s.get("bbox")
+        if not bb:
+            continue
+        lines = lines_of.get(tuple(bb)) or line_boxes(doc, it.file, bb)
+        lines_of[tuple(bb)] = lines
+        s["line_box"] = span_line_box(lines, s.get("at", 0.5))
+        name = f"{it.id}-s{n}.png"
+        crop(doc, it.file, s["line_box"], crops_dir / name, dpi)
+        s["crop"] = f"{crops_dir.name}/{name}"
+
+
 def write_crops(doc, items: list[Item], crops_dir: Path, dpi: int = 300) -> None:
     """One crop per item; a grouped inline item gets one crop per text line of each
     flagged paragraph, and each of its spans a crop of its own line with the lines above
@@ -652,15 +764,14 @@ def write_crops(doc, items: list[Item], crops_dir: Path, dpi: int = 300) -> None
                     crop(doc, it.file, line, crops_dir / name, dpi)
                     it.crops.append(f"{crops_dir.name}/{name}")
             it.crop = it.crops[0]
-            for n, s in enumerate(it.spans or [], 1):
-                bb = s.get("bbox")
-                if not bb:
-                    continue
-                lines = lines_of.get(tuple(bb)) or line_boxes(doc, it.file, bb)
-                s["line_box"] = span_line_box(lines, s.get("at", 0.5))
-                name = f"{it.id}-s{n}.png"
-                crop(doc, it.file, s["line_box"], crops_dir / name, dpi)
-                s["crop"] = f"{crops_dir.name}/{name}"
+            _span_crops(doc, it, it.spans or [], lines_of, crops_dir, dpi)
+        elif it.extra.get("runs"):                  # inline_missing: a crop per run only
+            _span_crops(doc, it, it.extra["runs"], {}, crops_dir, dpi)
+            it.crop = next((r["crop"] for r in it.extra["runs"] if r.get("crop")), None)
+            if it.crop is None:
+                name = f"{it.id}.png"
+                crop(doc, it.file, None, crops_dir / name, dpi)
+                it.crop = f"{crops_dir.name}/{name}"
         else:
             name = f"{it.id}.png"
             crop(doc, it.file, it.bbox, crops_dir / name, dpi)
