@@ -195,11 +195,16 @@ SCOPE_REF = {
     "p021": ('<!-- page printed="10" file="21" -->\n\nProse only.\n\n'
              "[Figure 2.1: a plot]\n"),
     "p022": ('<!-- page printed="11" file="22" -->\n\nSomething the candidate lacks entirely.\n'),
+    "p023": ('<!-- page printed="12" file="23" -->\n\nThe chapter ends here.\n'),
+    "p024": ('<!-- page printed="13" file="24" -->\n\n[Bibliography not transcribed in this pass.]\n'),
 }
 SCOPE_REF_FLAGS = {
     "p020": [{"type": "dropped", "text": "Bibliography entries not transcribed in this pass"}],
     "p021": [{"type": "dropped", "text": "Figure 2.1 axis labels not transcribed"}],
     "p022": [{"type": "dropped", "note": "rest of page outside this pass"}],
+    "p023": [{"type": "page_anomaly", "note": "Bibliography begins mid-page; entries not "
+                                              "transcribed in this pass"}],
+    "p024": [{"type": "dropped", "text": "Bibliography (chapter 2) not transcribed in this pass"}],
 }
 SCOPE_CAND = {
     "p020": ('<!-- page printed="9" file="20" -->\n\nThe last paragraph with \\(a_1\\).\n\n'
@@ -209,6 +214,10 @@ SCOPE_CAND = {
     "p021": ('<!-- page printed="10" file="21" -->\n\nProse only.\n\n'
              "[Figure 2.1: a plot]\n\nExtra words.\n"),
     "p022": ('<!-- page printed="11" file="22" -->\n\nUnrelated text here.\n\nMore of it.\n'),
+    "p023": ('<!-- page printed="12" file="23" -->\n\nThe chapter ends here.\n\nBIBLIOGRAPHY\n\n'
+             "Arnold, B. C. (1975).\n"),
+    "p024": ('<!-- page printed="13" file="24" -->\n\nBarlow, R. E. (1965), \\(x_1\\).\n\n'
+             "$$\nk = 2\n$$\n"),
 }
 
 
@@ -225,10 +234,17 @@ def test_score_ignores_candidate_text_after_a_reference_scope_cut(tmp_path):
     assert data["pages"]["p021"]["cer"] > 0
     # p022: a scope flag, but the reference's last line is nowhere in the candidate
     assert data["pages"]["p022"]["cer"] > 0
-    assert s["scope_cut"] == {"pages": 1, "unaligned": 1}
+    # p023: the same note on a page_anomaly flag cuts too
+    assert data["pages"]["p023"]["cer"] == 0
+    # p024: nothing on the page was transcribed: none of the candidate is scored
+    p24 = data["pages"]["p024"]
+    assert (p24["cer"], p24["extra"], p24["inline"]) == (0, 0, "0/0")
+    assert not [e for e in data["inline_errors"] if e["page"] == "p024"]
+    assert s["scope_cut"] == {"pages": 3, "unaligned": 1}
     cut = data["scope_cuts"]
-    assert [c["page"] for c in cut] == ["p020", "p022"]
+    assert [c["page"] for c in cut] == ["p020", "p022", "p023", "p024"]
     assert cut[0]["cand_displays_ignored"] == 1 and cut[0]["cand_inline_ignored"] == 1
     assert cut[1]["aligned"] is False
+    assert cut[3]["cand_displays_ignored"] == 1 and cut[3]["cand_inline_ignored"] == 1
     report = (tmp_path / "out" / "REPORT.md").read_text("utf-8")
-    assert "## Reference scope cuts: 1" in report and "p022" in report
+    assert "## Reference scope cuts: 3" in report and "p022" in report

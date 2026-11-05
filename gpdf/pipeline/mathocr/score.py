@@ -153,9 +153,10 @@ def header_leak(cand_md: str, printed: str | None, ref_md: str = "") -> list[str
 # ---------------------------------------------------------------- reference scope
 
 def scope_flag(flags: list) -> str | None:
-    """The text of a `dropped` flag saying part of the page was not transcribed, if any."""
+    """The text of a `dropped` (or `page_anomaly`) flag saying part of the page was not
+    transcribed, if any."""
     for f in flags:
-        if f.get("type") != "dropped":
+        if f.get("type") not in ("dropped", "page_anomaly"):
             continue
         text = " ".join(str(f.get(k) or "") for k in ("text", "note")).strip()
         if SCOPE_CUT.search(text) and not SCOPE_NOT.search(text):
@@ -189,10 +190,11 @@ def scope_cut(ref_mds: dict, ref_flags: dict,
         rec = {"page": stem, "flag": text, "aligned": False, "cand_chars_ignored": 0,
                "cand_displays_ignored": 0, "cand_inline_ignored": 0}
         cuts.append(rec)
-        if not ref_keys:
-            continue
         md, best, at = cand_mds[stem], 0.0, None
-        for end, key, _ in _blocks(md):
+        if not ref_keys:                  # nothing on the page was transcribed
+            m = MARKER_RE.search(md)
+            best, at = 1.0, (m.end() if m else 0)
+        for end, key, _ in _blocks(md) if ref_keys else []:
             r = difflib.SequenceMatcher(None, ref_keys[-1], key, autojunk=False).ratio()
             if r >= SCOPE_MATCH and r >= best:
                 best, at = r, end

@@ -278,9 +278,9 @@ gpdf-cli math-score --ref REF_DIR --cand OUT\book --out SCORES [--pages 63-81]
 `--ref` and `--cand` are page folders (`pNNN.md` + `pNNN.flags.json`),
 math-export folders, or `text.md` files (split by their page markers).
 
-**Reference scope.** A reference page whose flags include a `dropped` flag
-saying part of the page was not transcribed is scored only as far as the
-reference goes. The flag's `text` (or `note`) must contain "not transcribed",
+**Reference scope.** A reference page whose flags include a `dropped` (or
+`page_anomaly`) flag saying part of the page was not transcribed is scored
+only as far as the reference goes. The flag's `text` (or `note`) must contain "not transcribed",
 "outside this pass", "outside the pass/scope" or "out of scope", and must not
 mention a figure, plot, chart, axis, label, caption, table or image (a note
 about a figure's own labels is not a scope cut); for example `{"type":
@@ -288,7 +288,8 @@ about a figure's own labels is not a scope cut); for example `{"type":
 page, bracketed placeholder lines of the reference (`[… not transcribed …]`)
 are left out, the candidate block (a run of non-blank lines) most like the
 reference's last block (similarity ≥ 0.8) is found, and the candidate's text,
-displays and inline math after it are not scored. `scope_cut` in the summary
+displays and inline math after it are not scored; when the reference has
+nothing left on the page, none of the candidate page is scored. `scope_cut` in the summary
 counts the pages cut and those whose last block was not found (scored whole);
 the report lists them with what was ignored. The
 scorer is the trial's: displays normalized (sizing, spacing and style wrappers
