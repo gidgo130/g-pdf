@@ -351,7 +351,8 @@ grouping braces canonicalised, the tag split off), aligned by tag then reading
 order (joining a display the candidate split in two), then exact match, mean
 token edit distance, tag accuracy, missed and extra formulas, near-misses of
 1-3 tokens split into value-changing and cosmetic, the inline exact rate (a bag
-of spans), the prose character error rate and the page-label accuracy.
+of spans; `inline_style_free_pct` is the same with style commands, braces and spaces taken
+out, for font substitution), the prose character error rate and the page-label accuracy.
 Cosmetic means the two readings agree once style commands (`\mathbf`,
 `\mathbb`, `\mathcal`, …), dot style, trailing punctuation and line breaks are
 taken out; a cosmetic difference that involves a style command is a style

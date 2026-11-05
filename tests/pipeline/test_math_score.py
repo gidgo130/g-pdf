@@ -267,3 +267,12 @@ def test_an_unreadable_or_invalid_flags_file_is_an_error_naming_it(tmp_path, cap
     assert cli.main(["math-score", "--ref", str(ref), "--cand", str(cand),
                      "--out", str(tmp_path / "out")]) != 0
     assert "p012.flags.json" in capsys.readouterr().err
+
+
+def test_inline_exact_with_style_ignored(tmp_path):
+    ref = {"p010": '<!-- page printed="1" file="10" -->\n\nLet \(a\), \(X_1\) and \(b\).\n'}
+    cand = {"p010": ('<!-- page printed="1" file="10" -->\n\nLet \(\mathbf{a}\), '
+                     "\(\mathrm{X}_{1}\) and \(c\).\n")}
+    s, _ = score.run(write(tmp_path / "r", ref, {}), write(tmp_path / "c", cand, {}),
+                     tmp_path / "out")
+    assert s["inline_exact_pct"] == 0.0 and s["inline_style_free_pct"] == 66.7

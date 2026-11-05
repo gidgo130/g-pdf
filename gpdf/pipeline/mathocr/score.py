@@ -220,11 +220,16 @@ def scope_cut(ref_mds: dict, ref_flags: dict,
 
 # ---------------------------------------------------------------- scoring
 
+def _style_free_span(norm: str) -> str:
+    """An inline span's normalized form without style commands, braces and spaces."""
+    return re.sub(r"[{}\s]", "", L.style_free(norm))
+
+
 def score(ref_units: dict, cand_units: dict) -> tuple[dict, dict]:
     res = {"pages": {}, "pairs": [], "missed": [], "extra": [], "inline_errors": [],
            "layout": []}
     tot = dict(n_ref=0, n_cand=0, matched=0, exact=0, ned_sum=0.0, tagged=0, tag_ok=0,
-               inl_ref=0, inl_hit=0, cer_ed=0, cer_len=0)
+               inl_ref=0, inl_hit=0, inl_free=0, cer_ed=0, cer_len=0)
     empty = {"items": [], "inline": [], "prose": "", "md": "", "printed": None, "flags": []}
     for p, ru in ref_units.items():
         cu = cand_units.get(p, empty)
@@ -287,6 +292,12 @@ def score(ref_units: dict, cand_units: dict) -> tuple[dict, dict]:
                 pool.remove(s)
                 hit += 1
         res["inline_errors"] += [{"page": p, "cand": s} for s in pool]   # spans with no match
+        # the same bag with style commands taken out (font substitution, bold vs roman)
+        free_pool = [_style_free_span(s) for s in cu["inline"]]
+        for s in ru["inline"]:
+            if _style_free_span(s) in free_pool:
+                free_pool.remove(_style_free_span(s))
+                tot["inl_free"] += 1
         # layout: a display the candidate set as inline math (missed, and an unmatched
         # inline span of the page reads the same, near enough)
         spare = [s.split() for s in pool]
@@ -327,6 +338,7 @@ def score(ref_units: dict, cand_units: dict) -> tuple[dict, dict]:
          "near_miss_1to3": len(near),
          "near_miss_dangerous": sum(1 for x in near if not x["cosmetic"]),
          "inline_exact_pct": round(100 * tot["inl_hit"] / max(1, tot["inl_ref"]), 1),
+         "inline_style_free_pct": round(100 * tot["inl_free"] / max(1, tot["inl_ref"]), 1),
          "inline_ref": tot["inl_ref"],
          "prose_cer": round(tot["cer_ed"] / max(1, tot["cer_len"]), 4),
          "pages": len(ref_units), "pages_in_candidate": sum(1 for p in ref_units if p in cand_units),
