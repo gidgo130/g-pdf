@@ -330,7 +330,14 @@ of spans), the prose character error rate and the page-label accuracy.
 Cosmetic means the two readings agree once style commands (`\mathbf`,
 `\mathbb`, `\mathcal`, …), dot style, trailing punctuation and line breaks are
 taken out; a cosmetic difference that involves a style command is a style
-error. Notation-only forms compare equal: prime and script order (`x'_1` =
+error. **Layout errors** are a class of their own, reported beside value
+(`value_changing_errors`) and style (`style_errors`) errors and never cosmetic: a
+matched display whose `\\` row breaks differ in number (a trailing break before `\end`
+and `\substack` rows not counted; a row run into the next by a stray `\ ` is caught
+here although the token comparison calls it cosmetic), and a reference display that the
+candidate set as inline math (missed, with an unmatched inline span of the page within
+0.2 normalized edit distance). `layout_errors`, `layout_row_breaks` and
+`layout_display_as_inline` are in the summary, the list in `REPORT.md`. Notation-only forms compare equal: prime and script order (`x'_1` =
 `x_1'`, `x'^2` = `x^{\prime 2}`, `q''` = `q^{\prime\prime}`, `a^{*\prime}` =
 `a^{*^{\prime}}`), `\overset` = `\stackrel`, `\binom{a}{b}` = a two-row
 `pmatrix`, `\phantom{…}` dropped, punctuation at the end of `\text{…}` moved

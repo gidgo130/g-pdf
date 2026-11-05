@@ -211,7 +211,8 @@ def scope_cut(ref_mds: dict, ref_flags: dict,
 # ---------------------------------------------------------------- scoring
 
 def score(ref_units: dict, cand_units: dict) -> tuple[dict, dict]:
-    res = {"pages": {}, "pairs": [], "missed": [], "extra": [], "inline_errors": []}
+    res = {"pages": {}, "pairs": [], "missed": [], "extra": [], "inline_errors": [],
+           "layout": []}
     tot = dict(n_ref=0, n_cand=0, matched=0, exact=0, ned_sum=0.0, tagged=0, tag_ok=0,
                inl_ref=0, inl_hit=0, cer_ed=0, cer_len=0)
     empty = {"items": [], "inline": [], "prose": "", "md": "", "printed": None, "flags": []}
@@ -234,6 +235,14 @@ def score(ref_units: dict, cand_units: dict) -> tuple[dict, dict]:
                                     == L.style_free(L.norm_str(b)))
             style = cosmetic and any(x in L.STYLE_CMDS or y in L.STYLE_CMDS
                                      for _, x, y in diffs)
+            # layout: the rows of a multi-line display, which the token comparison ignores
+            breaks = [sum(L.row_breaks(R[i]["raw"]) for i in ri),
+                      sum(L.row_breaks(C[i]["raw"]) for i in ci)]
+            if breaks[0] != breaks[1]:
+                res["layout"].append({"kind": "row_breaks", "page": R[ri[0]]["page"],
+                                      "ref_tag": rtag, "row_breaks": breaks,
+                                      "ref_raw": "\n".join(R[i]["raw"] for i in ri),
+                                      "cand_raw": "\n".join(C[i]["raw"] for i in ci)})
             res["pairs"].append({"page": R[ri[0]]["page"], "ref_tag": rtag, "cand_tag": ctag,
                                  "n_ref": len(ri), "n_cand": len(ci), "ed": d,
                                  "ned": round(L.ned(a, b), 4), "ref_len": len(a),
@@ -268,6 +277,16 @@ def score(ref_units: dict, cand_units: dict) -> tuple[dict, dict]:
                 pool.remove(s)
                 hit += 1
         res["inline_errors"] += [{"page": p, "cand": s} for s in pool]   # spans with no match
+        # layout: a display the candidate set as inline math (missed, and an unmatched
+        # inline span of the page reads the same, near enough)
+        spare = [s.split() for s in pool]
+        for i in missed:
+            toks = R[i]["toks"]
+            k = next((k for k, s in enumerate(spare) if toks and L.ned(toks, s) <= 0.2), None)
+            if k is not None:
+                spare.pop(k)
+                res["layout"].append({"kind": "display_as_inline", "page": R[i]["page"],
+                                      "ref_tag": R[i]["tag"], "ref_raw": R[i]["raw"]})
         tot["inl_ref"] += len(ru["inline"])
         tot["inl_hit"] += hit
         ed = L.distance(ru["prose"], cu["prose"])
@@ -290,6 +309,11 @@ def score(ref_units: dict, cand_units: dict) -> tuple[dict, dict]:
          "tag_acc_pct": round(100 * tot["tag_ok"] / max(1, tot["tagged"]), 1),
          "tagged": tot["tagged"],
          "errors": len(errs), "value_changing_errors": sum(1 for x in errs if not x["cosmetic"]),
+         "style_errors": sum(1 for x in errs if x["style"]),
+         "layout_errors": len(res["layout"]),
+         "layout_row_breaks": sum(1 for x in res["layout"] if x["kind"] == "row_breaks"),
+         "layout_display_as_inline": sum(1 for x in res["layout"]
+                                         if x["kind"] == "display_as_inline"),
          "near_miss_1to3": len(near),
          "near_miss_dangerous": sum(1 for x in near if not x["cosmetic"]),
          "inline_exact_pct": round(100 * tot["inl_hit"] / max(1, tot["inl_ref"]), 1),
@@ -422,6 +446,18 @@ def write_report(path: Path, summary: dict, res: dict, recall: dict | None) -> N
             L_ += [f"- **{x['page']}** tag {x['ref_tag'] or '—'} ed={x['ed']} · edits: "
                    + "; ".join(f"{t} `{a}`→`{b}`" for t, a, b in x["diffs"]),
                    f"  - ref: {_q(x['ref_raw'])}", f"  - cand: {_q(x['cand_raw'])}"]
+    lay = res.get("layout", [])
+    L_ += ["", f"## Layout errors: {len(lay)}", "",
+           "Row breaks of a multi-line display lost or added (the token comparison ignores "
+           "them), and displays set as inline math. Not cosmetic.", ""]
+    for x in lay:
+        if x["kind"] == "row_breaks":
+            L_ += [f"- **{x['page']}** tag {x['ref_tag'] or '—'} · row breaks ref "
+                   f"{x['row_breaks'][0]}, cand {x['row_breaks'][1]}",
+                   f"  - ref: {_q(x['ref_raw'][:300])}", f"  - cand: {_q(x['cand_raw'][:300])}"]
+        else:
+            L_.append(f"- **{x['page']}** tag {x['ref_tag'] or '—'} · display set inline: "
+                      f"{_q(x['ref_raw'][:160])}")
     cuts = res.get("scope_cuts", [])
     L_ += ["", f"## Reference scope cuts: {sum(c['aligned'] for c in cuts)}", "",
            "Pages whose reference has a `dropped` flag saying part of the page was not "
