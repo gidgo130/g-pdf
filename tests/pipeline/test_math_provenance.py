@@ -123,3 +123,17 @@ def test_an_inline_accept_without_spans_covers_the_sampled_spans_of_its_page(exp
     provenance.write(export, reviewer="sonnet", review_dirs=[rev])
     recs = {r["id"]: r for r in lines(export / "formulas.jsonl")}
     assert recs["p001-i03"]["status"] == "reviewed_accept"
+
+
+def test_a_flag_attaches_by_equation_number_or_as_a_fragment(export, tmp_path):
+    # a display changed after it was flagged (a split, a corrected field) is still found by the
+    # number in the flag's eq; a reference flag quoting part of a display is found as a fragment
+    fl = json.loads((export / "pages" / "p001.flags.json").read_text("utf-8"))
+    fl.insert(0, {"type": "possible_source_typo", "eq": "(7.1)", "latex": "x^2 = 3", "note": "old text"})
+    fl.insert(0, {"type": "possible_source_typo", "latex": "e^{-x}", "note": "a fragment"})
+    (export / "pages" / "p001.flags.json").write_text(json.dumps(fl), "utf-8")
+    provenance.write(export, reviewer="sonnet")
+    recs = {r["id"]: r for r in lines(export / "formulas.jsonl")}
+    assert recs["p001-d01"]["status"] == "flagged"                  # tag 7.1
+    assert recs["p001-d03"]["status"] == "flagged"                  # contains e^{-x}
+    assert recs["p001-d02"]["status"] == "reviewed_accept"

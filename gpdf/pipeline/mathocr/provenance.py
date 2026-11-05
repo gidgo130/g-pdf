@@ -73,6 +73,34 @@ def _sampled_accepts(review_dirs) -> dict[int, list[tuple[str, str]]]:
     return out
 
 
+EQ_NUMBER = re.compile(r"\d+\.\d+[a-z']*")
+
+
+def _nospace(s: str | None) -> str:
+    return re.sub(r"\s+", "", s or "")
+
+
+def _attach_flags(page_flags: list, base: list) -> dict[int, list]:
+    """{display index: flags}: a flag goes to the display whose LaTeX (or the LaTeX its review
+    item had) equals the flag's; else to the display whose \\tag the flag's eq names (a display
+    changed after it was flagged); else to the first display containing the flag's LaTeX (a
+    flag quoting part of a display). An inline flag (eq ending in "inline") stays unattached."""
+    out: dict[int, list] = {}
+    for f in page_flags:
+        if str(f.get("eq", "")).endswith("inline"):
+            continue
+        fk = _key(f.get("latex"))
+        hit = next((i for i, b in enumerate(base) if fk and fk in b[4]), None)
+        if hit is None:
+            nums = set(EQ_NUMBER.findall(str(f.get("eq") or "")))
+            hit = next((i for i, b in enumerate(base) if b[1] and b[1] in nums), None)
+        if hit is None and len(_nospace(fk)) >= 3:
+            hit = next((i for i, b in enumerate(base) if _nospace(fk) in _nospace(b[0])), None)
+        if hit is not None:
+            out.setdefault(hit, []).append(f)
+    return out
+
+
 def _page_records(file: int, md: str, flags: list, items: list[dict], idents: list[dict],
                   reviewer: str | None, extra_accepts: list | None = None) -> list[dict]:
     m = MARKER_RE.search(md)
@@ -84,11 +112,12 @@ def _page_records(file: int, md: str, flags: list, items: list[dict], idents: li
     passed = {_key(r["latex"]) for r in idents if r.get("status") == "passed"}
     out = []
 
-    # displays
-    for n, (body, trailing) in enumerate(displays, 1):
+    # displays: the review state of each, then each flag attached to one display
+    base = []
+    for body, trailing in displays:
         lat, tag = L.split_tag(body, trailing)
         k = _key(lat)
-        status, review_item, notes, fl, also_replaced = None, None, [], [], False
+        status, review_item = None, None
         for r in reviewed:
             it = by_id.get(r["id"])
             if it is None or it.get("kind") in ("inline", "inline_missing"):
@@ -99,9 +128,11 @@ def _page_records(file: int, md: str, flags: list, items: list[dict], idents: li
                 status = status or ("reviewed_accept" if r["action"] == "accept" else None)
                 review_item = r["id"]
         olds = {k} | {_key(by_id[review_item].get("latex_primary"))} if review_item else {k}
-        for f in page_flags:
-            if _key(f.get("latex")) in olds:
-                fl.append({x: f[x] for x in ("type", "subtype") if f.get(x)})
+        base.append((k, tag, status, review_item, olds))
+    attached = _attach_flags(page_flags, base)
+    for n, (k, tag, status, review_item, olds) in enumerate(base, 1):
+        notes, also_replaced = [], False
+        fl = [{x: f[x] for x in ("type", "subtype") if f.get(x)} for f in attached.get(n - 1, [])]
         if fl:
             also_replaced = status == "replaced"
             status = "flagged"
