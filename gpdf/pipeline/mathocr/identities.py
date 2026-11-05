@@ -44,6 +44,7 @@ except ImportError:                                   # pragma: no cover - depen
     AVAILABLE = False
 
 TIME_LIMIT = 5.0           # seconds per display
+_clock = time.monotonic    # the deadline's clock (tests inject a counting one)
 DRAWS = 4                  # parameter draws, stratified over (LO, HI)
 LO, HI = 0.3, 2.5
 SEED = "g-pdf mathcheck"
@@ -403,7 +404,7 @@ class _Checker:
     def tick(self) -> None:
         """Checked before every draw and at every function evaluation (so inside the
         quadratures): past the deadline the display is abandoned."""
-        if time.monotonic() > self.deadline:
+        if _clock() > self.deadline:
             raise _Timeout()
 
     def params(self, k: int, extra=()) -> dict:
@@ -676,7 +677,7 @@ def check_display(latex: str, before: str = "", ctx: Context | None = None) -> R
     if not exprs:
         return Result(kind, "skipped", reason="does not parse")
     mpmath.mp.dps = 15
-    deadline = time.monotonic() + TIME_LIMIT
+    deadline = _clock() + TIME_LIMIT
     checks, supports = [], Counter()
     try:
         _slow_start()

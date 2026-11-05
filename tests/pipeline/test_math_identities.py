@@ -17,6 +17,22 @@ def check(latex, before="", ctx=None):
     return I.check_display(latex, before, ctx or I.Context())
 
 
+def counting_clock(step):
+    """A clock that moves ``step`` seconds per reading: the deadline becomes a fixed
+    number of evaluations (TIME_LIMIT / step), whatever the machine's load."""
+    n = [0]
+
+    def clock():
+        n[0] += 1
+        return n[0] * step
+    return clock
+
+
+@pytest.fixture
+def steady_clock(monkeypatch):
+    monkeypatch.setattr(I, "_clock", counting_clock(1e-5))     # 500 000 evaluations
+
+
 # ---------------------------------------------------------------- preprocessing and classes
 
 def test_preprocess_splits_aligned_rows_and_equality_chains():
@@ -201,7 +217,7 @@ def test_vector_arguments_integrals_and_series_are_skipped():
     assert r.status == "skipped" and not r.checks
 
 
-def test_normal_density_notation_and_unknown_functions_from_kbj():
+def test_normal_density_notation_and_unknown_functions_from_kbj(steady_clock):
     # phi(.) is the standard normal density, Phi(.) its cdf: the skew-normal density passes
     r = check(r"p(z; \lambda) = 2 \varphi(z) \Phi(\lambda z)".replace(r"\varphi", r"\phi"))
     assert (r.kind, r.status, r.support) == ("density", "passed", "(-inf,inf)")
@@ -224,6 +240,19 @@ def test_normal_density_notation_and_unknown_functions_from_kbj():
     r = check(r"p(x_1, x_2) = [2 \pi \sqrt{1 - (0.5)^2}]^{-1} \exp\left\{-\frac{1}{2(1 - (0.5)^2)}"
               r"(x_1^2 - 2 (0.5) x_1 x_2 + x_2^2)\right\}")
     assert (r.kind, r.status, r.support) == ("density", "passed", "(-inf,inf)")
+
+
+BIVARIATE_NORMAL = (r"p(x_1, x_2) = [2 \pi \sqrt{1 - (0.5)^2}]^{-1} \exp\left\{"
+                    r"-\frac{1}{2(1 - (0.5)^2)}(x_1^2 - 2 (0.5) x_1 x_2 + x_2^2)\right\}")
+
+
+def test_the_deadline_counts_clock_readings(monkeypatch):
+    # the 2-D cubature needs about 77 000 evaluations: within 500 000 it passes, within
+    # 50 000 it times out, every time
+    monkeypatch.setattr(I, "_clock", counting_clock(1e-5))
+    assert check(BIVARIATE_NORMAL).status == "passed"
+    monkeypatch.setattr(I, "_clock", counting_clock(1e-4))
+    assert (check(BIVARIATE_NORMAL).status, check(BIVARIATE_NORMAL).reason) == ("skipped", "timeout")
 
 
 def test_a_matrix_display_is_skipped_not_flagged():
