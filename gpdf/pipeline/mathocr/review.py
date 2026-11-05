@@ -48,7 +48,15 @@ class Report:
 
 
 def load_decisions(path: Path) -> list[dict]:
-    text = Path(path).read_text("utf-8")
+    """The decisions of a JSON-lines (or JSON list) file, or of every *.jsonl file in a
+    folder (one per review batch), in file-name order."""
+    path = Path(path)
+    if path.is_dir():
+        files = sorted(path.glob("*.jsonl"))
+        if not files:
+            raise ReviewError(f"{path}: no .jsonl decision files in the folder")
+        return [d for f in files for d in load_decisions(f)]
+    text = path.read_text("utf-8")
     try:
         if text.lstrip().startswith("["):
             out = json.loads(text)

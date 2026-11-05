@@ -252,6 +252,8 @@ per-page counts: checked, passed, failed, inconclusive, skipped.
 gpdf-cli math-apply-review --export OUT\book --decisions review_decisions.jsonl
 ```
 
+`--decisions` is a file or a folder (every `*.jsonl` in it, in name order: one file per
+review batch, as `gpdf-cli math-review-pack` lays them out; see docs/math-review.md).
 `review_decisions.jsonl` has one line per item:
 
 ```json

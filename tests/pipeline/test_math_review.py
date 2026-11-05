@@ -249,3 +249,19 @@ def test_a_missing_display_is_inserted_or_replaces_page_text(tmp_path):
     assert [x["reason"] for x in review.apply(r, bad).refused] == [
         "anchor text not found in the page", "anchor text is not unique in the page",
         "a missing display needs 'after' or 'page_text'"]
+
+
+def test_decisions_can_be_a_folder_of_batch_files(root, tmp_path):
+    folder = tmp_path / "decisions"
+    folder.mkdir()
+    (folder / "batch02.jsonl").write_text(json.dumps({"id": "p001-d02", "action": "accept"}) + "\n",
+                                          "utf-8")
+    (folder / "batch01.jsonl").write_text(json.dumps(
+        {"id": "p001-d01", "action": "replace", "latex": "x^2 = 4"}) + "\n", "utf-8")
+    (folder / "notes.md").write_text("not decisions", "utf-8")
+    rep = review.apply(root, folder)
+    assert [a["id"] for a in rep.applied] == ["p001-d01", "p001-d02"] and not rep.refused
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(review.ReviewError, match="no .jsonl"):
+        review.apply(root, empty)
