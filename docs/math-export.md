@@ -110,6 +110,12 @@ the engine reads), `--crop-dpi 300` (review crops), `--check-identities` /
 any|value|small`, `--inline-with basic|marker|either|both`; and
 `--style-page-consistency`; `--allow-sleep`.
 
+`--ocr-mode ocr|txt` chooses what MinerU reads: `ocr` (default) a grayscale render of
+each page at `--dpi`; `txt` the PDF's own text layer (each page goes to the engine as a
+one-page PDF cut from the source, MinerU's `--ocr-mode txt`), for born-digital books.
+The two are cached apart (`.../<dpi>/` against `.../txt/`) and the choice is in
+`meta.json`.
+
 On Windows, math-export keeps the PC from sleeping while it runs
 (`SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)`; the display may
 still turn off) and always clears the request when it ends, on errors too;

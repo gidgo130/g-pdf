@@ -39,6 +39,7 @@ PINNED_MODELS = {                                 # file under <home>/models/<MO
 }
 TIERS = ("standard", "basic")                     # primary text, second opinion
 DPI = 300
+OCR_MODES = ("ocr", "txt")                  # read the page render, or the PDF's text layer
 MEMBERS = ("markdown.md", "middle_json.json")
 STDERR_TAIL = 600
 INSTALL_HINT = ("install MinerU 4.1.7 in its own environment (docs/math-export.md) and pass "
@@ -169,16 +170,22 @@ def prepare(explicit=None, home=None, pins=None, allow_unpinned=False) -> Engine
 
 class Cache:
     """Raw engine output per page and tier under
-    ROOT/<source sha256[:16]>/<engine version>/<dpi>/<tier>/pNNN.zip."""
+    ROOT/<source sha256[:16]>/<engine version>/<dpi>/<tier>/pNNN.zip; with
+    ``ocr_mode="txt"`` (the engine reads the PDF's own text layer from one-page PDFs, no
+    render) .../txt/<tier>/pNNN.zip."""
 
-    def __init__(self, root, source_sha: str, version: str, dpi: int):
+    def __init__(self, root, source_sha: str, version: str, dpi: int, ocr_mode: str = "ocr"):
+        if ocr_mode not in OCR_MODES:
+            raise ValueError(f"ocr_mode must be one of {', '.join(OCR_MODES)}")
         self.root = Path(root)
         self.source_sha = source_sha
         self.version = version
         self.dpi = dpi
+        self.ocr_mode = ocr_mode
 
     def dir(self, tier: str) -> Path:
-        return self.root / self.source_sha[:16] / self.version / str(self.dpi) / tier
+        key = str(self.dpi) if self.ocr_mode == "ocr" else "txt"
+        return self.root / self.source_sha[:16] / self.version / key / tier
 
     def path(self, tier: str, page: int) -> Path:
         return self.dir(tier) / f"p{page:03d}.zip"
@@ -248,10 +255,17 @@ def run(engine: Engine, pdf, pages, cache: Cache, tiers=TIERS, progress=None,
             img_dir.mkdir()
             try:
                 for p in missing:
-                    render_page(doc, p, img_dir / f"p{p:03d}.png", cache.dpi)
+                    if cache.ocr_mode == "txt":       # the page itself, text layer and all
+                        one = pymupdf.open()
+                        one.insert_pdf(doc, from_page=p - 1, to_page=p - 1)
+                        one.save(str(img_dir / f"p{p:03d}.pdf"))
+                        one.close()
+                    else:
+                        render_page(doc, p, img_dir / f"p{p:03d}.png", cache.dpi)
                 log = Path(log_dir or tier_dir) / f"mineru-{tier}.log"
                 code = _parse(engine, img_dir, tier_dir, tier, log, progress,
-                              lambda: sum(cache.has(tier, p) for p in missing), len(missing))
+                              lambda: sum(cache.has(tier, p) for p in missing), len(missing),
+                              cache.ocr_mode)
             finally:
                 shutil.rmtree(img_dir, ignore_errors=True)
             done = sum(cache.has(tier, p) for p in missing)
@@ -264,9 +278,10 @@ def run(engine: Engine, pdf, pages, cache: Cache, tiers=TIERS, progress=None,
     return stats
 
 
-def _parse(engine, img_dir, out_dir, tier, log, progress, count_done, total) -> int:
+def _parse(engine, img_dir, out_dir, tier, log, progress, count_done, total,
+           ocr_mode: str = "ocr") -> int:
     cmd = [engine.exe, "parse", str(img_dir), "-o", str(out_dir), "-f", "zip",
-           "--tier", tier, "--ocr-mode", "ocr"]
+           "--tier", tier, "--ocr-mode", ocr_mode]
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "a", encoding="utf-8") as lf:
         lf.write(f"\n# {time.strftime('%Y-%m-%d %H:%M:%S')} {' '.join(cmd)}\n")

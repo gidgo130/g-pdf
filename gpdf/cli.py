@@ -333,6 +333,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "the pins (recorded in meta.json)")
     me.add_argument("--dpi", type=int, default=300, help="page render for the engine (default 300)")
     me.add_argument("--crop-dpi", type=int, default=300, help="review crops (default 300)")
+    me.add_argument("--ocr-mode", choices=("ocr", "txt"), default="ocr",
+                    help="what MinerU reads: the page render (ocr, default) or the PDF's own "
+                         "text layer (txt, for born-digital PDFs); cached apart")
     me.add_argument("--check-identities", dest="identities", action="store_true", default=None,
                     help="require the identity checks (error without the mathcheck extra)")
     me.add_argument("--no-check-identities", dest="identities", action="store_false",
@@ -842,7 +845,7 @@ def _math_export_main(args, parser) -> int:
                        llama_server=args.llama_server, marker_gguf=args.marker_gguf,
                        use_marker=args.use_marker, marker_rule=args.marker_rule,
                        inline_with=args.inline_with, style_page=args.style_page_consistency,
-                       keep_awake=not args.allow_sleep)
+                       keep_awake=not args.allow_sleep, ocr_mode=args.ocr_mode)
     try:
         summary = run.run(opts, progress=print)
     except (run.MathExportError, engine.EngineError, OSError) as e:

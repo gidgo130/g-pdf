@@ -119,6 +119,22 @@ def test_run_caches_both_tiers_per_page_and_reuses_the_cache(fake, pdf, tmp_path
     assert not list(cache.root.rglob("*.png"))          # page images are not kept
 
 
+def test_text_layer_mode_passes_one_page_pdfs_and_caches_apart(fake, pdf, tmp_path):
+    exe, home, pins, log = fake
+    e = engine.prepare(exe, home, pins=pins)
+    ocr = engine.Cache(tmp_path / "cache", engine.sha256_of(pdf), e.version, 300)
+    txt = engine.Cache(tmp_path / "cache", engine.sha256_of(pdf), e.version, 300, ocr_mode="txt")
+    assert ocr.path("standard", 2) != txt.path("standard", 2)
+    assert engine.run(e, pdf, [2, 5], txt, tiers=("standard",)) == {"standard": 2}
+    parse = [c for c in calls(log) if c["argv"][0] == "parse"][-1]
+    assert parse["argv"][parse["argv"].index("--ocr-mode") + 1] == "txt"
+    assert parse["inputs"] == ["p002.pdf", "p005.pdf"]
+    assert txt.has("standard", 5) and not ocr.has("standard", 5)
+    assert not list(txt.root.rglob("*.pdf"))              # the one-page PDFs are not kept
+    with pytest.raises(ValueError):
+        engine.Cache(tmp_path / "cache", "a" * 64, "4.1.7", 300, ocr_mode="auto")
+
+
 def test_cache_key_includes_source_version_and_dpi(fake, pdf, tmp_path):
     exe, home, pins, _ = fake
     e = engine.prepare(exe, home, pins=pins)

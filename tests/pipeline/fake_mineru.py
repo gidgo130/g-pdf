@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """A stand-in ``mineru-kit`` for tests: answers ``--version`` and ``parse DIR -o OUT -f zip
---tier T ...`` by writing one OUT/<stem>.zip per PNG in DIR (markdown.md and
+--tier T --ocr-mode M`` by writing one OUT/<stem>.zip per PNG in DIR (per PDF with
+``--ocr-mode txt``) (markdown.md and
 middle_json.json in the engine's shape), from a page script if one is given.
 
 Environment (set by the tests):
@@ -35,13 +36,14 @@ src = Path(argv[1])
 out = Path(argv[argv.index("-o") + 1])
 tier = argv[argv.index("--tier") + 1]
 assert argv[argv.index("-f") + 1] == "zip"
-assert argv[argv.index("--ocr-mode") + 1] == "ocr"
+mode = argv[argv.index("--ocr-mode") + 1]
+assert mode in ("ocr", "txt"), mode
 pages = {}
 if os.environ.get("FAKE_MINERU_PAGES"):
     pages = json.loads(Path(os.environ["FAKE_MINERU_PAGES"]).read_text("utf-8"))
 stop = int(os.environ.get("FAKE_MINERU_STOP_AFTER", "0") or 0)
 out.mkdir(parents=True, exist_ok=True)
-files = sorted(p for p in src.iterdir() if p.suffix.lower() == ".png")
+files = sorted(p for p in src.iterdir() if p.suffix.lower() == (".png" if mode == "ocr" else ".pdf"))
 if not files:
     print("No input files found.", file=sys.stderr)
     sys.exit(2)

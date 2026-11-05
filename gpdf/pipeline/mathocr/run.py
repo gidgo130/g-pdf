@@ -60,6 +60,7 @@ class Options:
     inline_with: str = "either"              # flags.INLINE_WITH (chosen on KBJ, MATH_3)
     style_page: bool = False                 # the page-consistency style rule (opt-in)
     keep_awake: bool = True                  # hold a Windows PC awake (--allow-sleep: off)
+    ocr_mode: str = "ocr"                    # engine.OCR_MODES: the render, or the text layer
 
 
 @dataclass
@@ -160,7 +161,8 @@ def _run(opts: Options, progress=None) -> Summary:
             notices.append("running unpinned: " + ", ".join(eng.unpinned))
         mk = _marker(opts, notices)
         sha = engine.sha256_of(pdf)
-        cache = engine.Cache(opts.cache or root / "cache", sha, eng.version, opts.dpi)
+        cache = engine.Cache(opts.cache or root / "cache", sha, eng.version, opts.dpi,
+                             opts.ocr_mode)
         say(f"engine: mineru-kit {eng.version} ({eng.exe})")
         engine_seconds = {}
         te, ae = time.time(), awake.awake_clock()
@@ -292,6 +294,7 @@ def _run(opts: Options, progress=None) -> Summary:
                 "options": {"pages": opts.pages, "group_inline": opts.group_inline,
                             "marker_rule": opts.marker_rule, "inline_with": opts.inline_with,
                             "style_page": opts.style_page, "keep_awake": opts.keep_awake,
+                            "ocr_mode": opts.ocr_mode,
                             "check_identities": want_ident,
                             "tesseract": tess.version if tess else None},
                 "labels": {"runs": fit.runs, "steps": fit.steps, "rejected": fit.rejected,
