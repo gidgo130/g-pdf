@@ -307,3 +307,16 @@ def test_section_constants_and_identity_items_from_the_pass():
     it = items[2][0]
     assert it.kind == "identity" and it.extra["identity"] == ["sums to 1"]
     assert it.extra["identity_details"][0]["support"] == "{0,1,...}"
+
+
+def test_the_identity_pass_writes_one_record_per_checked_display(setup, tmp_path):
+    pytest.importorskip("sympy")
+    pytest.importorskip("antlr4")
+    exe, home, pdf, log = setup
+    out = tmp_path / "out"
+    assert cli.main(["math-export", str(pdf), "--out", str(out), "--mineru", exe,
+                     "--mineru-home", str(home), "--pages", "1-2", "--check-identities"]) == 0
+    recs = [json.loads(s) for s in (out / "book" / "identities.jsonl").read_text("utf-8").splitlines()]
+    assert [(r["file"], r["display"], r["kind"], r["status"]) for r in recs] == [
+        (1, 1, "density", "passed")]
+    assert recs[0]["latex"].startswith("f(x) = ")

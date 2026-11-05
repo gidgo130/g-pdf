@@ -6,6 +6,7 @@ page files, text.md, the review queue and the identity checks.
     <out>/<stem>/pages/pNNN.flags.json    its flags
     <out>/<stem>/text.md                  the pages joined
     <out>/<stem>/review.jsonl             one review item per flagged formula
+    <out>/<stem>/identities.jsonl         the identity pass, one line per checked display
     <out>/<stem>/crops/                   the items' page crops
     <out>/<stem>/meta.json                source, engine, pins, labels, options
     <out>/<stem>/run.json                 per-page counts, timing, cache size
@@ -247,9 +248,9 @@ def _run(opts: Options, progress=None) -> Summary:
                 stats=page_stats[pg.file])
 
         # identities
-        ident_counts = {}
+        ident_counts, ident_records = {}, []
         if want_ident:
-            ident_counts = _identities(assembled, items_of, _ranges(pages), say)
+            ident_counts = _identities(assembled, items_of, _ranges(pages), say, ident_records)
 
         # outputs
         all_items = [it for pg in assembled for it in items_of[pg.file]]
@@ -265,6 +266,9 @@ def _run(opts: Options, progress=None) -> Summary:
             write_atomic(pages_dir / f"p{pg.file:03d}.flags.json", pg.flags_json())
             texts.append(md)
         write_atomic(root / "text.md", "\n".join(texts))
+        if want_ident:          # one record per checked display (passed, failed, inconclusive)
+            write_atomic(root / "identities.jsonl", "".join(
+                json.dumps(r, ensure_ascii=False) + "\n" for r in ident_records))
         write_atomic(root / "review.jsonl",
                      "".join(json.dumps(it.record(), ensure_ascii=False) + "\n" for it in all_items))
         kinds = {}
@@ -359,7 +363,7 @@ def _sum_counts(per_page: dict) -> dict:
     return out
 
 
-def _identities(assembled, items_of, ranges, say) -> dict:
+def _identities(assembled, items_of, ranges, say, records: list | None = None) -> dict:
     """Run the identity pass page by page; failures become (or join) review items."""
     from gpdf.pipeline.mathocr import identities
 
@@ -396,6 +400,10 @@ def _identities(assembled, items_of, ranges, say) -> dict:
                 d = it.display
                 res = identities.check_display(d.latex, before, ctx)
                 results.append(res)
+                if records is not None and res.status in ("passed", "failed", "inconclusive"):
+                    records.append({"file": pg.file, "display": n, "latex": d.latex,
+                                    "kind": res.kind, "status": res.status,
+                                    "checks": [[c.identity, c.status] for c in res.checks]})
                 if res.status != "failed":
                     continue
                 failed = [c for c in res.checks if c.status == "failed"]
