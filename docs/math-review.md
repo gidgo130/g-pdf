@@ -29,7 +29,7 @@ of 50, and a brief of about a page.
 1. Pack: `gpdf-cli math-review-pack --export OUT\<stem> --out REVIEW_DIR --inline-sample
    40 --seed S [--pages RANGE]` (`--batch-size 50` is the default). `REVIEW_DIR` must
    be in the run's private folder, never a temp or scratch folder.
-2. One subagent per batch, **Sonnet** by default, with a fresh context and this prompt:
+2. One subagent per batch, **Sonnet** (see "Which model" below), with a fresh context and this prompt:
    "Read `REVIEW_DIR\batchNN\BRIEF.md` and do what it says." Nothing else goes into the
    prompt: the brief and the batch are self-contained.
 3. Each finished batch: append one line to `REVIEW_DIR\cost_log.jsonl`:
@@ -43,6 +43,16 @@ of 50, and a brief of about a page.
    reported apart from value and style errors.
 
 Helper scripts, renders and notes stay in the batch folder: they hold the book's formulas.
+
+## Which model
+
+Sonnet reviews the displays. Batch B-1 tested Opus on the 12 KBJ items where Sonnet had
+gone wrong: 7 printed-typo flags it had dropped and 5 accept-vs-replace items, using the
+current brief. The rule was to switch to Opus if it recovered at least 5 of the 6
+reference-confirmed typos with no new value errors. Opus recovered 4 of the 6 (5 of the
+7 flags) and 5 of the 5 fixes, using 84k tokens for the batch (Sonnet: 74k). Both models
+plain-accept a display that reads correctly but is printed wrong. So Sonnet stays, and
+that kind of typo is left to the numeric identity checks (docs/math-export.md).
 
 ## The reviewer's brief
 
