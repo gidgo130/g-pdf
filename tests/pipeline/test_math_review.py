@@ -155,6 +155,17 @@ def test_a_repeated_inline_span_is_replaced_at_its_occurrence(tmp_path):
                             "the page"}]
 
 
+def test_a_grouped_item_can_be_replaced_and_flagged(root, tmp_path):
+    dec = decide(tmp_path,
+                 {"id": "p002-inline", "action": "replace",
+                  "spans": [{"latex_primary": "v", "latex": "w"}]},
+                 {"id": "p002-inline", "action": "flag", "flag_type": "possible_source_typo",
+                  "note": "span u: the page prints u where v is meant"})
+    rep = review.apply(root, dec)
+    assert rep.refused == [] and [a["action"] for a in rep.applied] == ["replace", "flag"]
+    assert review.apply(root, dec).already == ["p002-inline", "p002-inline"]
+
+
 def test_a_decision_can_set_a_display_tag(root, tmp_path):
     # p001-d02 has no tag (the number was read into the body); p001-d01's tag was misread
     dec = decide(tmp_path,

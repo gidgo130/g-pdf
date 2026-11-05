@@ -143,7 +143,7 @@ def apply(root, decisions_path, dry_run: bool = False) -> Report:
                 continue
             it = items[d["id"]]
             if it.get("spans") is not None:
-                new_md, why = _apply_grouped(d, it, md)
+                new_md, why = _apply_grouped(d, it, md, flags)
             else:
                 new_md, why = _apply_one(d, it, md)
             if why:
@@ -211,10 +211,14 @@ def _apply_missing(d: dict, md: str) -> tuple[str, str | None]:
     return before + "\n\n" + block + ("\n\n" + rest if rest else "\n"), None
 
 
-def _apply_grouped(d: dict, it: dict, md: str) -> tuple[str, str | None]:
+def _apply_grouped(d: dict, it: dict, md: str, flags: list) -> tuple[str, str | None]:
     primaries = {s.get("latex_primary") for s in it.get("spans", [])}
     if d["action"] != "replace":
-        missing = [p for p in primaries if _inline_span(p, md) is None]
+        # spans an applied replace of this item changed are no longer in the page
+        replaced = {s.get("latex_primary") for f in flags if f.get("type") == "reviewed"
+                    and f.get("id") == d["id"] and f.get("action") == "replace"
+                    for s in f.get("spans") or []}
+        missing = [p for p in primaries - replaced if _inline_span(p, md) is None]
         return md, ("latex_primary is no longer in the page" if missing else None)
     # a span repeated in the page is placed by its occurrence (1-based, in page order);
     # every place is found in the page as it stands before any span is replaced
