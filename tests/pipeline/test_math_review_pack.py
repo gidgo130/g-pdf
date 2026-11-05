@@ -180,3 +180,11 @@ def test_cli_samples_40_inline_spans_per_chapter_by_default(export, tmp_path):
     assert cli.main(["math-review-pack", "--export", str(export), "--out", str(tmp_path / "z"),
                      "--inline-sample", "0"]) == 0
     assert "inline_span" not in json.loads((tmp_path / "z" / "pack.json").read_text("utf-8"))["by_kind"]
+
+
+def test_the_brief_carries_the_tag_nesting_and_source_typo_rules(export, tmp_path):
+    pack.pack(export, tmp_path / "r")
+    brief = (tmp_path / "r" / "batch01" / "BRIEF.md").read_text("utf-8")
+    assert "never accept plus tag" in brief.lower()
+    assert "nesting" in brief
+    assert "looks mathematically wrong" in brief and "never plain `accept`" in brief

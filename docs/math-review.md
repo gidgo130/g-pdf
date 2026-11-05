@@ -67,13 +67,22 @@ lies under `{batch_dir}\renders\`.
 Compare symbol by symbol: signs, sub/superscripts, primes, bars/hats/tildes, Greek vs
 Latin, bold/roman/calligraphic, fraction structure, sum/integral limits (a printed
 double sum is two `\sum`), brackets, missing or extra terms, side conditions, trailing
-punctuation, the equation number.
+punctuation, the equation number. Check sub/superscript **nesting** against the crop:
+which symbols sit in a sub-subscript, and where a subscript ends (in `p_{i_\ell|i_1}` the
+bar is outside the sub-subscript; moving it inside changes the formula).
+
+If the reading matches the page but the page looks mathematically wrong (a sign, a
+missing factor, an exponent), decide `flag` with `possible_source_typo` and say what
+looks wrong in the note; never plain `accept`.
 
 - `disagree`, `marker`, `style`, `stack`, `syntax`: a display; check all of it.
 - `identity`: a numeric check failed, and the checker is often wrong. LaTeX matches the
   page and the math is fine: `accept` with a reason. It matches but the printed math is
   wrong: flag `possible_source_typo`. It misreads the page: `replace`.
-- `tag`: read the printed number; if it was misread, add `"tag": "<number>"`.
+- `tag`: read the printed number; if it was misread, add `"tag": "<number>"`. If the
+  misread number also appears in the body (`\tag{4'}` or a stray `(47.1)` inside the
+  formula), decide `replace` on the whole display, body without the number, plus the
+  `"tag"`. Never accept plus tag when the body holds a misread number.
 - `missing_display`: another engine saw a display that the page lacks (`latex_primary`
   is null; `page_md` holds the page file). Write the display in full and say where it
   goes: `"page_text"` (an exact, unique piece of `page_md` that it replaces) or
