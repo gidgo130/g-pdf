@@ -13,7 +13,9 @@ Apache-2.0 with extra terms (attribution for online services, a separate
 licence above US$20 M monthly revenue) and g-pdf is AGPL. Both MinerU tiers run
 on every page: `standard` (a 1.2 B vision-language model) gives the text,
 `basic` (a smaller formula recogniser) is the second opinion that drives the
-flags. Everything else is offline and local.
+flags. Optionally **Marker** (Surya 2.5) reads the pages with math as a third
+opinion; the two MinerU tiers share one layout model and often make the same
+mistake, Marker does not. Everything else is offline and local.
 
 ## Installing MinerU (the trial setup, Windows, 8 GB GPU)
 
@@ -45,6 +47,53 @@ in `meta.json`.
 Point g-pdf at the engine with `--mineru PATH` (the `mineru-kit` executable or
 the venv folder), `$GPDF_MINERU`, or `mineru-kit` on `PATH`.
 
+## Installing Marker (optional third opinion)
+
+Marker's code is Apache-2.0; its weights carry a modified OpenRAIL-M licence
+(free for personal use, research and organisations under US$5 M revenue). Like
+MinerU it is an external program in its own environment, never bundled. It
+serves the Surya VLM through the official llama.cpp `llama-server` binary:
+
+```powershell
+uv venv --python 3.12 C:\path\venv-marker
+C:\path\venv-marker\Scripts\activate
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+uv pip install "marker-pdf==2.1.0"            # brings surya-ocr 0.23.0
+# llama.cpp release b11765, CUDA 12.4 build for Windows, from
+# github.com/ggml-org/llama.cpp/releases/tag/b11765:
+#   llama-b11765-bin-win-cuda-12.4-x64.zip   sha256 1dd1eddb…f0393c5eae
+#   cudart-llama-bin-win-cuda-12.4-x64.zip   sha256 8c79a9b2…d7e32ae1d6
+# check both against the release's published digests, unzip both into one folder
+```
+
+The first Marker run downloads the Surya GGUF files from Hugging Face
+(`datalab-to/surya-ocr-2.5-gguf`, about 1.4 GB, into the Hugging Face cache);
+g-pdf finds them there or in `--marker-gguf DIR`. Pins (a mismatch stops the run
+unless `--allow-unpinned`; the values found go to `meta.json`):
+
+| | |
+|---|---|
+| marker-pdf / surya-ocr (venv metadata) | 2.1.0 / 0.23.0 |
+| `llama-server --version` | build 11765 (commit 9df0b73c7) |
+| `surya-2.5.gguf` | sha256 `45fa3e58…172445d4b6bf` (1 180 178 976 bytes) |
+| `surya-2.5-mmproj.gguf` | sha256 `f245dbf7…9476f861f659` (207 345 920 bytes) |
+
+g-pdf starts `llama-server` itself on a free local port with the checked GGUF
+files (Surya's own settings: 8 slots, `--jinja --special`), points `marker` at
+it (`SURYA_INFERENCE_URL`, the documented external-server mode; never
+`--use_llm`) and stops it when the run ends. Marker runs only after MinerU has
+finished, so one engine holds the GPU at a time, and only on the pages where
+either MinerU tier found display or inline math. Pages go to Marker as 16-page
+PDFs made of the source's own pages; each finished chunk is cached per page at
+once (key: source SHA-256, page, Marker version, its 192 dpi OCR render), so a
+stopped run resumes. On KBJ (284 math pages, RTX 4060 laptop): 7.5 s per page
+including a 25 s model load, peak 3.4 GB of GPU memory.
+
+Point g-pdf at it with `--marker PATH` (the executable or the venv folder) or
+`$GPDF_MARKER`, and `--llama-server PATH` or `$GPDF_LLAMA_SERVER`. Without
+either `--marker` or `$GPDF_MARKER` there is no third opinion; `--no-marker`
+turns it off when the variable is set.
+
 ## Running
 
 ```powershell
@@ -56,7 +105,10 @@ Options: `--pages RANGE` (1-based file pages), `--dpi 300` (the page render
 the engine reads), `--crop-dpi 300` (review crops), `--check-identities` /
 `--no-check-identities`, `--inline per-page|per-span`, `--cache DIR`,
 `--tesseract PATH` (page numbers the engine and the PDF's own text lack),
-`--mineru-home DIR`, `--allow-unpinned`.
+`--mineru-home DIR`, `--allow-unpinned`; Marker: `--marker PATH`,
+`--llama-server PATH`, `--marker-gguf DIR`, `--no-marker`, `--marker-rule
+any|value|small`, `--inline-with basic|marker|either|both`; and
+`--style-page-consistency`.
 
 Time on the trial machine (RTX 4060 laptop, 8 GB): about 7 s per page for the
 standard tier and 6 s for the basic one, plus about a minute of model loading
@@ -132,11 +184,13 @@ was not scanned); runs, steps and rejected readings are printed and kept in
 | kind | rule |
 |---|---|
 | `disagree` | the two tiers' readings differ after normalization, compared loosely (bold/roman markup, line breaks, dot style and trailing punctuation ignored); or the basic tier has no reading for the display. The trial's rule: on 20 KBJ pages it flagged 28 % of displays and caught 11 of 12 value-changing errors. |
-| `style` | the tiers differ only in `\mathbf` / `\boldsymbol` / `\mathrm` / `\mathit` / `\mathcal` / `\mathbb`; or the same symbol (same subscript) is both bold and not on one page (bold = vector or matrix in multivariate notation). |
+| `marker` | Marker reads the display differently (its display aligned to the standard tier's by tag, then reading order). `--marker-rule small` (default): a value-changing difference (style commands, line breaks, dot style, trailing punctuation ignored) of 1-3 tokens; `value`: any value-changing difference; `any`: any normalized difference. On KBJ (288 pages, 53 value-changing errors) against no Marker: `small` +24 items, +2 errors caught (51/53); `value` +55 items, +4 (53/53); `any` +116 items, +4. The item carries `latex_marker`. |
+| `style` | the tiers differ only in `\mathbf` / `\boldsymbol` / `\mathrm` / `\mathit` / `\mathcal` / `\mathbb`. With `--style-page-consistency` also: the same symbol (same subscript) is both bold and not on one page; off by default, since bold **X** for a vector and X₁ for its component is normal multivariate notation (on KBJ: 74 fewer items, 2 of 21 style errors no longer flagged). |
 | `stack` | a `\sum` / `\prod` / `\int` / `\bigcup` whose limits hold two index variables, a relation (`<`, `\le`, `\ne`) or a sum of indices: every engine collapses a printed ΣΣ into one Σ. |
 | `syntax` | unbalanced braces, `\left`/`\right` or `\begin`/`\end`, or a command outside the whitelist (standard LaTeX math plus the trial's outputs). |
 | `tag` | within a contiguous page run a tag repeats, goes backwards or skips a number. |
-| `inline` | inline spans that differ between the tiers after pairing the paragraphs by position. On the trial pages 29.8 % of the standard tier's spans got flagged, catching 51.6 % of its inline errors, so inline flags are grouped into **one item per page** (`pNNN-inline`, with `spans` and one crop per text line of each flagged paragraph); `--inline per-span` gives one item per span. |
+| `missing_display` | Marker (or the basic tier) has a display that none of the standard tier's aligns with, or an equation block of the layout gave no display. `latex_primary` is null, `latex_second` the other engine's reading, the crop its box (the whole page without one). The two MinerU tiers share one layout, so in practice the signal comes from Marker: on KBJ 6 items, 3 of the 6 missed displays. |
+| `inline` | inline spans that differ from the other engines after pairing the paragraphs by position: `--inline-with either` (default) flags a span when the basic tier or Marker reads it differently (the basic tier alone on pages Marker did not read); `basic`, `marker` and `both` (only when neither agrees) are the alternatives. On KBJ (5 143 spans, 522 wrong): basic 32 % of spans flagged, recall 56 %, 258 page items; marker 8 %, 37 %, 145; either 36 %, 72 %, 261; both 4 %, 20 %, 92. Inline flags are grouped into **one item per page** (`pNNN-inline`, with `spans` (each with `latex_second` and `latex_marker`) and one crop per text line of each flagged paragraph); `--inline per-span` gives one item per span. |
 | `identity` | a numeric identity failed (below). |
 
 Crops are the layout box of the formula padded a little, or the whole page
@@ -219,15 +273,28 @@ dropped, synonyms folded, alignment environments reduced, script order and
 grouping braces canonicalised, the tag split off), aligned by tag then reading
 order (joining a display the candidate split in two), then exact match, mean
 token edit distance, tag accuracy, missed and extra formulas, near-misses of
-1-3 tokens split into value-changing and cosmetic (dot style, trailing
-punctuation, bold/roman markup, line breaks), the inline exact rate (a bag of
-spans), the prose character error rate and the page-label accuracy. A display
-split across a page break is joined on each side from the `page_anomaly` flag.
-With a `review.jsonl` beside the candidate, **flag recall**: the share of the
+1-3 tokens split into value-changing and cosmetic, the inline exact rate (a bag
+of spans), the prose character error rate and the page-label accuracy.
+Cosmetic means the two readings agree once style commands (`\mathbf`,
+`\mathbb`, `\mathcal`, …), dot style, trailing punctuation and line breaks are
+taken out; a cosmetic difference that involves a style command is a style
+error. Notation-only forms compare equal: prime and script order (`x'_1` =
+`x_1'`, `x'^2` = `x^{\prime 2}`, `q''` = `q^{\prime\prime}`, `a^{*\prime}` =
+`a^{*^{\prime}}`), `\overset` = `\stackrel`, `\binom{a}{b}` = a two-row
+`pmatrix`, `\phantom{…}` dropped, punctuation at the end of `\text{…}` moved
+out, `\stackrel` limits = `\substack`. A display split across a page break is
+joined on **both** sides where either side's `page_anomaly` flag links the
+pages, so a link only one side makes does not turn two right formulas into a
+missed and a wrong one; `split_joins` counts where the sides agree. With a
+`review.jsonl` beside the candidate, **flag recall**: the share of the
 candidate's wrong formulas (all, value-changing, style) that some review item
-covers, by the kind of the covering reasons, and the list of unflagged
-value-changing errors. `score.json` and `REPORT.md` quote the formulas; the
-screen gets numbers only.
+covers (an item on either half of a joined display counts), by the kind of the
+covering reasons, and the list of unflagged value-changing errors; the
+**inline flag recall** (a span without a match in the reference bag of its page,
+listed by an inline item of the page) with the number of spans flagged; and the
+**missing-display recall** (a missed display with a `missing_display` item on
+its page whose reading is close). `score.json` and `REPORT.md` quote the
+formulas; the screen gets numbers only.
 
 ## Tests
 
@@ -236,4 +303,7 @@ formulas and a fake `mineru-kit` (`tests/pipeline/fake_mineru.py`); the
 identity tests skip without the extra. `test_math_integration.py` renders a
 two-page PDF from our own formulas and runs it through the real engine; it is
 marked `slow` and skipped unless `$GPDF_MINERU` (or `mineru-kit` on `PATH`)
-points at a working install.
+points at a working install. Marker has its fakes too (`tests/pipeline/fake_marker.py`:
+a `marker` that writes Marker JSON from a page script and a `llama-server` that
+answers `/health`); `test_math_marker_integration.py` runs the real Marker on a
+page of our own formulas, `slow` and skipped unless `$GPDF_MARKER` is set.

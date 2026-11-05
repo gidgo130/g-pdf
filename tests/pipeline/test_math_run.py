@@ -244,7 +244,7 @@ def test_marker_readings_reach_the_review_queue(setup, tmp_path, monkeypatch):
     assert items["p001-m01"]["latex_second"] == r"F(x) = 1 - e^{-\lambda x}"
     assert items["p001-m01"]["crop"] == "crops/p001-m01.png"
     meta = json.loads((out / "book" / "meta.json").read_text("utf-8"))
-    assert meta["options"]["marker_rule"] == "value" and meta["options"]["inline_with"] == "basic"
+    assert meta["options"]["marker_rule"] == "small" and meta["options"]["inline_with"] == "either"
 
 
 def test_engine_problems_are_errors_not_tracebacks(setup, tmp_path, monkeypatch, capsys):

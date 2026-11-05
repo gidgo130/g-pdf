@@ -338,14 +338,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="skip the identity checks")
     me.add_argument("--inline", choices=("per-page", "per-span"), default="per-page",
                     help="inline-math flags as one item per page (default) or per span")
-    me.add_argument("--marker-rule", choices=("any", "value", "small"), default="value",
+    me.add_argument("--marker-rule", choices=("any", "value", "small"), default="small",
                     help="when Marker's reading of a display flags it: any normalized "
-                         "difference, a value-changing one (default) or a value-changing one "
-                         "of 1-3 tokens")
+                         "difference, a value-changing one, or a value-changing one of 1-3 "
+                         "tokens (default)")
     me.add_argument("--inline-with", choices=("basic", "marker", "either", "both"),
-                    default="basic",
-                    help="inline spans are flagged when they differ from the basic tier "
-                         "(default), from Marker, from either, or from both")
+                    default="either",
+                    help="inline spans are flagged when they differ from the basic tier, from "
+                         "Marker, from either (default; the basic tier alone on pages Marker "
+                         "did not read), or from both")
     me.add_argument("--style-page-consistency", action="store_true",
                     help="also flag a symbol that is both bold and not on one page (off by "
                          "default: bold X and X_1 is normal multivariate notation)")
