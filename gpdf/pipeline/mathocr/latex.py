@@ -184,7 +184,8 @@ def merge_primes(toks: list[str]) -> list[str]:
             for s in sups:
                 inner = merge_primes(s)
                 inner = [t for k, t in enumerate(inner)
-                         if not (t == "^" and inner[k + 1:k + 2] == [r"\prime"])]
+                         if not (t == "^" and inner[k + 1:k + 2] == [r"\prime"]
+                                 and k and inner[k - 1] in ("*", r"\ast"))]
                 out += ["^", inner[0]] if len(inner) == 1 else ["^", "{", *inner, "}"]
             continue
         if toks[i] == "{":

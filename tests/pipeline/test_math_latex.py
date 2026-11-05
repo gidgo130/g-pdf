@@ -47,6 +47,7 @@ def norm(s):
     (r"q''(v)", r"q^{\prime\prime}(v)"),
     (r"\alpha_i'^2", r"\alpha_{i}^{\prime 2}"),
     (r"a^{*\prime}", r"a^{*^{\prime}}"),
+    (r"e^{-\alpha'_2 x_2}", r"e ^ {- \alpha_ {2} ^ {\prime} x _ {2}}"),
     (r"X \overset{d}{=} Y", r"X \stackrel{{d}}{{=}} Y"),
     (r"s = \phantom{-}1", "s = 1"),
     (r"\binom{m_1}{m_2}", r"\begin{pmatrix} m_1 \\ m_2 \end{pmatrix}"),
