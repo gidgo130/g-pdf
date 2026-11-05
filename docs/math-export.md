@@ -344,7 +344,10 @@ reference's last block (similarity ≥ 0.8) is found, and the candidate's text,
 displays and inline math after it are not scored; when the reference has
 nothing left on the page, none of the candidate page is scored. `scope_cut` in the summary
 counts the pages cut and those whose last block was not found (scored whole);
-the report lists them with what was ignored. The
+the report lists them with what was ignored. Where the reference writes a figure as a
+placeholder line (`[Figure 17.2: caption]`), that line and the candidate's caption line for
+the same figure (similarity ≥ 0.8; a sentence about the figure stays) are left out of both
+(`figure_captions_left_out`). The
 scorer is the trial's: displays normalized (sizing, spacing and style wrappers
 dropped, synonyms folded, alignment environments reduced, script order and
 grouping braces canonicalised, the tag split off), aligned by tag then reading

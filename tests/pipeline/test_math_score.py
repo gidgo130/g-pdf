@@ -276,3 +276,18 @@ def test_inline_exact_with_style_ignored(tmp_path):
     s, _ = score.run(write(tmp_path / "r", ref, {}), write(tmp_path / "c", cand, {}),
                      tmp_path / "out")
     assert s["inline_exact_pct"] == 0.0 and s["inline_style_free_pct"] == 66.7
+
+
+def test_figure_captions_are_left_out_where_the_reference_has_a_placeholder(tmp_path):
+    ref = {"p010": ('<!-- page printed="1" file="10" -->\n[Figure 17.2: Standardized Density '
+                    "Functions]\n\nThe ratio is given below.\n")}
+    cand = {"p010": ('<!-- page printed="1" file="10" -->\n\nFigure 17.2 Standardized Density '
+                     "Functions\n\nThe ratio is given below.\n")}
+    s, _ = score.run(write(tmp_path / "r", ref, {}), write(tmp_path / "c", cand, {}),
+                     tmp_path / "out")
+    assert s["prose_cer"] == 0.0 and s["figure_captions_left_out"] == {"ref": 1, "cand": 1}
+    # a sentence about the figure is prose, not a caption, and stays
+    cand2 = {"p010": cand["p010"].replace("The ratio", "Figure 17.2 shows that the ratio")}
+    s2, _ = score.run(write(tmp_path / "r2", ref, {}), write(tmp_path / "c2", cand2, {}),
+                      tmp_path / "out2")
+    assert s2["prose_cer"] > 0

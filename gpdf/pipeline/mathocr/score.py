@@ -49,6 +49,10 @@ PLACEHOLDER_RE = re.compile(r"(?m)^[ \t]*\[[^\]\n]*(?:%s)[^\]\n]*\][ \t]*$" % SC
                             re.I)
 BLOCK_RE = re.compile(r"(?:[^\n]*\S[^\n]*(?:\n|$))+")
 SCOPE_MATCH = 0.8          # similarity a candidate block needs to align with the reference's last
+# a reference figure placeholder line, [Figure 17.2: caption]; the candidate's own caption
+# line for that figure (as similar as CAPTION_MATCH) is left out with it
+FIGURE_RE = re.compile(r"(?m)^[ \t]*\[(?:Figure|Fig\.)\s*([0-9][\w.]*)[^\]\n]*\][ \t]*$")
+CAPTION_MATCH = 0.8
 
 
 class ScoreError(Exception):
@@ -161,6 +165,38 @@ def header_leak(cand_md: str, printed: str | None, ref_md: str = "") -> list[str
 
 
 # ---------------------------------------------------------------- reference scope
+
+def _caption_key(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+
+
+def figure_captions(ref_mds: dict, cand_mds: dict) -> tuple[dict, dict, dict]:
+    """Where the reference writes a figure as a placeholder line, that line and the
+    candidate's caption line for the same figure are left out of both (the figure's labels
+    are not transcribed in the reference)."""
+    ref_mds, cand_mds = dict(ref_mds), dict(cand_mds)
+    count = {"ref": 0, "cand": 0}
+    for stem, md in list(ref_mds.items()):
+        holders = list(FIGURE_RE.finditer(md))
+        if not holders:
+            continue
+        ref_mds[stem] = FIGURE_RE.sub("", md)
+        count["ref"] += len(holders)
+        cmd = cand_mds.get(stem)
+        if cmd is None:
+            continue
+        lines = cmd.split("\n")
+        keep = []
+        for line in lines:
+            k = _caption_key(line)
+            if any(k and difflib.SequenceMatcher(None, k, _caption_key(h.group())).ratio()
+                   >= CAPTION_MATCH for h in holders):
+                count["cand"] += 1
+                continue
+            keep.append(line)
+        cand_mds[stem] = "\n".join(keep)
+    return ref_mds, cand_mds, count
+
 
 def scope_flag(flags: list) -> str | None:
     """The text of a `dropped` (or `page_anomaly`) flag saying part of the page was not
@@ -539,6 +575,7 @@ def run(ref, cand, out, pages: str | None = None) -> tuple[dict, dict | None]:
     # where the reference says part of a page was not transcribed (a bibliography), the
     # candidate counts only up to the reference's last aligned line
     ref_mds, cand_mds, cuts = scope_cut(ref_mds, ref_flags, cand_mds)
+    ref_mds, cand_mds, captions = figure_captions(ref_mds, cand_mds)
     # a display split over a page break is joined on both sides where either side links
     # the pages, so a link only one side makes does not turn two right formulas into
     # a missed one and a wrong one; how often the sides differ is counted on its own
@@ -553,6 +590,7 @@ def run(ref, cand, out, pages: str | None = None) -> tuple[dict, dict | None]:
     summary["scope_cut"] = {"pages": sum(c["aligned"] for c in cuts),
                             "unaligned": sum(not c["aligned"] for c in cuts)}
     res["scope_cuts"] = cuts
+    summary["figure_captions_left_out"] = captions
     recall = None
     review = cand_folder / "review.jsonl"
     if review.is_file():
