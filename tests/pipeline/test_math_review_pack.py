@@ -153,3 +153,22 @@ def test_cli(export, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "4 item(s) in 1 batch(es)" in out and "chapter 1: 1 of 4 spans" in out
     assert "First Chapter" not in out                  # numbers only on screen
+
+
+def test_a_span_with_its_own_line_crop_carries_only_that_crop(export, tmp_path):
+    its = [dict(i) for i in ITEMS]
+    its[1] = dict(its[1], spans=[dict(s, bbox=[0.1, 0.2, 0.9, 0.4], at=0.3,
+                                      line_box=[0.1, 0.2, 0.9, 0.26],
+                                      crop=f"crops/p001-inline-s{n}.png")
+                                 for n, s in enumerate(its[1]["spans"], 1)])
+    (export / "review.jsonl").write_text("".join(json.dumps(i) + "\n" for i in its), "utf-8")
+    pack.pack(export, tmp_path / "r", inline_sample=10, seed=1)
+    spans = {x["key"]: x for x in lines(tmp_path / "r" / "batch01" / "items.jsonl")
+             if x["kind"] == "inline_span"}
+    a1 = spans["p001-inline#1"]
+    assert a1["crops"] == [str((export / "crops" / "p001-inline-s1.png").resolve())]
+    assert a1["line_box"] == [0.1, 0.2, 0.9, 0.26]
+    assert spans["p002-inline#1"]["crops"] == [str((export / "crops" / "p002-inline.png").resolve())]
+    brief = (tmp_path / "r" / "batch01" / "BRIEF.md").read_text("utf-8")
+    assert "formula_uncertain" in brief and "never `accept`" in brief
+

@@ -156,7 +156,11 @@ def _span_item(it: dict, k: int, s: dict, root: Path, md: str) -> dict:
     if s.get("latex_marker") is not None:
         out["latex_marker"] = s["latex_marker"]
     out["paragraph"] = s.get("paragraph")
-    out["crops"] = _abs(root, it.get("crops") or [it.get("crop")])
+    if s.get("crop"):           # the span's own line with the lines around it
+        out["crops"] = _abs(root, [s["crop"]])
+        out["line_box"] = s.get("line_box")
+    else:                       # an older export: every line crop of the page item
+        out["crops"] = _abs(root, it.get("crops") or [it.get("crop")])
     out.update(_span_place(s["latex_primary"], md, s.get("paragraph")))
     return out
 

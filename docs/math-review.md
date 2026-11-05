@@ -77,7 +77,10 @@ punctuation, the equation number.
   is null; `page_md` holds the page file). Write the display in full and say where it
   goes: `"page_text"` (an exact, unique piece of `page_md` that it replaces) or
   `"after"` (an exact, unique piece it follows).
-- `inline_span`: one inline span. Check it on its line (`context` shows where).
+- `inline_span`: one inline span. Its crop shows the span's line with one line above and
+  one below (`context` gives the text around it). Find the span in the crop first. If you
+  can't find it there, decide `flag` with `formula_uncertain` and say so in the note,
+  never `accept`.
 
 Change something only when the page differs in **value** or **style**. Leave
 notation-only variants alone: `x'_1` vs `x_1'`, spacing, grouping braces, `\dots` vs
