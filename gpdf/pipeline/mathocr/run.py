@@ -14,6 +14,7 @@ page files, text.md, the review queue and the identity checks.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import time
@@ -26,8 +27,8 @@ import pymupdf
 from gpdf import __version__
 from gpdf.pipeline import tesseract
 from gpdf.pipeline.manuals import ManualsError, parse_pages, write_atomic
-from gpdf.pipeline.mathocr import (MATHCHECK_HINT, assemble, awake, engine, flags, labels, marker,
-                                   second)
+from gpdf.pipeline.mathocr import (MATHCHECK_HINT, assemble, awake, djvu, engine, flags, labels,
+                                   marker, second)
 
 SCHEMA = 1
 CROP_DPI = 300
@@ -61,6 +62,7 @@ class Options:
     style_page: bool = False                 # the page-consistency style rule (opt-in)
     keep_awake: bool = True                  # hold a Windows PC awake (--allow-sleep: off)
     ocr_mode: str = "ocr"                    # engine.OCR_MODES: the render, or the text layer
+    ddjvu: str | None = None                 # DjVuLibre (a .djvu source): folder or executable
 
 
 @dataclass
@@ -145,7 +147,13 @@ def _run(opts: Options, progress=None) -> Summary:
         raise MathExportError(f"{pdf} not found")
     root = Path(opts.out) / pdf.stem
     root.mkdir(parents=True, exist_ok=True)
-    doc = pymupdf.open(str(pdf))
+    sha = engine.sha256_of(pdf)
+    cache_key, render_pdf, djvu_info = sha, pdf, None
+    if djvu.is_djvu(pdf):
+        render_pdf, djvu_info = _djvu_proxy(opts, pdf, sha, root, say)
+        # the engines read renders of the proxy: a different ddjvu dpi is another source
+        cache_key = hashlib.sha256(f"{sha}:ddjvu:{opts.dpi}".encode()).hexdigest()
+    doc = pymupdf.open(str(render_pdf))
     try:
         try:
             idx = parse_pages(opts.pages, doc.page_count)
@@ -160,13 +168,12 @@ def _run(opts: Options, progress=None) -> Summary:
         if eng.unpinned:
             notices.append("running unpinned: " + ", ".join(eng.unpinned))
         mk = _marker(opts, notices)
-        sha = engine.sha256_of(pdf)
-        cache = engine.Cache(opts.cache or root / "cache", sha, eng.version, opts.dpi,
+        cache = engine.Cache(opts.cache or root / "cache", cache_key, eng.version, opts.dpi,
                              opts.ocr_mode)
         say(f"engine: mineru-kit {eng.version} ({eng.exe})")
         engine_seconds = {}
         te, ae = time.time(), awake.awake_clock()
-        parsed = engine.run(eng, pdf, pages, cache, tiers=opts.tiers,
+        parsed = engine.run(eng, render_pdf, pages, cache, tiers=opts.tiers,
                             progress=lambda tier, d, n: say(f"  {tier}: {d}/{n} pages"),
                             log_dir=root / "logs")
         engine_seconds["total"] = round(time.time() - te, 1)
@@ -184,11 +191,11 @@ def _run(opts: Options, progress=None) -> Summary:
         if mk:
             math_pages = [p for p in pages if marker.has_math(std[p].blocks)
                           or (p in basic and marker.has_math(basic[p].blocks))]
-            mcache = marker.Cache(opts.cache or root / "cache", sha, mk.version)
+            mcache = marker.Cache(opts.cache or root / "cache", cache_key, mk.version)
             say(f"marker: {mk.version} with llama.cpp b{mk.llama_build} on {len(math_pages)} "
                 f"math pages ({len(mcache.missing(math_pages))} not cached)")
             tm, am = time.time(), awake.awake_clock()
-            n_new = marker.run(mk, pdf, math_pages, mcache,
+            n_new = marker.run(mk, render_pdf, math_pages, mcache,
                                progress=lambda d, n: say(f"  marker: {d}/{n} pages"),
                                log_dir=root / "logs")
             engine_seconds["marker"] = round(time.time() - tm, 1)
@@ -287,7 +294,9 @@ def _run(opts: Options, progress=None) -> Summary:
         meta = {"schema": SCHEMA, "made": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "made_with": f"g-pdf {__version__}",
                 "source": {"path": str(pdf), "sha256": sha, "page_count": doc.page_count,
-                           "pages": pages},
+                           "pages": pages,
+                           **({"render_pdf": str(render_pdf), "djvu": djvu_info}
+                              if djvu_info else {})},
                 "engine": eng.describe(), "marker": mk.describe() if mk else None,
                 "dpi": opts.dpi, "crop_dpi": opts.crop_dpi,
                 "tiers": list(opts.tiers), "cache": str(cache.root),
@@ -310,6 +319,28 @@ def _run(opts: Options, progress=None) -> Summary:
                        fit.steps, fit.rejected, notices)
     finally:
         doc.close()
+
+
+def _djvu_proxy(opts: Options, path: Path, sha: str, root: Path, say) -> tuple[Path, dict]:
+    """The DjVu's selected pages rendered by ddjvu into a proxy PDF with its page count."""
+    if opts.ocr_mode == "txt":
+        raise MathExportError("--ocr-mode txt reads a PDF text layer; a DjVu is read from its "
+                              "page images (--ocr-mode ocr)")
+    try:
+        tools = djvu.prepare(opts.ddjvu)
+        n = tools.page_count(path)
+        try:
+            idx = parse_pages(opts.pages, n)
+        except ManualsError as e:
+            raise MathExportError(str(e)) from None
+        pages = [i + 1 for i in (idx if idx is not None else range(n))]
+        say(f"djvu: {n} pages, rendering {len(pages)} at {opts.dpi} dpi with {tools.ddjvu}")
+        cache_dir = Path(opts.cache or root / "cache") / sha[:16] / f"ddjvu-{opts.dpi}"
+        proxy = djvu.proxy_pdf(tools, path, pages, opts.dpi, cache_dir,
+                               root / "source" / f"{path.stem}.pdf")
+    except djvu.DjvuError as e:
+        raise MathExportError(str(e)) from None
+    return proxy, {"dpi": opts.dpi, **tools.describe()}
 
 
 def _engine_view(blocks: list[dict]) -> dict:

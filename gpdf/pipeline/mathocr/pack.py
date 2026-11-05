@@ -246,7 +246,8 @@ def pack(export, out, kinds=DISPLAY_KINDS, batch_size: int = BATCH_SIZE,
     packed.sort(key=lambda x: (int(x["file"]), x["key"]))
     out.mkdir(parents=True, exist_ok=True)
     meta_path = root / "meta.json"
-    pdf = json.loads(meta_path.read_text("utf-8"))["source"]["path"] if meta_path.is_file() else ""
+    src = json.loads(meta_path.read_text("utf-8"))["source"] if meta_path.is_file() else {}
+    pdf = src.get("render_pdf") or src.get("path", "")     # a DjVu's proxy PDF
     write_atomic(out / "render.py", RENDER.format(pdf=pdf))
     render = f'"{sys.executable}" -I "{(out / "render.py").resolve()}"'
     batches = []

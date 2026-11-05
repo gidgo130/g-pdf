@@ -116,6 +116,19 @@ one-page PDF cut from the source, MinerU's `--ocr-mode txt`), for born-digital b
 The two are cached apart (`.../<dpi>/` against `.../txt/`) and the choice is in
 `meta.json`.
 
+**DjVu input.** A `.djvu` BOOK is read through DjVuLibre's `ddjvu` and `djvused` (GPL;
+an external program, never a Python dependency): `--ddjvu PATH` (either executable or
+their folder), `$GPDF_DDJVU`, `ddjvu` on `PATH`, then `C:\Program Files (x86)\DjVuLibre`.
+On Windows, install it with `winget install DjVuLibre.DjView` (the official DjVuLibre +
+DjView installer from djvu.sourceforge.net; conda-forge has no Windows build). The
+selected pages are rendered at `--dpi` (`ddjvu -format=pnm -page=N -scale=DPI`, cached
+as PNG under `cache/<sha>/ddjvu-<dpi>/`) into a proxy PDF, `OUT/<stem>/source/<stem>.pdf`,
+with the DjVu's page count (the other pages blank); everything downstream reads the proxy,
+so `file=""` is the 1-based DjVu page index. `meta.json` keeps the DjVu as the source
+(path, SHA-256, page count) and adds `render_pdf` and `djvu` (dpi, tools, version); the
+engine and Marker caches are keyed by the DjVu's SHA-256 and the render dpi. A DjVu's own
+hidden text layer is never read, and `--ocr-mode txt` is refused for it.
+
 On Windows, math-export keeps the PC from sleeping while it runs
 (`SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)`; the display may
 still turn off) and always clears the request when it ends, on errors too;

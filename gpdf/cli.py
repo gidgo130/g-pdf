@@ -308,7 +308,8 @@ def build_parser() -> argparse.ArgumentParser:
                                     "cached per page under OUTDIR/<stem>/cache, so a stopped "
                                     "run resumes. The identity checks need the mathcheck "
                                     "extra and are skipped without it.")
-    me.add_argument("input", metavar="BOOK", type=Path, help="the PDF")
+    me.add_argument("input", metavar="BOOK", type=Path,
+                    help="the PDF, or a DjVu (its pages rendered by DjVuLibre's ddjvu)")
     me.add_argument("--out", metavar="OUTDIR", type=Path, required=True,
                     help="folder for the output (created if missing)")
     me.add_argument("--pages", metavar="RANGE",
@@ -360,6 +361,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "PC awake while it runs; elsewhere it never interferes)")
     me.add_argument("--cache", metavar="DIR", type=Path,
                     help="engine output cache (default OUTDIR/<stem>/cache)")
+    me.add_argument("--ddjvu", metavar="PATH",
+                    help="DjVuLibre's ddjvu (or its folder, with djvused) for a DjVu BOOK "
+                         "(default: $GPDF_DDJVU, PATH, then the Windows install folder); "
+                         "pages render at --dpi")
     me.add_argument("--tesseract", metavar="PATH",
                     help="Tesseract for page numbers the engine and the PDF text lack "
                          "(default: $GPDF_TESSERACT, PATH, then the Windows install folder)")
@@ -861,7 +866,8 @@ def _math_export_main(args, parser) -> int:
                        llama_server=args.llama_server, marker_gguf=args.marker_gguf,
                        use_marker=args.use_marker, marker_rule=args.marker_rule,
                        inline_with=args.inline_with, style_page=args.style_page_consistency,
-                       keep_awake=not args.allow_sleep, ocr_mode=args.ocr_mode)
+                       keep_awake=not args.allow_sleep, ocr_mode=args.ocr_mode,
+                       ddjvu=args.ddjvu)
     try:
         summary = run.run(opts, progress=print)
     except (run.MathExportError, engine.EngineError, OSError) as e:
