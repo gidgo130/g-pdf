@@ -405,6 +405,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="N random flagged inline spans per chapter, each its own item (default "
                          "40, all when a chapter has fewer; 0: none)")
     mr.add_argument("--seed", type=int, default=0, help="the inline sample's seed (default 0)")
+    mr.add_argument("--inline-pool", action="store_true",
+                    help="draw the N spans from all the packed pages as one pool, not per chapter "
+                         "(chapters of a few pages each); the follow-up then judges the pool")
     mf = sub.add_parser("math-review-followup",
                         help="which chapters' inline items need a full review",
                         description="From a packed review with an inline sample and its "
@@ -928,7 +931,8 @@ def _math_review_pack_main(args) -> int:
     try:
         summary = pack.pack(args.export, args.out, tuple(k.strip() for k in args.kinds.split(",")
                                                          if k.strip()),
-                            args.batch_size, args.pages, args.inline_sample, args.seed)
+                            args.batch_size, args.pages, args.inline_sample, args.seed,
+                            inline_pool=args.inline_pool)
     except (pack.PackError, OSError) as e:
         print(f"gpdf-cli: error: {e}", file=sys.stderr)
         return EXIT_ERROR

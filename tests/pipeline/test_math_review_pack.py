@@ -230,3 +230,19 @@ def test_followup_counts_value_errors_per_chapter_from_the_decisions(export, tmp
     out = capsys.readouterr().out
     assert "chapter 1: 4 sampled, 1 value error(s): review all inline (--pages 1-2)" in out
     assert "x^" not in out and "a_2" not in out                         # numbers only
+
+
+def test_a_pooled_sample_draws_over_all_pages_and_the_follow_up_judges_the_pool(export, tmp_path):
+    # --inline-pool: one pool for the packed pages (a book whose chapters are a few pages each)
+    rev = tmp_path / "rev"
+    s = pack.pack(export, rev, inline_sample=3, seed=2, inline_pool=True)
+    assert s["inline_pool"] is True and list(s["chapters"].values()) == [{"spans": 6, "picked": 3}]
+    (rev / "decisions" / "batch01.jsonl").write_text(json.dumps(
+        {"id": "p001-inline", "action": "replace",
+         "spans": [{"latex_primary": "a_1", "latex": "a_2", "occurrence": 1}]}) + "\n", "utf-8")
+    ch = list(pack.followup(rev)["chapters"].values())
+    assert [(c["sampled"], c["value_errors"], c["review_all"], c["pages"]) for c in ch] == [
+        (3, 1, True, "1-3")]
+    assert cli.main(["math-review-pack", "--export", str(export), "--out", str(tmp_path / "c"),
+                     "--inline-sample", "4", "--inline-pool"]) == 0
+    assert json.loads((tmp_path / "c" / "pack.json").read_text("utf-8"))["by_kind"]["inline_span"] == 4

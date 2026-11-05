@@ -21,7 +21,10 @@ of 50, and a brief of about a page.
   at the measured ~1 % inline value-error rate, one error in 40 spans is expected and
   says nothing about the chapter. `gpdf-cli math-review-followup REVIEW_DIR [--out
   FILE]` applies the rule from the decisions and prints, per chapter, the spans sampled,
-  the value errors and the `--pages` to pack again with `--kinds inline`.
+  the value errors and the `--pages` to pack again with `--kinds inline`. For a book
+  whose chapters are a few pages each, `--inline-pool` draws the sample from all the
+  packed pages as one pool (e.g. 40 per packed group of chapters), and the follow-up
+  judges that pool as one unit.
 - **No prose review.** The engine's prose error rate is already under the target.
 
 ## How

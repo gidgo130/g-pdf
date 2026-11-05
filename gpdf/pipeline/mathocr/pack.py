@@ -197,7 +197,7 @@ def _template(item: dict) -> dict:
 
 def pack(export, out, kinds=DISPLAY_KINDS, batch_size: int = BATCH_SIZE,
          pages: str | None = None, inline_sample: int = 0, seed: int = 0,
-         doc: Path = DOC) -> dict:
+         doc: Path = DOC, inline_pool: bool = False) -> dict:
     root, out = Path(export), Path(out)
     review = root / "review.jsonl"
     if not review.is_file():
@@ -233,7 +233,7 @@ def pack(export, out, kinds=DISPLAY_KINDS, batch_size: int = BATCH_SIZE,
             packed.append(_missing_inline_item(it, root, md_of(it["file"])))
     sample = {}
     if inline_sample:
-        chap = chapters(root / "pages")
+        chap = _sample_units(root / "pages", inline_pool)
         pools: dict[str, list] = {}
         for it in items:
             if it["kind"] == "inline":
@@ -277,10 +277,17 @@ def pack(export, out, kinds=DISPLAY_KINDS, batch_size: int = BATCH_SIZE,
         by_kind[x["kind"]] = by_kind.get(x["kind"], 0) + 1
     summary = {"export": str(root.resolve()), "kinds": list(kinds), "pages": pages,
                "batch_size": batch_size, "inline_sample": inline_sample, "seed": seed,
-               "items": len(packed), "by_kind": by_kind, "chapters": sample,
+               "inline_pool": inline_pool, "items": len(packed), "by_kind": by_kind, "chapters": sample,
                "batches": batches}
     write_atomic(out / "pack.json", json.dumps(summary, ensure_ascii=False, indent=1) + "\n")
     return summary
+
+
+def _sample_units(pages_dir: Path, pool: bool) -> dict[int, str]:
+    """{file page: its sampling unit}: the chapter, or one pool for every page (--inline-pool,
+    for a book whose chapters are a few pages each)."""
+    chap = chapters(pages_dir)
+    return {f: "" for f in chap} if pool else chap
 
 
 SMALL_SAMPLE = 20
@@ -323,7 +330,7 @@ def followup(review_dir) -> dict:
     rdir = Path(review_dir)
     summary = json.loads((rdir / "pack.json").read_text("utf-8"))
     export = Path(summary["export"])
-    chap = chapters(export / "pages")
+    chap = _sample_units(export / "pages", bool(summary.get("inline_pool")))
     sampled: dict[str, int] = {}
     for b in summary["batches"]:
         for s in (rdir / b["batch"] / "items.jsonl").read_text("utf-8").splitlines():
