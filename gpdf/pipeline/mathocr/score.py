@@ -33,6 +33,8 @@ KIND_OF_REASON = [("tiers disagree", "disagree"), ("no second reading", "disagre
                   ("index variables", "stack"), ("relation in the limits", "stack"),
                   ("sum of indices", "stack"), ("unbalanced", "syntax"), ("without", "syntax"),
                   ("unknown command", "syntax"), ("tag ", "tag"), ("inline", "inline"),
+                  ("marker disagrees", "marker"), ("standard tier lacks", "missing_display"),
+                  ("gave no display", "missing_display"), ("prose", "prose"),
                   ("identity failed", "identity")]
 
 
@@ -138,7 +140,7 @@ def header_leak(cand_md: str, printed: str | None, ref_md: str = "") -> list[str
 # ---------------------------------------------------------------- scoring
 
 def score(ref_units: dict, cand_units: dict) -> tuple[dict, dict]:
-    res = {"pages": {}, "pairs": [], "missed": [], "extra": []}
+    res = {"pages": {}, "pairs": [], "missed": [], "extra": [], "inline_errors": []}
     tot = dict(n_ref=0, n_cand=0, matched=0, exact=0, ned_sum=0.0, tagged=0, tag_ok=0,
                inl_ref=0, inl_hit=0, cer_ed=0, cer_len=0)
     empty = {"items": [], "inline": [], "prose": "", "md": "", "printed": None, "flags": []}
@@ -191,6 +193,7 @@ def score(ref_units: dict, cand_units: dict) -> tuple[dict, dict]:
             if s in pool:
                 pool.remove(s)
                 hit += 1
+        res["inline_errors"] += [{"page": p, "cand": s} for s in pool]   # spans with no match
         tot["inl_ref"] += len(ru["inline"])
         tot["inl_hit"] += hit
         ed = L.distance(ru["prose"], cu["prose"])
@@ -277,6 +280,44 @@ def flag_recall(res: dict, items: list[dict]) -> dict:
                                  "recall": round(n_cov / len(pairs), 3) if pairs else None,
                                  "by_kind": {k: covered.get(k, 0) for k in kinds_all}}
     out["unflagged_value_changing_count"] = len(out["unflagged_value_changing"])
+    # inline: the candidate's spans without a match in the reference (per page, as a bag)
+    # against the spans the inline items list
+    flagged: dict[str, list] = {}
+    for it in items:
+        for sp in it.get("spans") or ([{"latex_primary": it["latex_primary"]}]
+                                      if it.get("kind") == "inline" else []):
+            if sp.get("latex_primary") is not None:
+                flagged.setdefault(f"p{int(it['file']):03d}", []).append(
+                    L.norm_str(L.tokens(sp["latex_primary"])))
+    n_flagged = sum(len(v) for v in flagged.values())
+    pools = {k: list(v) for k, v in flagged.items()}
+    hit = 0
+    for e in res.get("inline_errors", []):
+        pool = pools.get(e["page"], [])
+        if e["cand"] in pool:
+            pool.remove(e["cand"])
+            hit += 1
+    n_err = len(res.get("inline_errors", []))
+    out["inline"] = {"errors": n_err, "covered": hit,
+                     "recall": round(hit / n_err, 3) if n_err else None,
+                     "flagged_spans": n_flagged, "flagged_correct": n_flagged - hit}
+    # missed displays: a missing_display item on the page whose reading is close, or that
+    # has none (an equation block of the layout that gave no display)
+    miss_items: dict[str, list] = {}
+    for it in items:
+        if it.get("kind") == "missing_display" or any(
+                k == "missing_display" for k in _kinds(it)):
+            miss_items.setdefault(f"p{int(it['file']):03d}", []).append(it.get("latex_second"))
+    covered = 0
+    for x in res.get("missed", []):
+        rt = L.tokens(L.split_tag(x["ref_raw"])[0])
+        if any(sec is None or L.ned(L.tokens(L.split_tag(sec)[0]), rt) < 0.6
+               for stem in x["page"].split("+") for sec in miss_items.get(stem, [])):
+            covered += 1
+    n_miss = len(res.get("missed", []))
+    out["missing"] = {"missed": n_miss, "covered": covered,
+                      "recall": round(covered / n_miss, 3) if n_miss else None,
+                      "items": sum(len(v) for v in miss_items.values())}
     return out
 
 
@@ -296,6 +337,12 @@ def write_report(path: Path, summary: dict, res: dict, recall: dict | None) -> N
             L_.append(f"- {name}: {c['covered']} of {c['wrong']} wrong formulas covered "
                       f"(recall {c['recall']}); by kind: "
                       + (", ".join(f"{k} {n}" for k, n in c["by_kind"].items()) or "none"))
+        i, m = recall["inline"], recall["missing"]
+        L_.append(f"- inline: {i['covered']} of {i['errors']} wrong spans flagged (recall "
+                  f"{i['recall']}); {i['flagged_spans']} spans flagged, {i['flagged_correct']} "
+                  f"of them right")
+        L_.append(f"- missed displays: {m['covered']} of {m['missed']} covered by a "
+                  f"missing_display item (recall {m['recall']}); {m['items']} such items")
         L_ += ["", f"## Unflagged value-changing errors: {recall['unflagged_value_changing_count']}", ""]
         for x in recall["unflagged_value_changing"]:
             L_ += [f"- **{x['page']}** tag {x['ref_tag'] or '—'} ed={x['ed']} · edits: "
@@ -366,6 +413,8 @@ def run(ref, cand, out, pages: str | None = None) -> tuple[dict, dict | None]:
         recall = flag_recall(res, items)
         summary["flag_recall"] = {name: c["recall"] for name, c in recall["by_class"].items()}
         summary["unflagged_value_changing"] = recall["unflagged_value_changing_count"]
+        summary["inline_flag_recall"] = recall["inline"]["recall"]
+        summary["missing_display_recall"] = recall["missing"]["recall"]
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     write_atomic(out / "score.json", json.dumps({"summary": summary, "flag_recall": recall, **res},
@@ -381,4 +430,9 @@ def terminal(summary: dict, recall: dict | None) -> str:
         for name, c in recall["by_class"].items():
             lines.append(f"flag recall {name}: {c['covered']}/{c['wrong']} = {c['recall']}; "
                          + ", ".join(f"{k} {n}" for k, n in c["by_kind"].items()))
+        i, m = recall["inline"], recall["missing"]
+        lines.append(f"inline flag recall: {i['covered']}/{i['errors']} = {i['recall']}; "
+                     f"{i['flagged_spans']} spans flagged")
+        lines.append(f"missing-display recall: {m['covered']}/{m['missed']} = {m['recall']}; "
+                     f"{m['items']} items")
     return "\n".join(lines)

@@ -145,3 +145,27 @@ def test_cli_prints_numbers_only(tmp_path, capsys):
     assert cli.main(["math-score", "--ref", str(tmp_path / "none"), "--cand", str(cand),
                      "--out", str(tmp_path / "out")]) == 1
     assert "not found" in capsys.readouterr().err
+
+
+def test_inline_and_missing_display_recall(tmp_path):
+    ref_pages = dict(REF)
+    ref_pages["p012"] = REF["p012"] + "\n$$\nG(z) = e^{z - 1}\n\tag{1.4}\n$$\n"
+    items = ITEMS + [
+        {"id": "p010-inline", "file": 10, "kind": "inline", "reasons": ["1 inline spans differ"],
+         "latex_primary": None, "latex_second": None,
+         "spans": [{"paragraph": 1, "latex_primary": "\sigma^3", "latex_second": "\sigma^2"},
+                   {"paragraph": 1, "latex_primary": "y", "latex_second": "z"}]},
+        {"id": "p012-m01", "file": 12, "kind": "missing_display",
+         "reasons": ["Marker has a display the standard tier lacks"], "tag": "1.4",
+         "latex_primary": None, "latex_second": "G(z) = e^{z-1}"}]
+    ref = write(tmp_path / "ref", ref_pages, REF_FLAGS)
+    cand = write(tmp_path / "cand", CAND, CAND_FLAGS, items)
+    s, recall = score.run(ref, cand, tmp_path / "out")
+    assert recall["inline"] == {"errors": 1, "covered": 1, "recall": 1.0, "flagged_spans": 2,
+                                "flagged_correct": 1}
+    assert recall["missing"] == {"missed": 1, "covered": 1, "recall": 1.0, "items": 1}
+    assert s["inline_flag_recall"] == 1.0 and s["missing_display_recall"] == 1.0
+    cand2 = write(tmp_path / "cand2", CAND, CAND_FLAGS, ITEMS)
+    s, recall = score.run(ref, cand2, tmp_path / "out2")
+    assert recall["inline"]["recall"] == 0.0 and recall["missing"]["recall"] == 0.0
+    assert "missed displays: 0 of 1 covered" in (tmp_path / "out2" / "REPORT.md").read_text("utf-8")
