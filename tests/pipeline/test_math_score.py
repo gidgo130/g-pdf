@@ -93,6 +93,36 @@ def test_flag_recall_by_kind_and_the_unflagged_list(tmp_path):
     assert "Unflagged value-changing errors: 1" in (tmp_path / "out2" / "REPORT.md").read_text("utf-8")
 
 
+def test_lost_bold_with_its_braces_and_blackboard_bold_are_style_not_value(tmp_path):
+    head = '<!-- page printed="9" file="30" -->\n\n'
+    ref = write(tmp_path / "ref", {"p030": head + "$$\n\\rho = \\mathbf{V}_{\\mathbf{X}} "
+                                   "\\mathbf{V}_{\\mathbf{Y}}\n$$\n\n$$\n\\int_{\\mathbb{R}^2} f\n"
+                                   "$$\n\n$$\nx + y\n$$\n"}, {})
+    cand = write(tmp_path / "cand", {"p030": head + "$$\n\\rho = V_{X} V_{Y}\n$$\n\n"
+                                     "$$\n\\int_{\\mathbf{R}^2} f\n$$\n\n$$\nx - y\n$$\n"}, {})
+    s, _ = score.run(ref, cand, tmp_path / "out")
+    assert s["errors"] == 3 and s["value_changing_errors"] == 1
+    pairs = json.loads((tmp_path / "out" / "score.json").read_text("utf-8"))["pairs"]
+    assert [p["cosmetic"] for p in pairs] == [True, True, False]
+    assert [score._is_style(p) for p in pairs] == [True, True, False]
+
+
+def test_a_display_split_over_a_page_break_is_joined_on_both_sides(tmp_path):
+    ref_pages = {"p040": '<!-- page printed="1" file="40" -->\n\nText\n\n$$\na = b + c\n$$\n',
+                 "p041": '<!-- page printed="2" file="41" -->\n$$\n+ d\n\\tag{2.1}\n$$\n\nMore.\n',
+                 "p042": '<!-- page printed="3" file="42" -->\n\nText\n\n$$\nu = v\n$$\n',
+                 "p043": '<!-- page printed="4" file="43" -->\n$$\nw = z\n\\tag{2.2}\n$$\n'}
+    ref_flags = {"p041": [{"type": "page_anomaly", "note": "display continues; $$ reopened"}]}
+    cand_flags = {"p041": [{"type": "page_anomaly", "what": "split_display", "note": "x"}],
+                  "p043": [{"type": "page_anomaly", "what": "split_display", "note": "x"}]}
+    ref = write(tmp_path / "ref", ref_pages, ref_flags)
+    cand = write(tmp_path / "cand", dict(ref_pages), cand_flags)
+    s, _ = score.run(ref, cand, tmp_path / "out")
+    # p042/p043: only the candidate links the two displays; joined on both sides they match
+    assert s["exact_pct"] == 100.0 and s["missed"] == 0 and s["extra"] == 0
+    assert s["split_joins"] == {"both": 1, "ref_only": 0, "cand_only": 1}
+
+
 def test_text_md_input_and_pages_restriction(tmp_path):
     ref = write(tmp_path / "ref", REF, REF_FLAGS)
     cand = write(tmp_path / "cand", CAND, CAND_FLAGS)

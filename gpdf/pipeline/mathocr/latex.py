@@ -68,7 +68,8 @@ SYN = {r"\leq": r"\le", r"\geq": r"\ge", r"\neq": r"\ne", r"\rightarrow": r"\to"
        r"\text": r"\mathrm", r"\textrm": r"\mathrm", r"\mbox": r"\mathrm",
        r"\operatorname": r"\mathrm", r"\textnormal": r"\mathrm", r"\hbox": r"\mathrm",
        r"\lVert": r"\|", r"\rVert": r"\|", r"\Vert": r"\|", r"\gets": r"\leftarrow",
-       r"\land": r"\wedge", r"\lor": r"\vee", r"\operatorname*": r"\mathrm", r"\mid": "|"}
+       r"\land": r"\wedge", r"\lor": r"\vee", r"\operatorname*": r"\mathrm", r"\mid": "|",
+       r"\overset": r"\stackrel"}
 OPNAMES = {"exp", "log", "ln", "max", "min", "lim", "sup", "inf", "det", "Pr", "sin", "cos",
            "tan", "arg", "deg", "dim", "ker", "sinh", "cosh", "tanh", "liminf", "limsup", "gcd",
            "mod"}
@@ -162,6 +163,80 @@ def order_scripts(toks: list[str]) -> list[str]:
     return out
 
 
+def _content(atom: list[str]) -> list[str]:
+    return atom[1:-1] if atom[:1] == ["{"] and atom[-1:] == ["}"] else atom
+
+
+def merge_primes(toks: list[str]) -> list[str]:
+    r"""Notation-only prime forms made equal: x'^2 (two superscripts, the first a prime)
+    -> x^{\prime 2}, x'' -> x^{\prime \prime}, and inside a superscript a prime raised
+    once more (a^{*^{\prime}}) -> a^{* \prime}."""
+    out, i = [], 0
+    while i < len(toks):
+        if toks[i] == "^":
+            sups = []
+            while i < len(toks) and toks[i] == "^":
+                e = atom_end(toks, i + 1)
+                sups.append(_content(toks[i + 1:e]))
+                i = e
+            if len(sups) > 1 and sups[0][:1] == [r"\prime"]:
+                sups = [[t for s in sups for t in s]]
+            for s in sups:
+                inner = merge_primes(s)
+                inner = [t for k, t in enumerate(inner)
+                         if not (t == "^" and inner[k + 1:k + 2] == [r"\prime"])]
+                out += ["^", inner[0]] if len(inner) == 1 else ["^", "{", *inner, "}"]
+            continue
+        if toks[i] == "{":
+            e = atom_end(toks, i)
+            out += ["{", *merge_primes(toks[i + 1:e - 1]), "}"]
+            i = e
+            continue
+        out.append(toks[i])
+        i += 1
+    return out
+
+
+def _stacked_limits(toks: list[str]) -> list[str]:
+    r"""_{\stackrel{a}{b}} (two stacked lines of limits) -> _{a \\ b}, as \substack."""
+    out, i = [], 0
+    while i < len(toks):
+        if toks[i] == "_" and i + 1 < len(toks):
+            e = atom_end(toks, i + 1)
+            c = _content(toks[i + 1:e])
+            if c[:1] == [r"\stackrel"]:
+                a_end = atom_end(c, 1)
+                b_end = atom_end(c, a_end)
+                if b_end == len(c):
+                    out += ["_", "{", *_content(c[1:a_end]), r"\\", *_content(c[a_end:b_end]), "}"]
+                    i = e
+                    continue
+        out.append(toks[i])
+        i += 1
+    return out
+
+
+def _text_punct_out(toks: list[str]) -> list[str]:
+    r"""\mathrm{otherwise,} -> \mathrm{otherwise} , (punctuation inside or after text)."""
+    out, i = [], 0
+    while i < len(toks):
+        if toks[i] == r"\mathrm" and toks[i + 1:i + 2] == ["{"]:
+            e = atom_end(toks, i + 1)
+            inner = toks[i + 2:e - 1]
+            tail = []
+            while inner and inner[-1] in (",", ".", ";"):
+                tail.insert(0, inner.pop())
+            out += [r"\mathrm", "{", *inner, "}", *tail] if inner else [*tail]
+            i = e
+            continue
+        out.append(toks[i])
+        i += 1
+    return out
+
+
+BRACED = r"\{((?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*)\}"
+
+
 def tokens(latex: str) -> list[str]:
     """The normalized token list of a formula (its tag already split off)."""
     s = latex
@@ -169,6 +244,8 @@ def tokens(latex: str) -> list[str]:
     s = re.sub(r"\\operatorname\s*\*", r"\\operatorname", s)
     s = re.sub(r"\\underset\s*\{((?:[^{}]|\{[^{}]*\})*)\}\s*\{((?:[^{}]|\{[^{}]*\})*)\}",
                r"{\2}_{\1}", s)
+    s = re.sub(r"\\[hv]?phantom\s*" + BRACED, " ", s)
+    s = re.sub(r"\\[dt]?binom\s*" + BRACED + r"\s*" + BRACED, r" ( \1 \\\\ \2 ) ", s)
     s = re.sub(r"\{\s*\\bf\s+([^{}]*)\}", r"\\mathbf{\1}", s)
     s = re.sub(r"\{\s*\\rm\s+([^{}]*)\}", r"\\mathrm{\1}", s)
     s = re.sub(r"\\bf\b", r"\\mathbf", s)
@@ -199,7 +276,8 @@ def tokens(latex: str) -> list[str]:
         if t == r"\substack":
             continue
         toks.append(t)
-    toks = order_scripts(strip_groups(toks))
+    toks = order_scripts(merge_primes(strip_groups(toks)))
+    toks = _text_punct_out(_stacked_limits(toks))
     changed = True
     while changed:                      # braces around nothing or one token, repeatedly
         changed, out, i = False, [], 0
@@ -255,6 +333,16 @@ def value_only(s: str) -> str:
     while out and out[-1] in (",", ".", ";"):
         out.pop()
     return " ".join(out)
+
+
+STYLE_CMDS = {r"\mathbf", r"\mathrm", r"\mathit", r"\mathcal", r"\mathbb", r"\mathsf",
+              r"\mathfrak", r"\mathscr"}
+
+
+def style_free(norm: str) -> str:
+    """value_only, with every style command (not just \\mathbf / \\mathrm) taken out and
+    the braces it leaves behind normalized again (\\mathbf{X} in a subscript -> X)."""
+    return value_only(norm_str(tokens(" ".join(t for t in norm.split() if t not in STYLE_CMDS))))
 
 
 # ---------------------------------------------------------------- edit distance

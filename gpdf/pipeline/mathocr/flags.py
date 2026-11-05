@@ -28,8 +28,7 @@ from gpdf.pipeline.mathocr import latex as L
 from gpdf.pipeline.mathocr.assemble import Page, Paragraph, _paragraph
 
 KINDS = ("disagree", "style", "stack", "syntax", "tag", "inline", "identity")
-STYLE_CMDS = {r"\mathbf", r"\mathrm", r"\mathit", r"\mathcal", r"\mathbb", r"\mathsf",
-              r"\mathfrak", r"\mathscr"}
+STYLE_CMDS = L.STYLE_CMDS
 OPERATORS = {r"\sum", r"\prod", r"\int", r"\iint", r"\iiint", r"\oint", r"\bigcup", r"\bigcap",
              r"\bigvee", r"\bigwedge", r"\coprod", r"\bigoplus", r"\bigotimes"}
 RELATIONS = {"<", ">", r"\le", r"\ge", r"\ne", r"\neq", r"\leq", r"\geq"}
@@ -145,10 +144,7 @@ def disagree(primary: str, other: str | None) -> bool:
     return other is None or L.value_only(_norm(primary)) != L.value_only(_norm(other))
 
 
-def _style_free(norm: str) -> str:
-    """value_only, with every style command (not just \\mathbf / \\mathrm) taken out."""
-    toks = [r"\mathrm" if t in STYLE_CMDS else t for t in norm.split()]
-    return L.value_only(" ".join(toks))
+_style_free = L.style_free
 
 
 def style_only(primary: str, other: str | None) -> bool:

@@ -88,7 +88,17 @@ def _continues(flags: list) -> bool:
         for f in flags)
 
 
-def load_units(mds: dict[str, str], flags: dict[str, list]) -> dict[str, dict]:
+def link_points(mds: dict[str, str], flags: dict[str, list]) -> set[str]:
+    """Pages (stems) whose first display continues the previous page's last one, by their
+    page_anomaly flags."""
+    return {s for s in mds if _continues(flags.get(s, []))}
+
+
+def load_units(mds: dict[str, str], flags: dict[str, list],
+               links: set[str] | None = None) -> dict[str, dict]:
+    """Per-page units. A display split over a page break is joined where ``links`` (default:
+    this side's own flags) says the page continues the previous one."""
+    links = link_points(mds, flags) if links is None else links
     units = {}
     for stem in sorted(mds):
         md = mds[stem]
@@ -100,7 +110,7 @@ def load_units(mds: dict[str, str], flags: dict[str, list]) -> dict[str, dict]:
                        "printed": m.group(1) if m else None, "flags": flags.get(stem, [])}
     stems = sorted(units)
     for a, b in zip(stems, stems[1:]):
-        if int(b[1:]) == int(a[1:]) + 1 and _continues(units[b]["flags"]):
+        if int(b[1:]) == int(a[1:]) + 1 and b in links:
             ia, ib = units[a]["items"], units[b]["items"]
             if ia and ib and ia[-1]["tag"] is None and units[b]["md"].split("\n", 1)[1:] \
                     and units[b]["md"].split("\n", 1)[1].lstrip("\n").startswith("$$"):
@@ -145,11 +155,17 @@ def score(ref_units: dict, cand_units: dict) -> tuple[dict, dict]:
             rtag = next((R[i]["tag"] for i in ri if R[i]["tag"]), None)
             ctag = next((C[i]["tag"] for i in ci if C[i]["tag"]), None)
             diffs = L.editops(a, b) if d else []
-            cosmetic = L.is_cosmetic(diffs)
+            # cosmetic: only markup, dots, punctuation or breaks differ (also when the lost
+            # markup takes its braces with it, as \mathbf{V}_{\mathbf{X}} against V_X)
+            cosmetic = bool(d) and (L.is_cosmetic(diffs) or L.style_free(L.norm_str(a))
+                                    == L.style_free(L.norm_str(b)))
+            style = cosmetic and any(x in L.STYLE_CMDS or y in L.STYLE_CMDS
+                                     for _, x, y in diffs)
             res["pairs"].append({"page": R[ri[0]]["page"], "ref_tag": rtag, "cand_tag": ctag,
                                  "n_ref": len(ri), "n_cand": len(ci), "ed": d,
                                  "ned": round(L.ned(a, b), 4), "ref_len": len(a),
-                                 "cosmetic": cosmetic and d > 0, "diffs": diffs[:12],
+                                 "cosmetic": cosmetic, "style": style,
+                                 "diffs": diffs[:12],
                                  "ref_raw": "\n".join(R[i]["raw"] for i in ri),
                                  "cand_raw": "\n".join(C[i]["raw"] for i in ci),
                                  "ref_norm": L.norm_str(a), "cand_norm": L.norm_str(b),
@@ -221,7 +237,9 @@ def _kinds(item: dict) -> set[str]:
 
 
 def _is_style(pair: dict) -> bool:
-    return pair["cosmetic"] and any(x in (r"\mathbf", r"\mathrm") or y in (r"\mathbf", r"\mathrm")
+    if "style" in pair:
+        return pair["style"]
+    return pair["cosmetic"] and any(x in L.STYLE_CMDS or y in L.STYLE_CMDS
                                     for _, x, y in pair["diffs"])
 
 
@@ -328,9 +346,17 @@ def run(ref, cand, out, pages: str | None = None) -> tuple[dict, dict | None]:
         cand_mds = {k: v for k, v in cand_mds.items() if k in keep}
         if not ref_mds:
             raise ScoreError(f"--pages {pages!r} selects none of the reference pages")
-    ref_units = load_units(ref_mds, ref_flags)
-    cand_units = load_units(cand_mds, cand_flags)
+    # a display split over a page break is joined on both sides where either side links
+    # the pages, so a link only one side makes does not turn two right formulas into
+    # a missed one and a wrong one; how often the sides differ is counted on its own
+    ref_links, cand_links = link_points(ref_mds, ref_flags), link_points(cand_mds, cand_flags)
+    links = ref_links | cand_links
+    ref_units = load_units(ref_mds, ref_flags, links)
+    cand_units = load_units(cand_mds, cand_flags, links)
     summary, res = score(ref_units, cand_units)
+    summary["split_joins"] = {"both": len(ref_links & cand_links & set(ref_mds)),
+                              "ref_only": len((ref_links - cand_links) & set(ref_mds)),
+                              "cand_only": len((cand_links - ref_links) & set(ref_mds))}
     recall = None
     review = cand_folder / "review.jsonl"
     if review.is_file():

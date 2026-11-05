@@ -41,6 +41,17 @@ def norm(s):
     (r"x \mid y \vert z", "x | y | z"),
     (r"\lbrace x \rbrace", r"\{ x \}"),
     (r"\textstyle a \nonumber", "a"),
+    # notation only (MATH_3): prime and script order, double primes, a prime on a star
+    (r"\hat{\mu}'_{20}", r"\hat{\mu}_{20}^{\prime}"),
+    (r"\mu'^{2}_{10}", r"\mu_{10}^{\prime 2}"),
+    (r"q''(v)", r"q^{\prime\prime}(v)"),
+    (r"\alpha_i'^2", r"\alpha_{i}^{\prime 2}"),
+    (r"a^{*\prime}", r"a^{*^{\prime}}"),
+    (r"X \overset{d}{=} Y", r"X \stackrel{{d}}{{=}} Y"),
+    (r"s = \phantom{-}1", "s = 1"),
+    (r"\binom{m_1}{m_2}", r"\begin{pmatrix} m_1 \\ m_2 \end{pmatrix}"),
+    (r"0, \text{otherwise,}", r"0, \text{otherwise},"),
+    (r"\prod_{\substack{i \\ J_i=1}} h", r"\prod_{\stackrel{i}{J_i=1}} h"),
 ])
 def test_normalization_makes_these_equal(a, b):
     assert norm(a) == norm(b)
@@ -53,6 +64,12 @@ def test_normalization_makes_these_equal(a, b):
     (r"\mathbf{x}", "x"),
     (r"2^{-(1/2)\sum_j v_j}", r"2^{-(1/2)} \sum_j v_j"),
     (r"\sum\sum_{i<j}", r"\sum_{i<j}"),
+    (r"x'", "x"),
+    (r"x''", "x'"),
+    (r"x'^2", "x'_2"),
+    (r"a^{*\prime}", r"a^{*}"),
+    (r"\binom{n}{k}", r"(n k)"),
+    (r"\overset{d}{=}", r"\overset{=}{d}"),
 ])
 def test_normalization_keeps_these_apart(a, b):
     assert norm(a) != norm(b)
