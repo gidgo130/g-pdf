@@ -395,3 +395,19 @@ def test_no_pair_check_across_parametrizations():
     check(r"\Pr[X = x] = \frac{e^{-\theta}\theta^{x}}{x!}", ctx=ctx)
     r = check(r"\frac{p_{x+1}}{p_x} = \frac{\lambda}{x + 1}", ctx=ctx)
     assert not r.checks
+
+
+def test_jkk_hypergeometric_chapter_false_alarms_are_gone():
+    # a hypergeometric pmf in a, b (counts): integer draws, so binomials are non-negative
+    r = check(r"\Pr [ X = x ] = \binom{a}{x} \binom{b}{n - x} / \binom{a + b}{n}")
+    assert (r.kind, r.status) == ("pmf", "passed")
+    # a Gauss hypergeometric function {}_2F_1[...] or a derivative is not evaluated
+    assert check(r"G (z) = K _ {2} F _ {1} [ - n, - a; b - n + 1; z ]").status == "skipped"
+    assert check(r"G(z) = \frac{\partial^{n}}{\partial y^{n}} (1 + y z)^{a}").status == "skipped"
+    # a left-hand side whose argument is not a variable is not classified
+    assert I.classify(r"G (e ^ {t})")[0] is None
+    assert I.classify(r"G (1 + t)")[0] is None
+    assert I.classify(r"G _ {\beta b} (k | m, \ell + m, n)")[0] is None
+    # a pmf in x whose right side has no x (another index) is not checked
+    r = check(r"\Pr [ X = x ] = \binom {2 N - r} {N - r} 2 ^ {r - 2 n}")
+    assert r.status == "skipped"

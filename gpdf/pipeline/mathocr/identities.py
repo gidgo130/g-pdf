@@ -81,7 +81,8 @@ T_VAR = re.compile(r"(?<![A-Za-z\\])t(?:_\{?(\d+)\}?)?")
 RELATION = re.compile(r"<|>|\\le\b|\\ge\b|\\leq\b|\\geq\b|\\ne\b|\\neq\b|\\in\b")
 NOT_IDENTITY = re.compile(r"\\(doteq|approx|propto|equiv|sim|cong)\b")
 UNSUPPORTED_ENV = re.compile(r"\\begin\{(cases|[pbvB]?matrix|smallmatrix)\}")
-UNSUPPORTED = re.compile(r"\\text\b|\\mathrm\{(?!e\}|d\})"
+UNSUPPORTED = re.compile(r"\\text\b|\\mathrm\{(?!e\}|d\})|\\partial\b"
+                         r"|_\s*\{?\s*\d\s*\}?\s*F\s*_\s*\{?\s*\d"        # {}_2F_1[...]
                          r"|\\(int|iint|iiint|oint|sum|prod|dots|cdots|ldots)(?![A-Za-z])")
 VECTOR = re.compile(r"boldsymbol|mathbf|pmb|^bm|dots")
 # words between the equations of a row ("and", "for", "if") separate them like \quad
@@ -92,7 +93,8 @@ CHOOSE = re.compile(r"\{\s*([^{}]*?)\s*\\choose\s*([^{}]*?)\s*\}")
 DISCRETE = ("pmf", "pmf_point", "recurrence", "pgf")
 MOMENT_KINDS = ("mean", "variance")
 DEF_NAMES = {"q", "Q"} | {"c", "C", "K"}              # names a section may define: C = ...
-INT_PARAMS = {"n": [5, 6, 8, 10], "m": [5, 6, 8, 10], "M": [5, 6, 8, 10], "N": [12, 15, 18, 21]}
+INT_PARAMS = {"n": [5, 6, 8, 10], "m": [5, 6, 8, 10], "M": [5, 6, 8, 10], "N": [12, 15, 18, 21],
+              "a": [7, 9, 12, 15], "b": [7, 9, 12, 15]}     # hypergeometric counts (b >= n)
 PROB_PARAMS = {"p", "theta", "pi", "omega", "q"}
 PROB_LO, PROB_HI = 0.1, 0.9
 REC_POINTS = [1, 2, 3]
@@ -344,6 +346,8 @@ def classify(lhs: str, before: str = "") -> tuple[str | None, list[str], str]:
     sub = _canon(m.group("sub") or m.group("sub1") or "")
     args = m.group("args").split(";")[0]              # p(x; \lambda): parameters after ";"
     variables = [_canon(a) for a in args.split(",") if a.strip()]
+    if any(not re.fullmatch(r"[A-Za-z]+(?:_[A-Za-z0-9]+)?", v) for v in variables):
+        return None, [], ""                          # G(e^t), G(1 + t), G(k | m, n)
     if any(VECTOR.search(v) for v in variables) or VECTOR.search(sub):
         return None, [], ""                          # p_X(x) with bold vectors, (t_1, ..., t_k)
     kind = KINDS.get(name)
@@ -445,10 +449,17 @@ def _lambdify(expr, variables: list[str]):
     return fn, [_canon(p.name) for p in params]
 
 
-def _to_sympy(rhs: str, variables: list[str], defs: dict | None = None):
-    """(fn(vars..., params...), params) or None when the expression will not parse."""
+def _to_sympy(rhs: str, variables: list[str], defs: dict | None = None,
+              need_variables: bool = False):
+    """(fn(vars..., params...), params) or None when the expression will not parse (or,
+    with need_variables, leaves a variable out: a pmf in x written in another index)."""
     expr = _parse(_clean(rhs), defs)
-    return None if expr is None else _lambdify(expr, variables)
+    if expr is None:
+        return None
+    if need_variables and any(v not in {_canon(s.name) for s in expr.free_symbols}
+                              for v in variables):
+        return None
+    return _lambdify(expr, variables)
 
 
 def _pmf_terms(s: str):
@@ -949,7 +960,7 @@ def _expression(lhs: str, rhs: str, before: str, ctx: Context):
     if len(terms_l) == 1 and sl.strip() == r"\Xi_{0}" and not terms_r:
         sym, var, shift, const = terms_l[0]
         if var is not None and shift == 0:                 # Pr[X = x] = ...
-            parsed = _to_sympy(rhs, [var], ctx.defs)
+            parsed = _to_sympy(rhs, [var], ctx.defs, need_variables=True)
             return "pmf", (_Expr("pmf", "", [var], parsed[0], parsed[1], lhs)
                            if parsed else None)
         if var is None:                                    # Pr[X = 0] = ...
