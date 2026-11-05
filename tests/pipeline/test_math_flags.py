@@ -237,3 +237,91 @@ def test_the_syntax_whitelist_covers_standard_math():
                if c not in flags.WHITELIST}
     assert missing == set()
     assert L.commands(r"\foo") - flags.WHITELIST == {"foo"}
+
+
+# ---------------------------------------------------------------- MATH_3: style opt-in
+
+def test_the_page_consistency_style_rule_is_opt_in():
+    # bold X for a vector and X_1 for its component is normal multivariate notation
+    pg = page([EQ(r"\mathbf{x}^T \mathbf{y} = 1", 0.2), EQ(r"f(x) = 2", 0.3)], file=5)
+    same = {"displays": [r"\mathbf{x}^T \mathbf{y} = 1", r"f(x) = 2"], "paragraphs": []}
+    assert flags.review_items(pg, same) == []
+    items = flags.review_items(pg, same, style_page=True)
+    assert [(it.id, it.kind) for it in items] == [("p005-d01", "style"), ("p005-d02", "style")]
+    # engine disagreement on style still flags without the opt-in
+    other = {"displays": [r"x^T y = 1", r"f(x) = 2"], "paragraphs": []}
+    assert [(it.id, it.kind) for it in flags.review_items(pg, other)] == [("p005-d01", "style")]
+
+
+# ---------------------------------------------------------------- MATH_3: Marker
+
+@pytest.mark.parametrize("a, b, any_, value, small", [
+    (r"\mathbf{x} + y", r"x + y", True, False, False),          # style only
+    (r"a + \cdots + b", r"a + \dots + b", True, False, False),  # dot style only
+    (r"x^2 + y", r"x^3 + y", True, True, True),                 # one token
+    (r"a + b + c + d", r"p - q \cdot r / s + t", True, True, False),   # many tokens
+    (r"x + y", r"x+y", False, False, False),
+    (r"x", None, False, False, False),                          # Marker has no reading
+])
+def test_marker_rule_variants(a, b, any_, value, small):
+    assert [flags.marker_disagrees(a, b, r) for r in flags.MARKER_RULES] == [any_, value, small]
+
+
+def test_marker_disagreement_makes_or_joins_an_item():
+    pg = page([EQ(r"e^{(1/2) t'Rt} \tag{2.1}", 0.3), EQ(r"x^2 = 1", 0.5), EQ(r"y = 2", 0.7)],
+              file=6)
+    basic = {"displays": [r"e^{(1/2) t'Rt} \tag{2.1}", r"x^3 = 1", r"y = 2"], "paragraphs": []}
+    marker = {"displays": [r"e^{(1/2)} t'Rt \tag{2.1}", r"x^4 = 1", r"y = 2"], "paragraphs": []}
+    stats = {}
+    items = flags.review_items(pg, basic, third=marker, stats=stats)
+    by_id = {it.id: it for it in items}
+    assert list(by_id) == ["p006-d01", "p006-d02"]
+    d1, d2 = by_id["p006-d01"], by_id["p006-d02"]
+    assert (d1.kind, d1.reasons) == ("marker", ["marker disagrees"])    # the tiers agree
+    assert d1.record()["latex_marker"] == r"e^{(1/2)} t'Rt"
+    assert (d2.kind, d2.reasons) == ("disagree", ["tiers disagree", "marker disagrees"])
+    assert stats == {"no_marker_reading": [], "inline_flagged": 0}
+    assert flags.review_items(pg, basic, third=marker, marker_rule="small")[0].id == "p006-d01"
+
+
+def test_missing_display_from_marker_the_basic_tier_and_the_layout():
+    blocks = [EQ(r"a = b \tag{4.1}", 0.2), EQ("", 0.4), EQ(r"c = d \tag{4.3}", 0.8)]
+    pg = page(blocks, file=8)
+    assert len(pg.displays) == 2                     # the empty block gave no display
+    marker = {"displays": [r"a = b \tag{4.1}", r"\int_0^1 f(x)\,dx = F(1) - F(0) \tag{4.2}",
+                           r"c = d \tag{4.3}"],
+              "boxes": [[0.2, 0.2, 0.8, 0.26], [0.2, 0.5, 0.8, 0.56], [0.2, 0.8, 0.8, 0.86]],
+              "paragraphs": []}
+    basic = {"displays": [r"a = b \tag{4.1}", r"\int_0^1 f(x) dx = F(1) - F(0)",
+                          r"c = d \tag{4.3}"], "paragraphs": []}
+    items = flags.review_items(pg, basic, third=marker, std_blocks=blocks)
+    miss = [it for it in items if it.kind == "missing_display"]
+    assert [(it.id, it.reasons[0]) for it in miss] == [
+        ("p008-m01", "Marker has a display the standard tier lacks"),
+        ("p008-m02", "equation block in the layout gave no display")]
+    assert miss[0].latex_primary is None and miss[0].tag == "4.2"
+    assert miss[0].latex_second.startswith(r"\int_0^1") and miss[0].bbox == [0.2, 0.5, 0.8, 0.56]
+    assert miss[1].bbox == [0.2, 0.4, 0.8, 0.46]
+    # without Marker the basic tier's extra display is the one reported
+    items = flags.review_items(pg, basic)
+    assert [(it.id, it.reasons[0]) for it in items if it.kind == "missing_display"] == [
+        ("p008-m01", "the basic tier has a display the standard tier lacks")]
+
+
+@pytest.mark.parametrize("mode, flagged", [
+    ("basic", ["x", "z"]), ("marker", ["y", "z"]), ("either", ["x", "y", "z"]), ("both", ["z"]),
+])
+def test_inline_flags_against_basic_marker_either_or_both(mode, flagged):
+    pg = page([P("a ", ("eq", "x"), " b ", ("eq", "y"), " c ", ("eq", "z"), y=0.2)], file=9)
+    basic = [P("a ", ("eq", "x'"), " b ", ("eq", "y"), " c ", ("eq", "z'"), y=0.2)]
+    marker = [P("a ", ("eq", "x"), " b ", ("eq", "y'"), " c ", ("eq", "z''"), y=0.2)]
+    spans = flags.inline_flagged(pg, basic, marker, mode)
+    assert [s["latex_primary"] for s in spans] == flagged
+    assert all(set(s) == {"paragraph", "latex_primary", "latex_second", "latex_marker"}
+               for s in spans)
+    # a page Marker did not read falls back to the basic tier
+    assert [s["latex_primary"] for s in flags.inline_flagged(pg, basic, None, mode)] == ["x", "z"]
+    items = flags.review_items(pg, {"displays": [], "paragraphs": basic},
+                               third={"displays": [], "paragraphs": marker}, group_inline=True,
+                               inline_with=mode)
+    assert items[0].reasons == [f"{len(flagged)} inline spans differ ({mode})"]

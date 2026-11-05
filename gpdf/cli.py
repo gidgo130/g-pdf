@@ -338,6 +338,17 @@ def build_parser() -> argparse.ArgumentParser:
                     help="skip the identity checks")
     me.add_argument("--inline", choices=("per-page", "per-span"), default="per-page",
                     help="inline-math flags as one item per page (default) or per span")
+    me.add_argument("--marker-rule", choices=("any", "value", "small"), default="value",
+                    help="when Marker's reading of a display flags it: any normalized "
+                         "difference, a value-changing one (default) or a value-changing one "
+                         "of 1-3 tokens")
+    me.add_argument("--inline-with", choices=("basic", "marker", "either", "both"),
+                    default="basic",
+                    help="inline spans are flagged when they differ from the basic tier "
+                         "(default), from Marker, from either, or from both")
+    me.add_argument("--style-page-consistency", action="store_true",
+                    help="also flag a symbol that is both bold and not on one page (off by "
+                         "default: bold X and X_1 is normal multivariate notation)")
     me.add_argument("--cache", metavar="DIR", type=Path,
                     help="engine output cache (default OUTDIR/<stem>/cache)")
     me.add_argument("--tesseract", metavar="PATH",
@@ -801,7 +812,8 @@ def _math_export_main(args, parser) -> int:
                        args.allow_unpinned, args.identities, args.tesseract, args.cache,
                        args.inline == "per-page", args.crop_dpi, marker=args.marker,
                        llama_server=args.llama_server, marker_gguf=args.marker_gguf,
-                       use_marker=args.use_marker)
+                       use_marker=args.use_marker, marker_rule=args.marker_rule,
+                       inline_with=args.inline_with, style_page=args.style_page_consistency)
     try:
         summary = run.run(opts, progress=print)
     except (run.MathExportError, engine.EngineError, OSError) as e:

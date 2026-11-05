@@ -55,6 +55,9 @@ class Options:
     llama_server: str | None = None
     marker_gguf: str | None = None
     use_marker: bool | None = None           # None: when --marker or $GPDF_MARKER is given
+    marker_rule: str = "value"               # flags.MARKER_RULES
+    inline_with: str = "basic"               # flags.INLINE_WITH
+    style_page: bool = False                 # the page-consistency style rule (opt-in)
 
 
 @dataclass
@@ -211,14 +214,16 @@ def run(opts: Options, progress=None) -> Summary:
             seq = [(f"p{pg.file:03d}", i, d.tag) for pg in assembled if a <= pg.file <= b
                    for i, d in enumerate(pg.displays)]
             runs_tags.update(flags.tag_problems(seq))
-        items_of = {}
+        items_of, page_stats = {}, {}
         for pg in assembled:
-            other = {"displays": [], "paragraphs": []}
-            if pg.file in basic:
-                other = {"displays": [str(b.get("content") or "") for b in basic[pg.file].blocks
-                                      if b.get("type") == "equation"],
-                         "paragraphs": [b for b in basic[pg.file].blocks if b.get("type") == "text"]}
-            items_of[pg.file] = flags.review_items(pg, other, runs_tags, opts.group_inline)
+            other = _engine_view(basic[pg.file].blocks) if pg.file in basic else None
+            mk_view = _engine_view(third[pg.file]) if pg.file in third else None
+            page_stats[pg.file] = {}
+            items_of[pg.file] = flags.review_items(
+                pg, other or {"displays": [], "paragraphs": []}, runs_tags, opts.group_inline,
+                mk_view, marker_rule=opts.marker_rule, inline_with=opts.inline_with,
+                style_page=opts.style_page, std_blocks=std[pg.file].blocks,
+                stats=page_stats[pg.file])
 
         # identities
         ident_counts = {}
@@ -256,6 +261,8 @@ def run(opts: Options, progress=None) -> Summary:
                           if any(it.kind == k for it in its)},
                 "dropped": sum(1 for f in pg.flags if f["type"] == "dropped"),
                 "identities": ident_counts.get(pg.file, {}),
+                "marker": pg.file in third,
+                **page_stats.get(pg.file, {}),
             })
         seconds = round(time.time() - t0, 1)
         cache_bytes = _dir_size(Path(opts.cache or root / "cache"))
@@ -270,6 +277,8 @@ def run(opts: Options, progress=None) -> Summary:
                 "dpi": opts.dpi, "crop_dpi": opts.crop_dpi,
                 "tiers": list(opts.tiers), "cache": str(cache.root),
                 "options": {"pages": opts.pages, "group_inline": opts.group_inline,
+                            "marker_rule": opts.marker_rule, "inline_with": opts.inline_with,
+                            "style_page": opts.style_page,
                             "check_identities": want_ident,
                             "tesseract": tess.version if tess else None},
                 "labels": {"runs": fit.runs, "steps": fit.steps, "rejected": fit.rejected,
@@ -284,6 +293,14 @@ def run(opts: Options, progress=None) -> Summary:
                        fit.steps, fit.rejected, notices)
     finally:
         doc.close()
+
+
+def _engine_view(blocks: list[dict]) -> dict:
+    """An engine's page as the flag rules read it: display LaTeX, their boxes, text blocks."""
+    eqs = [b for b in blocks if b.get("type") == "equation"]
+    return {"displays": [str(b.get("content") or "") for b in eqs],
+            "boxes": [b.get("bbox") for b in eqs],
+            "paragraphs": [b for b in blocks if b.get("type") == "text"]}
 
 
 def _sum_counts(per_page: dict) -> dict:

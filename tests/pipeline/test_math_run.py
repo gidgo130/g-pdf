@@ -157,7 +157,8 @@ def test_math_export_writes_the_atlas_layout(setup, tmp_path, capsys):
     assert rec["pages"][1] == {"file": 2, "printed": "45", "inferred": None,
                                "label_source": "engine", "displays": 3, "inline_spans": 1,
                                "items": {"disagree": 1, "stack": 1, "inline": 1}, "dropped": 1,
-                               "identities": {}}
+                               "identities": {}, "marker": False, "no_marker_reading": [],
+                               "inline_flagged": 1}
     assert rec["cache_bytes"] > 0 and rec["engine_seconds"]["parsed"] == {"standard": 4, "basic": 4}
     out_text = capsys.readouterr().out
     assert "4 pages, 6 displays" in out_text
@@ -212,6 +213,38 @@ def test_marker_runs_after_mineru_on_the_math_pages_only(setup, tmp_path, monkey
     assert run(exe, home, pdf, out, "--pages", "1-5", "--no-marker") == 0
     meta = json.loads((out / "book" / "meta.json").read_text("utf-8"))
     assert meta["marker"] is None
+
+
+def test_marker_readings_reach_the_review_queue(setup, tmp_path, monkeypatch):
+    from gpdf.pipeline.mathocr import marker
+
+    from .fake_marker import make_fake_marker, make_fake_server, make_gguf
+
+    exe, home, pdf, log = setup
+    mexe, server, (gguf, pins) = (make_fake_marker(tmp_path), make_fake_server(tmp_path),
+                                  make_gguf(tmp_path))
+    monkeypatch.setattr(marker, "PINNED_GGUF", pins)
+    # page 1: Marker reads the density with a different rate and has a second display
+    script = {"p001": [
+        {"block_type": "Text", "bbox": [30, 160, 270, 180], "html": "<p>The density function is</p>"},
+        {"block_type": "Equation", "bbox": [60, 200, 240, 224],
+         "html": '<math display="block">f(x) = \\mu e^{-\\mu x}, \\qquad x > 0 \\tag{7.1}</math>'},
+        {"block_type": "Equation", "bbox": [60, 300, 240, 324],
+         "html": '<math display="block">F(x) = 1 - e^{-\\lambda x}</math>'}]}
+    (tmp_path / "mk.json").write_text(json.dumps(script), "utf-8")
+    monkeypatch.setenv("FAKE_MARKER_PAGES", str(tmp_path / "mk.json"))
+    out = tmp_path / "out"
+    assert run(exe, home, pdf, out, "--pages", "1", "--marker", mexe, "--llama-server", server,
+               "--marker-gguf", str(gguf)) == 0
+    items = {json.loads(s)["id"]: json.loads(s)
+             for s in (out / "book" / "review.jsonl").read_text("utf-8").splitlines()}
+    assert items["p001-d01"]["kind"] == "marker"
+    assert items["p001-d01"]["latex_marker"].startswith(r"f(x) = \mu e^{-\mu x}")
+    assert items["p001-m01"]["kind"] == "missing_display"
+    assert items["p001-m01"]["latex_second"] == r"F(x) = 1 - e^{-\lambda x}"
+    assert items["p001-m01"]["crop"] == "crops/p001-m01.png"
+    meta = json.loads((out / "book" / "meta.json").read_text("utf-8"))
+    assert meta["options"]["marker_rule"] == "value" and meta["options"]["inline_with"] == "basic"
 
 
 def test_engine_problems_are_errors_not_tracebacks(setup, tmp_path, monkeypatch, capsys):

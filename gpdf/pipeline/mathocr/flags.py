@@ -5,14 +5,21 @@ Rules, each on its own (kinds in order of precedence):
 1. disagree: the two tiers' readings of a display differ after normalization, compared
    loosely (bold/roman markup, line breaks, dot style and trailing punctuation ignored:
    the trial's rule), or the second tier has no reading for it.
-2. style: the tiers differ only in \mathbf / \mathrm / \mathit / \mathcal / \mathbb; or
-   the same symbol (same subscript) is both bold and not on one page.
+   marker: Marker (the third opinion, when it ran) reads the display differently; how
+   different is the rule's variant: any normalized difference, a value-changing one
+   (style commands ignored), or a value-changing one of 1-3 tokens.
+2. style: the tiers differ only in \mathbf / \mathrm / \mathit / \mathcal / \mathbb;
+   opt-in: the same symbol (same subscript) is both bold and not on one page.
 3. stack: a big operator whose limits hold two index variables, a relation, or a sum of
    indices: a printed multiple sum collapsed into one.
 4. syntax: unbalanced braces / \left \right / \begin \end, or a command outside the
    whitelist (standard LaTeX math plus the trial's outputs).
 5. tag: within a contiguous page run a tag repeats, goes backwards or skips a number.
-6. inline: the inline spans of the two tiers, aligned paragraph by paragraph, differ.
+6. missing_display: another engine (Marker, or the basic tier) has a display that none
+   of the standard tier's aligns with, or the layout has an equation block that gave no
+   display; the item carries the other reading and its crop.
+7. inline: an inline span of the standard tier differs from the other engines', aligned
+   paragraph by paragraph (against the basic tier, Marker, either or both).
 
 Items carry both readings and a crop of the page region (300-400 dpi).
 """
@@ -27,7 +34,10 @@ from gpdf.pipeline.mathocr import align, second
 from gpdf.pipeline.mathocr import latex as L
 from gpdf.pipeline.mathocr.assemble import Page, Paragraph, _paragraph
 
-KINDS = ("disagree", "style", "stack", "syntax", "tag", "inline", "identity")
+KINDS = ("disagree", "marker", "style", "stack", "syntax", "tag", "missing_display", "inline",
+         "identity", "prose")
+MARKER_RULES = ("any", "value", "small")
+INLINE_WITH = ("basic", "marker", "either", "both")
 STYLE_CMDS = L.STYLE_CMDS
 OPERATORS = {r"\sum", r"\prod", r"\int", r"\iint", r"\iiint", r"\oint", r"\bigcup", r"\bigcap",
              r"\bigvee", r"\bigwedge", r"\coprod", r"\bigoplus", r"\bigotimes"}
@@ -153,6 +163,21 @@ def style_only(primary: str, other: str | None) -> bool:
         return False
     a, b = _norm(primary), _norm(other)
     return a != b and _style_free(a) == _style_free(b)
+
+
+def marker_disagrees(primary: str, mk: str | None, rule: str = "value") -> bool:
+    """The Marker display rule. any: the normalized readings differ; value: they differ
+    with style commands, line breaks, dot style and trailing punctuation ignored; small:
+    value, and by 1-3 tokens."""
+    if mk is None:
+        return False
+    a, b = _norm(primary), _norm(mk)
+    if rule == "any":
+        return a != b
+    va, vb = L.style_free(a), L.style_free(b)
+    if va == vb:
+        return False
+    return rule == "value" or 1 <= L.distance(va.split(), vb.split()) <= 3
 
 
 def _is_symbol(t: str) -> bool:
@@ -335,6 +360,33 @@ def _pair_paragraphs(prim: list[Paragraph], other: list[Paragraph]) -> dict[int,
     return out
 
 
+def inline_flagged(page: Page, basic_blocks: list[dict], marker_blocks: list[dict] | None,
+                   mode: str = "basic") -> list[dict]:
+    """The standard tier's inline spans that the rule flags, as span records: against the
+    basic tier, Marker, either of them (flag when one differs) or both (flag only when
+    neither agrees). Without Marker for the page every mode falls back to the basic tier."""
+    mb = inline_pairs(page, basic_blocks)
+    mm = inline_pairs(page, marker_blocks) if marker_blocks is not None else None
+    out = []
+    for k, b in enumerate(mb):
+        m = mm[k] if mm is not None else None
+        if m is None or mode == "basic":
+            bad = not b.ok
+        elif mode == "marker":
+            bad = not m.ok
+        elif mode == "either":
+            bad = not (b.ok and m.ok)
+        else:
+            bad = not b.ok and not m.ok
+        if bad:
+            rec = {"paragraph": b.paragraph + 1, "latex_primary": b.primary,
+                   "latex_second": b.second}
+            if m is not None:
+                rec["latex_marker"] = m.second
+            out.append(rec)
+    return out
+
+
 def inline_pairs(page: Page, other_blocks: list[dict]) -> list[Match]:
     """Every inline span of the page's paragraphs against the second tier's."""
     other = [_paragraph(b, i) for i, b in enumerate(other_blocks) if b.get("type") == "text"]
@@ -365,14 +417,60 @@ def _pid(file: int) -> str:
     return f"p{file:03d}"
 
 
+def unmatched(displays, others: list[str]) -> list[int]:
+    """Indices of ``others`` that no display aligns with (tag first, then reading order,
+    a split display joined)."""
+    ref = [align.unit(d.raw) for d in displays]
+    cand = [align.unit(t) for t in others]
+    return align.align(ref, cand)[2]
+
+
+def _missing(page: Page, pid: str, sources, std_blocks) -> list[Item]:
+    """missing_display items: displays of another engine that none of the standard tier's
+    aligns with (Marker first; a basic-tier one only when Marker has no similar one), and
+    equation blocks of the layout that gave no display."""
+    items, found = [], []
+    for name, eng in sources:
+        texts, boxes = eng.get("displays", []), eng.get("boxes") or []
+        for j in unmatched(page.displays, texts):
+            body = L.split_tag(texts[j])[0].strip()
+            toks = L.tokens(body)
+            if any(L.ned(toks, f) < 0.5 for f in found):
+                continue
+            found.append(toks)
+            items.append(Item(f"{pid}-m{len(items) + 1:02d}", page.file, page.label.marker,
+                              "missing_display", [f"{name} has a display the standard tier lacks"],
+                              L.split_tag(texts[j])[1], None, body,
+                              bbox=boxes[j] if j < len(boxes) else None))
+    shown = {d.index for d in page.displays}
+    blocks = list(std_blocks or [])
+    if blocks and all(isinstance(b.get("index"), int) for b in blocks):
+        blocks.sort(key=lambda b: b["index"])            # numbered as assemble numbers them
+    for k, b in enumerate(blocks):
+        if b.get("type") == "equation" and k not in shown:
+            items.append(Item(f"{pid}-m{len(items) + 1:02d}", page.file, page.label.marker,
+                              "missing_display", ["equation block in the layout gave no display"],
+                              None, None, str(b.get("content") or "") or None, bbox=b.get("bbox")))
+    return items
+
+
 def review_items(page: Page, other: dict, runs_tags: dict | None = None,
-                 group_inline: bool = False) -> list[Item]:
-    """The page's review items. ``other`` = {"displays": [raw latex], "paragraphs":
-    [text blocks]} of the second tier; ``runs_tags`` maps (pNNN, display index) to a tag
-    problem."""
+                 group_inline: bool = False, third: dict | None = None, *,
+                 marker_rule: str = "value", inline_with: str = "basic",
+                 style_page: bool = False, std_blocks: list[dict] | None = None,
+                 stats: dict | None = None) -> list[Item]:
+    """The page's review items. ``other`` = {"displays": [raw latex], "boxes": [bbox],
+    "paragraphs": [text blocks]} of the second tier, ``third`` the same of Marker (None
+    when it did not run on the page); ``runs_tags`` maps (pNNN, display index) to a tag
+    problem; ``std_blocks`` is the standard tier's layout (for equation blocks that gave
+    no display). ``stats``, when given, gets the page's display numbers without a Marker
+    reading and the number of inline spans flagged."""
     runs_tags = runs_tags or {}
     pid = _pid(page.file)
-    mixed = bold_mixed(page)
+    mixed = bold_mixed(page) if style_page else []
+    mk_of = ({id(d): m for d, m in second.pair_displays(page.displays, third.get("displays", []))}
+             if third is not None else {})
+    no_marker = []
     items = []
     for n, (d, sec) in enumerate(second.pair_displays(page.displays, other.get("displays", [])),
                                  1):
@@ -386,6 +484,12 @@ def review_items(page: Page, other: dict, runs_tags: dict | None = None,
         elif disagree(d.latex, sec):
             reasons.append("tiers disagree")
             kinds.append("disagree")
+        mk = mk_of.get(id(d))
+        if third is not None and mk is None:
+            no_marker.append(n)
+        if marker_disagrees(d.latex, mk, marker_rule):
+            reasons.append("marker disagrees")
+            kinds.append("marker")
         here = [s for s in mixed if any(sym + sub == s for sym, sub, _ in _symbols(L.tokens(d.latex)))]
         if here:
             reasons.append(f"symbol both bold and not on this page: {', '.join(here)}")
@@ -404,23 +508,29 @@ def review_items(page: Page, other: dict, runs_tags: dict | None = None,
             continue
         kind = min(kinds, key=KINDS.index)
         items.append(Item(f"{pid}-d{n:02d}", page.file, page.label.marker, kind, reasons, d.tag,
-                          d.latex, L.split_tag(sec)[0].strip() if sec else None, bbox=d.bbox))
-    bad = [m for m in inline_pairs(page, other.get("paragraphs", [])) if not m.ok]
+                          d.latex, L.split_tag(sec)[0].strip() if sec else None, bbox=d.bbox,
+                          extra={"latex_marker": L.split_tag(mk)[0].strip()} if mk else {}))
+    sources = ([("Marker", third)] if third is not None else []) + [("the basic tier", other)]
+    items += _missing(page, pid, sources, std_blocks)
+    bad = inline_flagged(page, other.get("paragraphs", []),
+                         third.get("paragraphs") if third is not None else None, inline_with)
+    if stats is not None:
+        stats["no_marker_reading"] = no_marker
+        stats["inline_flagged"] = len(bad)
     if bad and group_inline:
         paras = page.paragraphs
-        spans = [{"paragraph": m.paragraph + 1, "latex_primary": m.primary,
-                  "latex_second": m.second} for m in bad]
-        seen = sorted({m.paragraph for m in bad})
+        seen = sorted({b["paragraph"] - 1 for b in bad})
         items.append(Item(f"{pid}-inline", page.file, page.label.marker, "inline",
-                          [f"{len(bad)} inline spans differ between tiers"], None, None, None,
+                          [f"{len(bad)} inline spans differ ({inline_with})"], None, None, None,
                           bbox=paras[seen[0]].bbox, bboxes=[paras[i].bbox for i in seen],
-                          spans=spans))
+                          spans=bad))
     elif bad:
-        for k, m in enumerate(bad, 1):
+        for k, b in enumerate(bad, 1):
             items.append(Item(f"{pid}-i{k:02d}", page.file, page.label.marker, "inline",
-                              ["inline span differs between tiers" if m.second is not None
-                               else "no second reading"], None, m.primary, m.second,
-                              bbox=page.paragraphs[m.paragraph].bbox))
+                              ["inline span differs" if b["latex_second"] is not None
+                               else "no second reading"], None, b["latex_primary"],
+                              b["latex_second"], bbox=page.paragraphs[b["paragraph"] - 1].bbox,
+                              extra={k2: v for k2, v in b.items() if k2 == "latex_marker"}))
     return items
 
 
