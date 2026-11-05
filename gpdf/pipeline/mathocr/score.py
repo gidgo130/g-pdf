@@ -17,6 +17,7 @@ numbers only.
 
 from __future__ import annotations
 
+import difflib
 import json
 import re
 from collections import Counter
@@ -36,6 +37,17 @@ KIND_OF_REASON = [("tiers disagree", "disagree"), ("no second reading", "disagre
                   ("marker disagrees", "marker"), ("standard tier lacks", "missing_display"),
                   ("gave no display", "missing_display"), ("prose", "prose"),
                   ("identity failed", "identity")]
+# a reference `dropped` flag (its "text" or "note") saying part of the page was left out of
+# the transcription: the candidate is scored only up to the reference's last aligned line.
+# A note about a figure's or table's own labels is not a scope cut.
+SCOPE_CUT = re.compile(r"not\s+transcribed|outside\s+(?:this|the)\s+(?:pass|scope)"
+                       r"|out\s+of\s+scope", re.I)
+SCOPE_NOT = re.compile(r"\b(?:fig(?:ure)?s?|plots?|charts?|axis|axes|labels?|captions?|"
+                       r"tables?|images?)\b", re.I)
+PLACEHOLDER_RE = re.compile(r"(?m)^[ \t]*\[[^\]\n]*(?:%s)[^\]\n]*\][ \t]*$" % SCOPE_CUT.pattern,
+                            re.I)
+BLOCK_RE = re.compile(r"(?:[^\n]*\S[^\n]*(?:\n|$))+")
+SCOPE_MATCH = 0.8          # similarity a candidate block needs to align with the reference's last
 
 
 class ScoreError(Exception):
@@ -136,6 +148,62 @@ def header_leak(cand_md: str, printed: str | None, ref_md: str = "") -> list[str
               and s.lower() not in {r.strip("# ").lower() for r in ref_md.splitlines()}):
             hits.append(s[:80])
     return hits
+
+
+# ---------------------------------------------------------------- reference scope
+
+def scope_flag(flags: list) -> str | None:
+    """The text of a `dropped` flag saying part of the page was not transcribed, if any."""
+    for f in flags:
+        if f.get("type") != "dropped":
+            continue
+        text = " ".join(str(f.get(k) or "") for k in ("text", "note")).strip()
+        if SCOPE_CUT.search(text) and not SCOPE_NOT.search(text):
+            return text
+    return None
+
+
+def _block_key(block: str) -> str:
+    return re.sub(r"[^0-9a-z]+", "", L.prose_norm(block).lower())
+
+
+def _blocks(md: str) -> list[tuple[int, str, str]]:
+    """(end offset, normalized text, text) of each run of non-blank lines, page marker
+    left out."""
+    return [(m.end(), _block_key(m.group()), m.group()) for m in BLOCK_RE.finditer(md)
+            if not MARKER_RE.match(m.group().strip())]
+
+
+def scope_cut(ref_mds: dict, ref_flags: dict,
+              cand_mds: dict) -> tuple[dict, dict, list[dict]]:
+    """Where the reference page has a scope flag: the reference without its bracketed
+    "[… not transcribed …]" placeholders, the candidate cut after the block that aligns with
+    the reference's last one, and one record per such page."""
+    ref_out, out, cuts = dict(ref_mds), dict(cand_mds), []
+    for stem in sorted(ref_mds):
+        text = scope_flag(ref_flags.get(stem, []))
+        if text is None or stem not in cand_mds:
+            continue
+        ref_out[stem] = PLACEHOLDER_RE.sub("", ref_mds[stem])
+        ref_keys = [k for _, k, _ in _blocks(ref_out[stem]) if len(k) >= 3]
+        rec = {"page": stem, "flag": text, "aligned": False, "cand_chars_ignored": 0,
+               "cand_displays_ignored": 0, "cand_inline_ignored": 0}
+        cuts.append(rec)
+        if not ref_keys:
+            continue
+        md, best, at = cand_mds[stem], 0.0, None
+        for end, key, _ in _blocks(md):
+            r = difflib.SequenceMatcher(None, ref_keys[-1], key, autojunk=False).ratio()
+            if r >= SCOPE_MATCH and r >= best:
+                best, at = r, end
+        if at is None:
+            continue
+        tail = md[at:]
+        disp, inline, _ = L.extract(tail)
+        rec.update(aligned=True, similarity=round(best, 3), cand_chars_ignored=len(tail.strip()),
+                   cand_displays_ignored=len(disp), cand_inline_ignored=len(inline))
+        out[stem] = md[:at].rstrip("\n") + "\n"
+    return ref_out, out, cuts
 
 
 # ---------------------------------------------------------------- scoring
@@ -352,6 +420,17 @@ def write_report(path: Path, summary: dict, res: dict, recall: dict | None) -> N
             L_ += [f"- **{x['page']}** tag {x['ref_tag'] or '—'} ed={x['ed']} · edits: "
                    + "; ".join(f"{t} `{a}`→`{b}`" for t, a, b in x["diffs"]),
                    f"  - ref: {_q(x['ref_raw'])}", f"  - cand: {_q(x['cand_raw'])}"]
+    cuts = res.get("scope_cuts", [])
+    L_ += ["", f"## Reference scope cuts: {sum(c['aligned'] for c in cuts)}", "",
+           "Pages whose reference has a `dropped` flag saying part of the page was not "
+           "transcribed: the candidate after the reference's last aligned block is not scored.",
+           ""]
+    for c in cuts:
+        L_.append(f"- {c['page']}: " + (
+            f"cut, {c['cand_chars_ignored']} characters, {c['cand_displays_ignored']} displays "
+            f"and {c['cand_inline_ignored']} inline spans ignored" if c["aligned"] else
+            "not cut: the reference's last block is not in the candidate (all of it scored)")
+            + f" (flag: {c['flag'][:100]})")
     near = [x for x in res["pairs"] if 0 < x["ed"] <= 3]
     L_ += ["", f"## Near-misses (1-3 token edits): {len(near)} "
            f"({sum(not x['cosmetic'] for x in near)} value-changing, "
@@ -397,6 +476,9 @@ def run(ref, cand, out, pages: str | None = None) -> tuple[dict, dict | None]:
         cand_mds = {k: v for k, v in cand_mds.items() if k in keep}
         if not ref_mds:
             raise ScoreError(f"--pages {pages!r} selects none of the reference pages")
+    # where the reference says part of a page was not transcribed (a bibliography), the
+    # candidate counts only up to the reference's last aligned line
+    ref_mds, cand_mds, cuts = scope_cut(ref_mds, ref_flags, cand_mds)
     # a display split over a page break is joined on both sides where either side links
     # the pages, so a link only one side makes does not turn two right formulas into
     # a missed one and a wrong one; how often the sides differ is counted on its own
@@ -408,6 +490,9 @@ def run(ref, cand, out, pages: str | None = None) -> tuple[dict, dict | None]:
     summary["split_joins"] = {"both": len(ref_links & cand_links & set(ref_mds)),
                               "ref_only": len((ref_links - cand_links) & set(ref_mds)),
                               "cand_only": len((cand_links - ref_links) & set(ref_mds))}
+    summary["scope_cut"] = {"pages": sum(c["aligned"] for c in cuts),
+                            "unaligned": sum(not c["aligned"] for c in cuts)}
+    res["scope_cuts"] = cuts
     recall = None
     review = cand_folder / "review.jsonl"
     if review.is_file():

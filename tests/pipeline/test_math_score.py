@@ -184,3 +184,51 @@ def test_inline_and_missing_display_recall(tmp_path):
     s, recall = score.run(ref, cand2, tmp_path / "out2")
     assert recall["inline"]["recall"] == 0.0 and recall["missing"]["recall"] == 0.0
     assert "missed displays: 0 of 1 covered" in (tmp_path / "out2" / "REPORT.md").read_text("utf-8")
+
+
+# ---------------------------------------------------------------- reference scope
+
+SCOPE_REF = {
+    "p020": ('<!-- page printed="9" file="20" -->\n\nThe last paragraph with \\(a_1\\).\n\n'
+             "$$\ng(x) = x^2\n\\tag{2.1}\n$$\n\n## Bibliography\n\n"
+             "[Entries not transcribed in this pass.]\n"),
+    "p021": ('<!-- page printed="10" file="21" -->\n\nProse only.\n\n'
+             "[Figure 2.1: a plot]\n"),
+    "p022": ('<!-- page printed="11" file="22" -->\n\nSomething the candidate lacks entirely.\n'),
+}
+SCOPE_REF_FLAGS = {
+    "p020": [{"type": "dropped", "text": "Bibliography entries not transcribed in this pass"}],
+    "p021": [{"type": "dropped", "text": "Figure 2.1 axis labels not transcribed"}],
+    "p022": [{"type": "dropped", "note": "rest of page outside this pass"}],
+}
+SCOPE_CAND = {
+    "p020": ('<!-- page printed="9" file="20" -->\n\nThe last paragraph with \\(a_1\\).\n\n'
+             "$$\ng(x) = x^2\n\\tag{2.1}\n$$\n\n## Bibliography\n\n"
+             "Arnold, B. C. (1975). Multivariate exponential distributions, \\(p_2\\).\n\n"
+             "$$\nh = 1\n$$\n"),
+    "p021": ('<!-- page printed="10" file="21" -->\n\nProse only.\n\n'
+             "[Figure 2.1: a plot]\n\nExtra words.\n"),
+    "p022": ('<!-- page printed="11" file="22" -->\n\nUnrelated text here.\n\nMore of it.\n'),
+}
+
+
+def test_score_ignores_candidate_text_after_a_reference_scope_cut(tmp_path):
+    ref = write(tmp_path / "ref", SCOPE_REF, SCOPE_REF_FLAGS)
+    cand = write(tmp_path / "cand", SCOPE_CAND, {})
+    s, _ = score.run(ref, cand, tmp_path / "out")
+    # p020: the bibliography entry, its inline span and display are not scored
+    data = json.loads((tmp_path / "out" / "score.json").read_text("utf-8"))
+    assert data["pages"]["p020"]["extra"] == 0 and data["pages"]["p020"]["cer"] == 0
+    assert data["pages"]["p020"]["inline"] == "1/1"
+    assert not [e for e in data["inline_errors"] if e["page"] == "p020"]
+    # p021: a figure note is not a scope cut, so its extra words still count
+    assert data["pages"]["p021"]["cer"] > 0
+    # p022: a scope flag, but the reference's last line is nowhere in the candidate
+    assert data["pages"]["p022"]["cer"] > 0
+    assert s["scope_cut"] == {"pages": 1, "unaligned": 1}
+    cut = data["scope_cuts"]
+    assert [c["page"] for c in cut] == ["p020", "p022"]
+    assert cut[0]["cand_displays_ignored"] == 1 and cut[0]["cand_inline_ignored"] == 1
+    assert cut[1]["aligned"] is False
+    report = (tmp_path / "out" / "REPORT.md").read_text("utf-8")
+    assert "## Reference scope cuts: 1" in report and "p022" in report
