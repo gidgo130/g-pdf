@@ -431,6 +431,9 @@ def build_parser() -> argparse.ArgumentParser:
     mv.add_argument("--meta", metavar="FILE", type=Path,
                     help="meta.json to add the method block to (default: OUT/meta.json)")
     mv.add_argument("--reviewer", metavar="MODEL", help="the reviewer model (e.g. sonnet)")
+    mv.add_argument("--review-dir", metavar="DIR", type=Path, action="append", default=[],
+                    help="a math-review-pack folder (repeatable): an inline accept that names no "
+                         "spans counts for the spans sampled on its page")
     ms = sub.add_parser("math-score", help="score a math transcription against a reference",
                         description="Compare the candidate's pages with the reference's (pNNN.md "
                                     "folders, math-export folders or text.md files): display "
@@ -938,7 +941,8 @@ def _math_provenance_main(args) -> int:
     from gpdf.pipeline.mathocr import provenance
 
     try:
-        res = provenance.write(args.export, args.out, args.reviewer, args.meta)
+        res = provenance.write(args.export, args.out, args.reviewer, args.meta,
+                               args.review_dir)
     except (provenance.ProvenanceError, OSError, ValueError) as e:
         print(f"gpdf-cli: error: {e}", file=sys.stderr)
         return EXIT_ERROR

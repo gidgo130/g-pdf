@@ -142,7 +142,7 @@ fill it in: every item gets at least one decision. Every replace and flag carrie
 
 For an inline span, the id is the page's inline item. A `replace` lists the span, with
 `latex_primary` copied exactly and the `occurrence` the item gives. `accept` means the
-span is right. Flag types: `possible_source_typo` (the LaTeX matches a page that looks
+span is right; keep the template's `"spans"` line in an accept too (it says which span). Flag types: `possible_source_typo` (the LaTeX matches a page that looks
 wrong), `copy_corrupt` (the printed page itself is damaged or garbled: write what is
 shown and give the likely reading in the note), `formula_uncertain` (you can't decide;
 a flag is better than a guess), `illegible`. An item may get both a `replace` and a

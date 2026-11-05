@@ -49,8 +49,32 @@ def _key(latex: str | None) -> str:
     return " ".join((latex or "").split())
 
 
+def _sampled_accepts(review_dirs) -> dict[int, list[tuple[str, str]]]:
+    """{file: [(span LaTeX, item id)]}: sampled inline spans whose page item got an accept
+    that names no spans, and that no decision with spans covers (a reviewer who dropped
+    the template's "spans" line)."""
+    out: dict[int, list] = {}
+    for rd in review_dirs or []:
+        rd = Path(rd)
+        sampled = []
+        for p in sorted(rd.glob("batch*/items.jsonl")):
+            sampled += [x for x in _jsonl(p) if x.get("kind") == "inline_span"]
+        blanket, covered = set(), set()
+        for p in sorted((rd / "decisions").glob("*.jsonl")):
+            for d in _jsonl(p):
+                if d.get("spans"):
+                    covered |= {(d["id"], _key(s.get("latex_primary"))) for s in d["spans"]}
+                elif d.get("action") == "accept":
+                    blanket.add(d["id"])
+        for x in sampled:
+            k = _key(x.get("latex_primary"))
+            if x["id"] in blanket and (x["id"], k) not in covered:
+                out.setdefault(int(x["file"]), []).append((k, x["id"]))
+    return out
+
+
 def _page_records(file: int, md: str, flags: list, items: list[dict], idents: list[dict],
-                  reviewer: str | None) -> list[dict]:
+                  reviewer: str | None, extra_accepts: list | None = None) -> list[dict]:
     m = MARKER_RE.search(md)
     printed = m.group(1) if m else None
     displays, inline, _ = L.extract(md)
@@ -111,6 +135,7 @@ def _page_records(file: int, md: str, flags: list, items: list[dict], idents: li
                 replaced.append((_key(s.get("latex")), r["id"]))
             elif r["action"] in ("accept", "replace"):
                 accepted.append((_key(s.get("latex_primary")), r["id"]))
+    accepted += list(extra_accepts or [])
     for it in items:
         if it.get("kind") == "inline":
             for s in it.get("spans") or ([{"latex_primary": it["latex_primary"]}]
@@ -148,7 +173,7 @@ def _page_records(file: int, md: str, flags: list, items: list[dict], idents: li
     return out
 
 
-def write(export, out=None, reviewer: str | None = None, meta=None) -> dict:
+def write(export, out=None, reviewer: str | None = None, meta=None, review_dirs=None) -> dict:
     root = Path(export)
     pages_dir = root / "pages"
     if not pages_dir.is_dir():
@@ -156,6 +181,7 @@ def write(export, out=None, reviewer: str | None = None, meta=None) -> dict:
     out = Path(out) if out else root
     items = _jsonl(root / "review.jsonl")
     idents = _jsonl(root / "identities.jsonl")
+    extra = _sampled_accepts(review_dirs)
     recs = []
     for p in sorted(pages_dir.glob("p[0-9][0-9][0-9].md")):
         file = int(p.stem[1:])
@@ -163,7 +189,8 @@ def write(export, out=None, reviewer: str | None = None, meta=None) -> dict:
         flags = json.loads(fp.read_text("utf-8")) if fp.is_file() else []
         recs += _page_records(file, p.read_text("utf-8"), flags,
                               [it for it in items if int(it["file"]) == file],
-                              [r for r in idents if int(r["file"]) == file], reviewer)
+                              [r for r in idents if int(r["file"]) == file], reviewer,
+                              extra.get(file))
     write_atomic(out / "formulas.jsonl",
                  "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs))
     by_status = {s: sum(1 for r in recs if r["status"] == s) for s in STATUSES}

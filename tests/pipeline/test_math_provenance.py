@@ -108,3 +108,18 @@ def test_cli_and_numbers_only_on_screen(export, tmp_path, capsys):
     assert "9 formulas" in out and "x^2" not in out
     assert (export / "formulas.jsonl").is_file()
     assert json.loads((export / "meta.json").read_text("utf-8"))["method"]["reviewer_model"] == "sonnet"
+
+
+def test_an_inline_accept_without_spans_covers_the_sampled_spans_of_its_page(export, tmp_path):
+    # the reviewer accepted span c (sampled) but dropped the template's "spans" line
+    rev = tmp_path / "rev"
+    (rev / "batch01").mkdir(parents=True)
+    (rev / "decisions").mkdir()
+    (rev / "batch01" / "items.jsonl").write_text(json.dumps(
+        {"key": "p001-inline#3", "id": "p001-inline", "kind": "inline_span", "file": 1,
+         "latex_primary": "c"}) + "\n", "utf-8")
+    (rev / "decisions" / "batch01.jsonl").write_text(json.dumps(
+        {"id": "p001-inline", "action": "accept"}) + "\n", "utf-8")
+    provenance.write(export, reviewer="sonnet", review_dirs=[rev])
+    recs = {r["id"]: r for r in lines(export / "formulas.jsonl")}
+    assert recs["p001-i03"]["status"] == "reviewed_accept"

@@ -366,7 +366,9 @@ line per display and inline span of the final pages in page order and no formula
 - `engines_agree`: not queued; every engine read it the same way.
 
 Formulas are matched to queue items, decisions and flags by their LaTeX. `reviewer` is set
-only for reviewed formulas. The identity results come from `identities.jsonl`, which
+only for reviewed formulas. `--review-dir REVIEW_DIR` takes a packed review folder and can be
+given more than once. Where a reviewer's accept on an inline item names no spans, it counts
+for the spans sampled on that page that no other decision covers. The identity results come from `identities.jsonl`, which
 math-export writes beside `review.jsonl` when the identity pass runs: one line per checked
 display, with page, position, LaTeX, kind, status and the checks.
 
