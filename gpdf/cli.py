@@ -417,6 +417,20 @@ def build_parser() -> argparse.ArgumentParser:
     mf.add_argument("review_dir", metavar="REVIEW_DIR", type=Path,
                     help="the math-review-pack --out folder (pack.json, batchNN/, decisions/)")
     mf.add_argument("--out", metavar="FILE", type=Path, help="also write the result as JSON")
+    mv = sub.add_parser("math-provenance", help="formulas.jsonl and the method block of an export",
+                        description="Write formulas.jsonl (one line per display and inline span "
+                                    "of the final pages: id, printed and file page, kind, tag, "
+                                    "status engines_agree / reviewed_accept / replaced / flagged / "
+                                    "identity_checked / unreviewed, reviewer, flags; no formulas) "
+                                    "and a 'method' block in meta.json (engines, OCR mode, input, "
+                                    "dpi, reviewer model, coverage).")
+    mv.add_argument("--export", metavar="DIR", type=Path, required=True,
+                    help="the (reviewed) math-export folder")
+    mv.add_argument("--out", metavar="DIR", type=Path,
+                    help="folder for formulas.jsonl (default: the export folder)")
+    mv.add_argument("--meta", metavar="FILE", type=Path,
+                    help="meta.json to add the method block to (default: OUT/meta.json)")
+    mv.add_argument("--reviewer", metavar="MODEL", help="the reviewer model (e.g. sonnet)")
     ms = sub.add_parser("math-score", help="score a math transcription against a reference",
                         description="Compare the candidate's pages with the reference's (pNNN.md "
                                     "folders, math-export folders or text.md files): display "
@@ -483,6 +497,8 @@ def main(argv: list[str] | None = None) -> int:
         return _math_apply_review_main(args)
     if args.command == "math-review-pack":
         return _math_review_pack_main(args)
+    if args.command == "math-provenance":
+        return _math_provenance_main(args)
     if args.command == "math-review-followup":
         return _math_review_followup_main(args)
     if args.command == "math-score":
@@ -915,6 +931,18 @@ def _math_review_pack_main(args) -> int:
         return EXIT_ERROR
     print(pack.report(summary))
     print(f"batches, pack.json and render.py in {args.out}")
+    return EXIT_OK
+
+
+def _math_provenance_main(args) -> int:
+    from gpdf.pipeline.mathocr import provenance
+
+    try:
+        res = provenance.write(args.export, args.out, args.reviewer, args.meta)
+    except (provenance.ProvenanceError, OSError, ValueError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    print(provenance.report(res))
     return EXIT_OK
 
 

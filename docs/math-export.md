@@ -340,6 +340,47 @@ the same file again changes nothing. A decision whose id is unknown, or whose
 the others still go through. Pages without a decision are never touched.
 `text.md` is rebuilt from the page files.
 
+## Provenance: formulas.jsonl and the method block
+
+```powershell
+gpdf-cli math-provenance --export OUT\book --reviewer sonnet [--out DELIVERY_DIR] [--meta DELIVERY_DIR\meta.json]
+```
+
+Run it after the review is applied. It writes `formulas.jsonl` next to `text.md`, with one
+line per display and inline span of the final pages in page order and no formulas:
+
+```json
+{"id": "p073-d02", "file": 73, "printed": "54", "kind": "display", "tag": "44.74",
+ "status": "replaced", "reviewer": "sonnet", "flags": [], "notes": [], "review_item": "p073-d02"}
+```
+
+`id` gives the formula's position in the final page (`d` for displays, `i` for inline).
+`status` is the first of these that applies:
+
+- `flagged`: a reviewer's flag. `flags` lists the type and any `subtype`, and
+  `"replaced": true` marks a display that was also replaced.
+- `replaced`, `reviewed_accept`: a reviewer's replace or accept.
+- `unreviewed`: in the review queue but not reviewed, such as a style item or an inline
+  span outside the sample. `notes` gives the item kinds.
+- `identity_checked`: not queued, and a numeric identity check passed.
+- `engines_agree`: not queued; every engine read it the same way.
+
+Formulas are matched to queue items, decisions and flags by their LaTeX. `reviewer` is set
+only for reviewed formulas. The identity results come from `identities.jsonl`, which
+math-export writes beside `review.jsonl` when the identity pass runs: one line per checked
+display, with page, position, LaTeX, kind, status and the checks.
+
+The command also writes a `method` block into `meta.json`, either the export's or the
+file given by `--meta`. The block holds:
+
+- `engines`: MinerU, marker-pdf, surya-ocr and llama.cpp, with versions;
+- `ocr_mode` and `dpi`;
+- `input`: the file name, SHA-256 and pages, plus the DjVu details for a DjVu;
+- `reviewer_model`;
+- `coverage`: displays and inline spans reviewed, as counts and %, and the number of
+  numeric checks and failures;
+- `formulas_by_status`.
+
 ## Scoring
 
 ```powershell
