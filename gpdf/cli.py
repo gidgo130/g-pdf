@@ -338,10 +338,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="skip the identity checks")
     me.add_argument("--inline", choices=("per-page", "per-span"), default="per-page",
                     help="inline-math flags as one item per page (default) or per span")
-    me.add_argument("--marker-rule", choices=("any", "value", "small"), default="small",
+    me.add_argument("--marker-rule", choices=("any", "value", "small"), default="value",
                     help="when Marker's reading of a display flags it: any normalized "
-                         "difference, a value-changing one, or a value-changing one of 1-3 "
-                         "tokens (default)")
+                         "difference, a value-changing one (default), or a value-changing "
+                         "one of 1-3 tokens")
     me.add_argument("--inline-with", choices=("basic", "marker", "either", "both"),
                     default="either",
                     help="inline spans are flagged when they differ from the basic tier, from "

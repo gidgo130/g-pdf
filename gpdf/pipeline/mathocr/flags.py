@@ -456,7 +456,7 @@ def _missing(page: Page, pid: str, sources, std_blocks) -> list[Item]:
 
 def review_items(page: Page, other: dict, runs_tags: dict | None = None,
                  group_inline: bool = False, third: dict | None = None, *,
-                 marker_rule: str = "small", inline_with: str = "either",
+                 marker_rule: str = "value", inline_with: str = "either",
                  style_page: bool = False, std_blocks: list[dict] | None = None,
                  stats: dict | None = None) -> list[Item]:
     """The page's review items. ``other`` = {"displays": [raw latex], "boxes": [bbox],

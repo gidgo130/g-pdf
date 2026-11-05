@@ -55,7 +55,7 @@ class Options:
     llama_server: str | None = None
     marker_gguf: str | None = None
     use_marker: bool | None = None           # None: when --marker or $GPDF_MARKER is given
-    marker_rule: str = "small"               # flags.MARKER_RULES (chosen on KBJ, MATH_3)
+    marker_rule: str = "value"               # flags.MARKER_RULES (chosen on KBJ, MATH_2B)
     inline_with: str = "either"              # flags.INLINE_WITH (chosen on KBJ, MATH_3)
     style_page: bool = False                 # the page-consistency style rule (opt-in)
 

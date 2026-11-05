@@ -284,6 +284,15 @@ def test_marker_disagreement_makes_or_joins_an_item():
     assert flags.review_items(pg, basic, third=marker, marker_rule="small")[0].id == "p006-d01"
 
 
+def test_marker_rule_value_is_the_default():
+    # a many-token difference (a dropped side-condition line) flags by default
+    pg = page([EQ(r"f(x) = e^{-x} 	ag{3.1}", 0.3)], file=7)
+    basic = {"displays": [r"f(x) = e^{-x} 	ag{3.1}"], "paragraphs": []}
+    marker = {"displays": [r"f(x) = e^{-x}, \quad 0 < x < y < z 	ag{3.1}"], "paragraphs": []}
+    assert [it.kind for it in flags.review_items(pg, basic, third=marker)] == ["marker"]
+    assert flags.review_items(pg, basic, third=marker, marker_rule="small") == []
+
+
 def test_missing_display_from_marker_the_basic_tier_and_the_layout():
     blocks = [EQ(r"a = b \tag{4.1}", 0.2), EQ("", 0.4), EQ(r"c = d \tag{4.3}", 0.8)]
     pg = page(blocks, file=8)
