@@ -262,7 +262,19 @@ gpdf-cli math-apply-review --export OUT\book --decisions review_decisions.jsonl
 ```
 
 `flag_type` is one of `formula_uncertain`, `possible_source_typo`,
-`copy_corrupt`, `illegible`. A replace keeps the display's `\tag`. Every
+`copy_corrupt`, `illegible`. A replace keeps the display's `\tag`.
+
+A `missing_display` item has no `latex_primary`; its replace writes the display
+in, either after a piece of page text (`after`) or in place of one
+(`page_text`: what the engine made of it, such as a broken display and an inline
+span); the text must occur exactly once in the page. `tag` gives it a `\tag`:
+
+```json
+{"id": "p418-m01", "action": "replace", "latex": "\\begin{aligned} ... \\end{aligned}",
+ "page_text": "$$\n...\n$$\n\nand \\(...\\),", "tag": "47.120"}
+```
+
+Accept and flag on such an item change no text. Every
 applied decision leaves a `reviewed` record in the page's flags, so running
 the same file again changes nothing. A decision whose id is unknown, or whose
 `latex_primary` is no longer in the page, is refused and listed (exit code 2);

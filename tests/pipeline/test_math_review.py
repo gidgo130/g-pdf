@@ -146,3 +146,49 @@ def test_cli_exit_codes_and_report(root, tmp_path, capsys):
     bad = tmp_path / "bad.jsonl"
     bad.write_text("{not json\n", "utf-8")
     assert cli.main(["math-apply-review", "--export", str(root), "--decisions", str(bad)]) == 1
+
+
+# ---------------------------------------------------------------- missing displays
+
+M1 = ('<!-- page printed="60" file="4" -->\n\nThe classes are\n\n$$\nB = 2\n$$\n\n'
+      "and \\(C = 3\\), so that the density is given by the form below. Next comes more.\n")
+ALIGNED = r"\begin{aligned} A &= 1, \\ B &= 2, \\ C &= 3, \end{aligned}"
+M_ITEMS = [
+    {"id": "p004-m01", "file": 4, "printed": "60", "kind": "missing_display",
+     "reasons": ["Marker has a display the standard tier lacks"], "tag": None,
+     "latex_primary": None, "latex_second": "A = 1", "crop": "crops/p004-m01.png"},
+    {"id": "p004-m02", "file": 4, "printed": "60", "kind": "missing_display",
+     "reasons": ["Marker has a display the standard tier lacks"], "tag": None,
+     "latex_primary": None, "latex_second": "f(x) = e^{-x}", "crop": "crops/p004-m02.png"},
+]
+
+
+def test_a_missing_display_is_inserted_or_replaces_page_text(tmp_path):
+    r = tmp_path / "book"
+    (r / "pages").mkdir(parents=True)
+    (r / "pages" / "p004.md").write_text(M1, "utf-8")
+    (r / "pages" / "p004.flags.json").write_text("[]", "utf-8")
+    (r / "review.jsonl").write_text("".join(json.dumps(i) + "\n" for i in M_ITEMS), "utf-8")
+    dec = decide(tmp_path,
+                 # the engine broke one aligned display into a display and an inline span
+                 {"id": "p004-m01", "action": "replace",
+                  "latex": ALIGNED, "page_text": "$$\nB = 2\n$$\n\nand \\(C = 3\\),"},
+                 {"id": "p004-m02", "action": "replace", "latex": "f(x) = e^{-x}",
+                  "tag": "4.7", "after": "is given by the form below."})
+    rep = review.apply(r, dec)
+    assert rep.refused == [] and [a["id"] for a in rep.applied] == ["p004-m01", "p004-m02"]
+    md = (r / "pages" / "p004.md").read_text("utf-8")
+    assert md == ('<!-- page printed="60" file="4" -->\n\nThe classes are\n\n$$\n'
+                  + ALIGNED + "\n$$\n\n"
+                  "so that the density is given by the form below.\n\n$$\nf(x) = e^{-x}\n"
+                  "\\tag{4.7}\n$$\n\nNext comes more.\n")
+    assert review.apply(r, dec).already == ["p004-m01", "p004-m02"]       # idempotent
+    # an anchor that is missing or not unique is refused
+    (r / "pages" / "p004.flags.json").write_text("[]", "utf-8")
+    bad = decide(tmp_path, {"id": "p004-m01", "action": "replace", "latex": "A = 1",
+                            "after": "nowhere"},
+                 {"id": "p004-m02", "action": "replace", "latex": "A = 1", "after": "$$"},
+                 {"id": "p004-m02", "action": "replace", "latex": "A = 1"})
+    assert [x["reason"] for x in review.apply(r, bad).refused] == [
+        "anchor text not found in the page", "anchor text is not unique in the page",
+        "a missing display needs 'after' or 'page_text'"]

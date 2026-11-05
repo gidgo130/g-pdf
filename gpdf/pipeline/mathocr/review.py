@@ -69,7 +69,7 @@ def load_items(root: Path) -> dict[str, dict]:
 
 def _record(decision: dict) -> dict:
     rec = {"type": "reviewed", "id": decision["id"], "action": decision["action"]}
-    for k in ("latex", "flag_type", "note", "spans"):
+    for k in ("latex", "tag", "after", "page_text", "flag_type", "note", "spans"):
         if decision.get(k) is not None:
             rec[k] = decision[k]
     return rec
@@ -171,7 +171,7 @@ def apply(root, decisions_path, dry_run: bool = False) -> Report:
 def _apply_one(d: dict, it: dict, md: str) -> tuple[str, str | None]:
     latex = it.get("latex_primary")
     if latex is None:
-        return md, "item has no latex_primary"
+        return _apply_missing(d, md)
     is_inline = it.get("kind") == "inline"
     where = _inline_span(latex, md) if is_inline else _display_block(latex, md)
     if where is None:
@@ -180,6 +180,28 @@ def _apply_one(d: dict, it: dict, md: str) -> tuple[str, str | None]:
         a, b = where
         md = md[:a] + d["latex"].strip() + md[b:]
     return md, None
+
+
+def _apply_missing(d: dict, md: str) -> tuple[str, str | None]:
+    """A display the standard tier lacks (no latex_primary): a replace writes it in after
+    the page text ``after``, or in place of the page text ``page_text`` (what the engine
+    made of it: a broken display, an inline span); either must occur once in the page."""
+    if d["action"] != "replace":
+        return md, None
+    anchor = d.get("page_text") or d.get("after")
+    if not isinstance(anchor, str) or not anchor:
+        return md, "a missing display needs 'after' or 'page_text'"
+    n = md.count(anchor)
+    if n != 1:
+        return md, ("anchor text not found in the page" if n == 0
+                    else "anchor text is not unique in the page")
+    a = md.index(anchor)
+    b = a + len(anchor)
+    if not d.get("page_text"):
+        a = b
+    block = "$$\n" + d["latex"].strip() + (f"\n\\tag{{{d['tag']}}}" if d.get("tag") else "") + "\n$$"
+    before, rest = md[:a].rstrip(" \n"), md[b:].lstrip(" \n")
+    return before + "\n\n" + block + ("\n\n" + rest if rest else "\n"), None
 
 
 def _apply_grouped(d: dict, it: dict, md: str) -> tuple[str, str | None]:
