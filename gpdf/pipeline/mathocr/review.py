@@ -105,7 +105,7 @@ def structure_problems(old: str | None, new: str) -> list[str]:
     if b["control_space"] > a["control_space"] and a["row_breaks"]:
         out.append("a stray `\\ ` where the old had a `\\\\` row break")
     if b["align"] < a["align"]:
-        out.append(f"alignment & {a['align']} -> {b['align']}")
+        out.append(f"alignment: rows with & {a['align']} -> {b['align']}")
     if b["envs"] < a["envs"]:
         out.append(f"\\begin/\\end environment pairs {a['envs']} -> {b['envs']}")
     if b["left"] < a["left"]:

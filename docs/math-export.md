@@ -289,8 +289,8 @@ replaced LaTeX.
 
 A replace on a display is compared with the old LaTeX (for a missing display, only
 its own balance is checked) and refused when it loses or unbalances the layout: fewer
-`\\` row breaks (a trailing one before `\end` and the rows of a `\substack` are not
-counted), fewer `&` alignment points, fewer `\begin`/`\end` environments (renaming
+`\\` row breaks (a trailing one before `\end`, also with only `\hline` rules between, and the
+rows of a `\substack` are not counted), fewer rows aligned with `&` (an `r c l` array's `& = &` and an aligned `&=` count alike), fewer `\begin`/`\end` environments (renaming
 `array` to `aligned` is fine), fewer `\left`/`\right` pairs, braces or environments
 newly unbalanced, or a stray `\ ` where the old text had a `\\` (what a helper script
 does when it collapses `\\`). A change that is meant (the page prints the rows on one

@@ -454,7 +454,7 @@ def commands(latex: str) -> set[str]:
     return set(CMD_RE.findall(latex))
 
 
-TRAIL_BREAK_RE = re.compile(r"\\\\\s*(?:\[[^\]]*\])?\s*(?=\\end\s*\{|\\tag\b|$)")
+TRAIL_BREAK_RE = re.compile(r"\\\\\s*(?:\[[^\]]*\])?(?:\s*\\hline)*\s*(?=\\end\s*\{|\\tag\b|$)")
 SUBSTACK_RE = re.compile(r"\\substack\s*" + BRACED)
 
 
@@ -469,7 +469,10 @@ def structure(latex: str) -> dict:
     """What a display's layout rests on: row breaks, alignment points, environments,
     \\left/\\right pairs, control spaces (`\\ `) and balance problems."""
     toks = TOKEN_RE.findall(latex)
-    return {"row_breaks": row_breaks(latex), "align": toks.count("&"),
+    # alignment: the rows that carry an `&` (an `r c l` array's `& = &` and an aligned
+    # `&=` align a row alike)
+    rows = " ".join(toks).split("\\\\")
+    return {"row_breaks": row_breaks(latex), "align": sum(1 for r in rows if "&" in r.split()),
             "envs": len(re.findall(r"\\begin\s*\{", latex)),
             "left": len(re.findall(r"\\left\b", latex)),
             "control_space": toks.count("\\ "), "balance": balance_problems(latex)}

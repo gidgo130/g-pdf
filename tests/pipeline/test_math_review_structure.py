@@ -50,6 +50,8 @@ def test_row_breaks_ignore_a_trailing_break_and_substack_rows():
     assert L.row_breaks("a \\\\[2pt] b \\\\") == 1
     assert L.row_breaks("\\sum_{\\substack{i < j \\\\ k}} x") == 0
     assert L.row_breaks("a \\ b") == 0
+    # a break followed only by \hline rules and \end is trailing too
+    assert L.row_breaks("\\begin{array}{l} a \\\\ \\hline b \\\\ \\hline \\end{array}") == 1
 
 
 def test_a_backslash_space_where_a_row_break_was_is_refused(root, tmp_path):
@@ -102,3 +104,9 @@ def test_a_missing_display_that_is_unbalanced_is_refused(root, tmp_path):
     rep = run(root, tmp_path, {"id": "p001-m01", "action": "replace", "latex": "x = {y",
                                "after": "More text."})
     assert not rep.applied and "braces" in rep.refused[0]["reason"]
+
+
+def test_an_rcl_array_rewritten_as_aligned_keeps_its_alignment(root, tmp_path):
+    rcl = "\\begin{array}{r c l} a & = & b + c \\\\ d & = & \\left( e \\right) \\end{array}"
+    assert review.structure_problems(rcl, OLD) == []
+    assert "alignment" in " ".join(review.structure_problems(rcl, OLD.replace("d &=", "d =")))
