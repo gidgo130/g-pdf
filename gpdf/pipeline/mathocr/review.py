@@ -194,7 +194,13 @@ def apply(root, decisions_path, dry_run: bool = False) -> Report:
             if it.get("spans") is not None:
                 new_md, why = _apply_grouped(d, it, md, flags)
             else:
-                new_md, why = _apply_one(d, it, md)
+                # a display an applied replace changed is found by its new LaTeX
+                done = [f["latex"] for f in flags if f.get("type") == "reviewed"
+                        and f.get("id") == d["id"] and f.get("action") == "replace"
+                        and f.get("latex")]
+                cur = dict(it, latex_primary=done[-1].strip()) if done and \
+                    it.get("latex_primary") is not None else it
+                new_md, why = _apply_one(d, cur, md)
             if why:
                 rep.refused.append({"id": d["id"], "reason": why})
                 continue

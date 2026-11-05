@@ -284,7 +284,8 @@ span); the text must occur exactly once in the page. `tag` gives it a `\tag`:
  "page_text": "$$\n...\n$$\n\nand \\(...\\),", "tag": "47.120"}
 ```
 
-Accept and flag on such an item change no text.
+Accept and flag on such an item change no text. A display may get a replace and a flag (two lines); the flag finds the display by the
+replaced LaTeX.
 
 A replace on a display is compared with the old LaTeX (for a missing display, only
 its own balance is checked) and refused when it loses or unbalances the layout: fewer

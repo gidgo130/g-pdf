@@ -265,3 +265,14 @@ def test_decisions_can_be_a_folder_of_batch_files(root, tmp_path):
     empty.mkdir()
     with pytest.raises(review.ReviewError, match="no .jsonl"):
         review.apply(root, empty)
+
+
+def test_a_flag_after_a_replace_on_the_same_display_is_not_stale(root, tmp_path):
+    dec = decide(tmp_path,
+                 {"id": "p001-d01", "action": "replace", "latex": "x^2 = 9"},
+                 {"id": "p001-d01", "action": "flag", "flag_type": "copy_corrupt",
+                  "note": "the page is smudged"})
+    rep = review.apply(root, dec)
+    assert rep.refused == [] and [a["action"] for a in rep.applied] == ["replace", "flag"]
+    assert any(f.get("type") == "copy_corrupt" for f in flags_of(root, 1))
+    assert review.apply(root, dec).already == ["p001-d01", "p001-d01"]
