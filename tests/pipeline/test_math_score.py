@@ -248,3 +248,22 @@ def test_score_ignores_candidate_text_after_a_reference_scope_cut(tmp_path):
     assert cut[3]["cand_displays_ignored"] == 1 and cut[3]["cand_inline_ignored"] == 1
     report = (tmp_path / "out" / "REPORT.md").read_text("utf-8")
     assert "## Reference scope cuts: 3" in report and "p022" in report
+
+
+def test_an_unreadable_or_invalid_flags_file_is_an_error_naming_it(tmp_path, capsys):
+    ref = write(tmp_path / "ref", REF, REF_FLAGS)
+    cand = write(tmp_path / "cand", CAND, CAND_FLAGS)
+    bad = ref / "pages" / "p012.flags.json"
+    for content in ('[{"type": "page_anomaly", "note": "a \tag"}]', '{"type": "dropped"}',
+                    '["just a string"]'):
+        bad.write_text(content, "utf-8")
+        try:
+            score.run(ref, cand, tmp_path / "out")
+        except score.ScoreError as e:
+            assert "p012.flags.json" in str(e)
+        else:
+            raise AssertionError(f"no error for {content!r}")
+    bad.write_bytes(b"\xff\xfe[\x00")
+    assert cli.main(["math-score", "--ref", str(ref), "--cand", str(cand),
+                     "--out", str(tmp_path / "out")]) != 0
+    assert "p012.flags.json" in capsys.readouterr().err

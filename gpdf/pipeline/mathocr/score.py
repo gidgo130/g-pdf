@@ -65,6 +65,18 @@ def _pages_from_text(text: str) -> dict[str, str]:
     return out
 
 
+def read_flags(path: Path) -> list[dict]:
+    """A pNNN.flags.json: a JSON list of objects. Anything else is an error naming the file,
+    never an empty list (a flags file with unescaped LaTeX once scored as if unflagged)."""
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise ScoreError(f"{path}: not readable as JSON ({e})") from None
+    if not isinstance(data, list) or not all(isinstance(f, dict) for f in data):
+        raise ScoreError(f"{path}: a flags file must be a JSON list of objects")
+    return data
+
+
 def read_pages(src) -> tuple[dict[str, str], dict[str, list], Path | None]:
     """{stem: md}, {stem: flags}, the folder holding review.jsonl (if any) of a pages
     folder, an export folder (its pages/ subfolder) or a text.md file."""
@@ -87,10 +99,7 @@ def read_pages(src) -> tuple[dict[str, str], dict[str, list], Path | None]:
         for d in (folder / "pages", folder, src.parent if src.is_file() else src):
             f = d / f"{stem}.flags.json"
             if f.is_file():
-                try:
-                    flags[stem] = json.loads(f.read_text("utf-8"))
-                except json.JSONDecodeError:
-                    flags[stem] = []
+                flags[stem] = read_flags(f)
                 break
         flags.setdefault(stem, [])
     return mds, flags, folder

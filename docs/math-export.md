@@ -313,7 +313,9 @@ gpdf-cli math-score --ref REF_DIR --cand OUT\book --out SCORES [--pages 63-81]
 ```
 
 `--ref` and `--cand` are page folders (`pNNN.md` + `pNNN.flags.json`),
-math-export folders, or `text.md` files (split by their page markers).
+math-export folders, or `text.md` files (split by their page markers). A flags file that is
+not a readable JSON list of objects is an error naming the file (exit code 1), never
+read as "no flags".
 
 **Reference scope.** A reference page whose flags include a `dropped` (or
 `page_anomaly`) flag saying part of the page was not transcribed is scored
