@@ -283,6 +283,93 @@ def pack(export, out, kinds=DISPLAY_KINDS, batch_size: int = BATCH_SIZE,
     return summary
 
 
+SMALL_SAMPLE = 20
+
+
+def review_all_inline(sampled: int, value_errors: int) -> bool:
+    """A chapter's inline items are all reviewed when its sample finds 2 value errors, or
+    1 when fewer than SMALL_SAMPLE spans were sampled (at a ~1 % inline value-error rate,
+    one error in 40 is expected noise)."""
+    return value_errors >= 2 or (value_errors >= 1 and sampled < SMALL_SAMPLE)
+
+
+def _value_changed(old: str, new: str) -> bool:
+    from gpdf.pipeline.mathocr import latex as L
+
+    def key(s):
+        return re.sub(r"[{}\s]", "", L.style_free(L.norm_str(L.tokens(s))))
+    return key(old) != key(new)
+
+
+def _ranges(nums: list[int]) -> str:
+    out, start = [], None
+    for n in sorted(nums):
+        if start is None:
+            start = prev = n
+        elif n == prev + 1:
+            prev = n
+        else:
+            out.append(f"{start}-{prev}" if prev > start else str(start))
+            start = prev = n
+    if start is not None:
+        out.append(f"{start}-{prev}" if prev > start else str(start))
+    return ",".join(out)
+
+
+def followup(review_dir) -> dict:
+    """Per chapter of a packed review with an inline sample: spans sampled, value errors
+    (an inline replace that changes more than style), style-only changes, and whether all
+    the chapter's inline items must be reviewed (review_all_inline), with its pages."""
+    rdir = Path(review_dir)
+    summary = json.loads((rdir / "pack.json").read_text("utf-8"))
+    export = Path(summary["export"])
+    chap = chapters(export / "pages")
+    sampled: dict[str, int] = {}
+    for b in summary["batches"]:
+        for s in (rdir / b["batch"] / "items.jsonl").read_text("utf-8").splitlines():
+            if s.strip() and json.loads(s)["kind"] == "inline_span":
+                name = chap.get(int(json.loads(s)["file"]), "")
+                sampled[name] = sampled.get(name, 0) + 1
+    errors: dict[str, int] = {}
+    style: dict[str, int] = {}
+    dec_dir = rdir / "decisions"
+    for path in sorted(dec_dir.glob("*.jsonl")) if dec_dir.is_dir() else []:
+        for s in path.read_text("utf-8").splitlines():
+            if not s.strip():
+                continue
+            d = json.loads(s)
+            if d.get("action") != "replace" or not d.get("spans"):
+                continue
+            m = re.match(r"p(\d+)-", d["id"])
+            name = chap.get(int(m.group(1)), "") if m else ""
+            for sp in d["spans"]:
+                old, new = sp.get("latex_primary") or "", sp.get("latex") or ""
+                if old == new:
+                    continue
+                if _value_changed(old, new):
+                    errors[name] = errors.get(name, 0) + 1
+                else:
+                    style[name] = style.get(name, 0) + 1
+    out = {}
+    for name in sorted(set(summary.get("chapters", {})) | set(sampled),
+                       key=lambda n: min((f for f, c in chap.items() if c == n), default=0)):
+        n, e = sampled.get(name, 0), errors.get(name, 0)
+        out[name] = {"sampled": n, "value_errors": e, "style_changes": style.get(name, 0),
+                     "review_all": review_all_inline(n, e),
+                     "pages": _ranges([f for f, c in chap.items() if c == name])}
+    return {"review_dir": str(rdir.resolve()), "chapters": out}
+
+
+def followup_report(res: dict) -> str:
+    lines = []
+    for n, c in enumerate(res["chapters"].values(), 1):          # numbers only on screen
+        verdict = (f"review all inline (--pages {c['pages']})" if c["review_all"]
+                   else "sample enough")
+        lines.append(f"chapter {n}: {c['sampled']} sampled, {c['value_errors']} value error(s): "
+                     f"{verdict}")
+    return "\n".join(lines)
+
+
 def report(summary: dict) -> str:
     lines = [f"{summary['items']} item(s) in {len(summary['batches'])} batch(es): "
              + ", ".join(f"{k} {n}" for k, n in sorted(summary["by_kind"].items()))]

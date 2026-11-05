@@ -15,9 +15,13 @@ of 50, and a brief of about a page.
   `identity`, `stack`, `tag`, `missing_display`, `syntax` (the pack's default `--kinds`).
 - **Inline math, a sample**: 40 flagged spans per chapter (all of them when there are
   fewer), picked at random with a recorded seed (`--inline-sample 40`, the default, `--seed
-  S`), each its own item with a crop of its own line. If the sample finds
-  **any value error** (a `replace` that changes a value, not only style), review all of
-  that chapter's inline items: pack again with `--kinds inline --pages <the chapter>`.
+  S`), each its own item with a crop of its own line. Review all of a chapter's inline
+  items only when the sample finds **2 or more value errors** (a `replace` that changes
+  a value, not only style), or **1** when the chapter's sample has fewer than 20 spans:
+  at the measured ~1 % inline value-error rate, one error in 40 spans is expected and
+  says nothing about the chapter. `gpdf-cli math-review-followup REVIEW_DIR [--out
+  FILE]` applies the rule from the decisions and prints, per chapter, the spans sampled,
+  the value errors and the `--pages` to pack again with `--kinds inline`.
 - **No prose review.** The engine's prose error rate is already under the target.
 
 ## How

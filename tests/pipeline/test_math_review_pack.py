@@ -202,3 +202,31 @@ def test_an_identity_item_carries_the_check_and_its_numbers(tmp_path):
     assert got["identity_check"] == {"kind": "pmf", "failed": ["sums to 1"],
                                      "numbers": [{"params": {"theta": 0.5}, "support": "{0,1,...}",
                                                   "sum": 1.5}]}
+
+
+@pytest.mark.parametrize("sampled, errors, full", [
+    (40, 0, False), (40, 1, False), (40, 2, True), (19, 1, True), (19, 0, False), (20, 1, False)])
+def test_the_inline_follow_up_rule(sampled, errors, full):
+    assert pack.review_all_inline(sampled, errors) is full
+
+
+def test_followup_counts_value_errors_per_chapter_from_the_decisions(export, tmp_path, capsys):
+    rev = tmp_path / "rev"
+    pack.pack(export, rev, inline_sample=40)
+    # chapter 1 (pages 1-2, 4 spans): one value error and one style-only change -> review all
+    # (fewer than 20 spans sampled); chapter 2 (page 3): a flag only -> nothing more
+    (rev / "decisions" / "batch01.jsonl").write_text("".join(json.dumps(d) + "\n" for d in [
+        {"id": "p001-inline", "action": "replace",
+         "spans": [{"latex_primary": "a_1", "latex": "a_2", "occurrence": 1}]},
+        {"id": "p002-inline", "action": "replace",
+         "spans": [{"latex_primary": "c", "latex": "\mathbf{c}", "occurrence": 1}]},
+        {"id": "p003-inline", "action": "flag", "flag_type": "formula_uncertain", "note": "?"},
+    ]), "utf-8")
+    res = pack.followup(rev)
+    ch = list(res["chapters"].values())
+    assert [(c["sampled"], c["value_errors"], c["style_changes"], c["review_all"], c["pages"])
+            for c in ch] == [(4, 1, 1, True, "1-2"), (2, 0, 0, False, "3")]
+    assert cli.main(["math-review-followup", str(rev)]) == 0
+    out = capsys.readouterr().out
+    assert "chapter 1: 4 sampled, 1 value error(s): review all inline (--pages 1-2)" in out
+    assert "x^" not in out and "a_2" not in out                         # numbers only

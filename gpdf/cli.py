@@ -405,6 +405,18 @@ def build_parser() -> argparse.ArgumentParser:
                     help="N random flagged inline spans per chapter, each its own item (default "
                          "40, all when a chapter has fewer; 0: none)")
     mr.add_argument("--seed", type=int, default=0, help="the inline sample's seed (default 0)")
+    mf = sub.add_parser("math-review-followup",
+                        help="which chapters' inline items need a full review",
+                        description="From a packed review with an inline sample and its "
+                                    "decisions/: per chapter, the spans sampled and the value "
+                                    "errors found (an inline replace that changes more than "
+                                    "style). All of a chapter's inline items are reviewed when "
+                                    "the sample finds 2 value errors, or 1 when fewer than 20 "
+                                    "spans were sampled; pack them with --kinds inline --pages "
+                                    "<the chapter's pages>.")
+    mf.add_argument("review_dir", metavar="REVIEW_DIR", type=Path,
+                    help="the math-review-pack --out folder (pack.json, batchNN/, decisions/)")
+    mf.add_argument("--out", metavar="FILE", type=Path, help="also write the result as JSON")
     ms = sub.add_parser("math-score", help="score a math transcription against a reference",
                         description="Compare the candidate's pages with the reference's (pNNN.md "
                                     "folders, math-export folders or text.md files): display "
@@ -471,6 +483,8 @@ def main(argv: list[str] | None = None) -> int:
         return _math_apply_review_main(args)
     if args.command == "math-review-pack":
         return _math_review_pack_main(args)
+    if args.command == "math-review-followup":
+        return _math_review_followup_main(args)
     if args.command == "math-score":
         return _math_score_main(args)
     if args.command == "math-check-pages":
@@ -901,6 +915,21 @@ def _math_review_pack_main(args) -> int:
         return EXIT_ERROR
     print(pack.report(summary))
     print(f"batches, pack.json and render.py in {args.out}")
+    return EXIT_OK
+
+
+def _math_review_followup_main(args) -> int:
+    from gpdf.pipeline.mathocr import pack
+
+    try:
+        res = pack.followup(args.review_dir)
+        if args.out:
+            import json
+            args.out.write_text(json.dumps(res, ensure_ascii=False, indent=1) + "\n", "utf-8")
+    except (OSError, KeyError, ValueError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    print(pack.followup_report(res))
     return EXIT_OK
 
 
