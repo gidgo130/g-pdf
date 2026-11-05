@@ -108,7 +108,16 @@ the engine reads), `--crop-dpi 300` (review crops), `--check-identities` /
 `--mineru-home DIR`, `--allow-unpinned`; Marker: `--marker PATH`,
 `--llama-server PATH`, `--marker-gguf DIR`, `--no-marker`, `--marker-rule
 any|value|small`, `--inline-with basic|marker|either|both`; and
-`--style-page-consistency`.
+`--style-page-consistency`; `--allow-sleep`.
+
+On Windows, math-export keeps the PC from sleeping while it runs
+(`SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)`; the display may
+still turn off) and always clears the request when it ends, on errors too;
+`--allow-sleep` turns this off, and on other systems nothing is done. `run.json`
+records wall time (`seconds`, `engine_seconds.total`, `.marker`) and awake time
+apart (`awake_seconds`, `engine_seconds.total_awake`, `.marker_awake`,
+`.marker_per_page_awake`; Windows' unbiased interrupt time, the monotonic clock
+elsewhere), so timings stay honest if the machine sleeps anyway.
 
 Time on the trial machine (RTX 4060 laptop, 8 GB): about 7 s per page for the
 standard tier and 6 s for the basic one, plus about a minute of model loading

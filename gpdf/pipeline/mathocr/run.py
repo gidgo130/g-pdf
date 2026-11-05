@@ -26,7 +26,8 @@ import pymupdf
 from gpdf import __version__
 from gpdf.pipeline import tesseract
 from gpdf.pipeline.manuals import ManualsError, parse_pages, write_atomic
-from gpdf.pipeline.mathocr import MATHCHECK_HINT, assemble, engine, flags, labels, marker, second
+from gpdf.pipeline.mathocr import (MATHCHECK_HINT, assemble, awake, engine, flags, labels, marker,
+                                   second)
 
 SCHEMA = 1
 CROP_DPI = 300
@@ -58,6 +59,7 @@ class Options:
     marker_rule: str = "value"               # flags.MARKER_RULES (chosen on KBJ, MATH_2B)
     inline_with: str = "either"              # flags.INLINE_WITH (chosen on KBJ, MATH_3)
     style_page: bool = False                 # the page-consistency style rule (opt-in)
+    keep_awake: bool = True                  # hold a Windows PC awake (--allow-sleep: off)
 
 
 @dataclass
@@ -128,8 +130,14 @@ def _tesseract(explicit, notices) -> tesseract.Tesseract | None:
 
 
 def run(opts: Options, progress=None) -> Summary:
+    with awake.KeepAwake(opts.keep_awake):
+        return _run(opts, progress)
+
+
+def _run(opts: Options, progress=None) -> Summary:
     say = progress or (lambda *a, **k: None)
     t0 = time.time()
+    a0 = awake.awake_clock()
     notices: list[str] = []
     pdf = Path(opts.pdf)
     if not pdf.is_file():
@@ -155,11 +163,12 @@ def run(opts: Options, progress=None) -> Summary:
         cache = engine.Cache(opts.cache or root / "cache", sha, eng.version, opts.dpi)
         say(f"engine: mineru-kit {eng.version} ({eng.exe})")
         engine_seconds = {}
-        te = time.time()
+        te, ae = time.time(), awake.awake_clock()
         parsed = engine.run(eng, pdf, pages, cache, tiers=opts.tiers,
                             progress=lambda tier, d, n: say(f"  {tier}: {d}/{n} pages"),
                             log_dir=root / "logs")
         engine_seconds["total"] = round(time.time() - te, 1)
+        engine_seconds["total_awake"] = round(awake.awake_clock() - ae, 1)
         engine_seconds["parsed"] = parsed
         say(f"engine done in {engine_seconds['total']} s "
             f"(new pages: {', '.join(f'{k} {v}' for k, v in parsed.items())})")
@@ -176,15 +185,18 @@ def run(opts: Options, progress=None) -> Summary:
             mcache = marker.Cache(opts.cache or root / "cache", sha, mk.version)
             say(f"marker: {mk.version} with llama.cpp b{mk.llama_build} on {len(math_pages)} "
                 f"math pages ({len(mcache.missing(math_pages))} not cached)")
-            tm = time.time()
+            tm, am = time.time(), awake.awake_clock()
             n_new = marker.run(mk, pdf, math_pages, mcache,
                                progress=lambda d, n: say(f"  marker: {d}/{n} pages"),
                                log_dir=root / "logs")
             engine_seconds["marker"] = round(time.time() - tm, 1)
+            engine_seconds["marker_awake"] = round(awake.awake_clock() - am, 1)
             engine_seconds["marker_pages"] = len(math_pages)
             engine_seconds["marker_parsed"] = n_new
             if n_new:
                 engine_seconds["marker_per_page"] = round(engine_seconds["marker"] / n_new, 1)
+                engine_seconds["marker_per_page_awake"] = round(
+                    engine_seconds["marker_awake"] / n_new, 1)
             third = {p: marker.blocks(mcache.read(p)) for p in math_pages}
 
         # labels
@@ -265,6 +277,7 @@ def run(opts: Options, progress=None) -> Summary:
                 **page_stats.get(pg.file, {}),
             })
         seconds = round(time.time() - t0, 1)
+        awake_seconds = round(awake.awake_clock() - a0, 1)
         cache_bytes = _dir_size(Path(opts.cache or root / "cache"))
         totals = {"pages": len(assembled), "displays": sum(r["displays"] for r in per_page),
                   "inline_spans": sum(r["inline_spans"] for r in per_page), "items": kinds,
@@ -278,14 +291,15 @@ def run(opts: Options, progress=None) -> Summary:
                 "tiers": list(opts.tiers), "cache": str(cache.root),
                 "options": {"pages": opts.pages, "group_inline": opts.group_inline,
                             "marker_rule": opts.marker_rule, "inline_with": opts.inline_with,
-                            "style_page": opts.style_page,
+                            "style_page": opts.style_page, "keep_awake": opts.keep_awake,
                             "check_identities": want_ident,
                             "tesseract": tess.version if tess else None},
                 "labels": {"runs": fit.runs, "steps": fit.steps, "rejected": fit.rejected,
                            "sources": {str(p): sources[p] for p in pages}},
                 "notices": notices}
         write_atomic(root / "meta.json", json.dumps(meta, ensure_ascii=False, indent=1) + "\n")
-        run_rec = {"schema": SCHEMA, "seconds": seconds, "engine_seconds": engine_seconds,
+        run_rec = {"schema": SCHEMA, "seconds": seconds, "awake_seconds": awake_seconds,
+                   "engine_seconds": engine_seconds,
                    "cache_bytes": cache_bytes, "totals": totals, "pages": per_page}
         write_atomic(root / "run.json", json.dumps(run_rec, ensure_ascii=False, indent=1) + "\n")
         return Summary(root, len(assembled), totals["displays"], totals["inline_spans"], kinds,

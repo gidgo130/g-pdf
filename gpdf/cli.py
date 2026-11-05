@@ -350,6 +350,9 @@ def build_parser() -> argparse.ArgumentParser:
     me.add_argument("--style-page-consistency", action="store_true",
                     help="also flag a symbol that is both bold and not on one page (off by "
                          "default: bold X and X_1 is normal multivariate notation)")
+    me.add_argument("--allow-sleep", action="store_true",
+                    help="let Windows sleep during the run (by default math-export keeps the "
+                         "PC awake while it runs; elsewhere it never interferes)")
     me.add_argument("--cache", metavar="DIR", type=Path,
                     help="engine output cache (default OUTDIR/<stem>/cache)")
     me.add_argument("--tesseract", metavar="PATH",
@@ -814,7 +817,8 @@ def _math_export_main(args, parser) -> int:
                        args.inline == "per-page", args.crop_dpi, marker=args.marker,
                        llama_server=args.llama_server, marker_gguf=args.marker_gguf,
                        use_marker=args.use_marker, marker_rule=args.marker_rule,
-                       inline_with=args.inline_with, style_page=args.style_page_consistency)
+                       inline_with=args.inline_with, style_page=args.style_page_consistency,
+                       keep_awake=not args.allow_sleep)
     try:
         summary = run.run(opts, progress=print)
     except (run.MathExportError, engine.EngineError, OSError) as e:
