@@ -308,6 +308,22 @@ def test_a_double_exponential_density_finishes():
     assert out == ["density", "passed", "(-inf,inf)"]
 
 
+def test_putting_e_in_does_not_collapse_an_unevaluated_product():
+    # sympy 1.14: subs(e, E) on this parse_latex tree gives 1 (the unevaluated x^{-3/2}
+    # exponent); the standard inverse Gaussian density then "failed" to integrate to 1
+    import math
+    s = (r"\sqrt{\frac{\phi}{2 \pi}}e^{\phi}x^{- 3 / 2}"
+         r"\exp ( - \frac{1}{2}\phi \cdot (x + x^{- 1}) )")
+    expr = I._parse(s)
+    assert expr != 1
+    phi, x = 2.0, 1.1
+    want = math.sqrt(phi / (2 * math.pi)) * math.exp(phi) * x ** -1.5 * math.exp(-phi * (x + 1 / x) / 2)
+    got = float(expr.subs({s_: (phi if s_.name == "phi" else x) for s_ in expr.free_symbols}))
+    assert abs(got - want) < 1e-12
+    r = check("f(x) = " + s, "")
+    assert (r.kind, r.status) == ("density", "passed"), [(c.identity, c.status) for c in r.checks]
+
+
 def test_a_check_stuck_between_deadline_reads_is_stopped_by_the_item_timeout():
     # The deadline is only read between function evaluations; a check stuck inside one
     # (j21b hung 7.5 h that way) must still end, at ITEM_TIMEOUT. A subprocess, so a

@@ -391,7 +391,9 @@ def _parse(s: str, defs: dict | None = None, depth: int = 0):
             subs[sym] = sympy.I
         elif sym.name == "pi":
             subs[sym] = sympy.pi
-    expr = expr.subs(subs)
+    # xreplace, not subs: sympy 1.14's subs(e, E) can collapse an unevaluated parse_latex
+    # product to 1 (the standard inverse Gaussian density, with an x^{-3/2} factor)
+    expr = expr.xreplace(subs)
 
     def known(a):
         return isinstance(a, AppliedUndef) and (
@@ -429,13 +431,13 @@ def _parse(s: str, defs: dict | None = None, depth: int = 0):
                 d = _parse(_clean(defs[_canon(sym.name)]), defs, depth + 1)
                 if d is not None:
                     put[sym] = d
-        expr = expr.subs(put)
+        expr = expr.xreplace(put)
     # the books' conventions, also where p (or P) is not in this expression: q = 1 - p, Q = 1 + P
     names = {_canon(x.name): x for x in expr.free_symbols}
     if "q" in names and not (defs and "q" in defs):
-        expr = expr.subs(names["q"], 1 - names.get("p", sympy.Symbol("p")))
+        expr = expr.xreplace({names["q"]: 1 - names.get("p", sympy.Symbol("p"))})
     if "Q" in names and not (defs and "Q" in defs):
-        expr = expr.subs(names["Q"], 1 + names.get("P", sympy.Symbol("P")))
+        expr = expr.xreplace({names["Q"]: 1 + names.get("P", sympy.Symbol("P"))})
     return expr
 
 
