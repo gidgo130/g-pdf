@@ -1,0 +1,715 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+r"""gpdf-cli math-crosscheck: the transcribed formulas of a book against SciPy.
+
+A spec (JSON, kept in the run's private folder: it quotes the book's notation) says where
+the formulas are and how the book parametrises each distribution:
+
+    {"pages": "...\\text.md",               the final pages: a text.md, pages folder or export
+     "tol": 1e-8,
+     "notation": [["(?<![A-Za-z\\])Z\\s*\\(", "\\phi("]],   regex rewrites before parsing
+     "defs": {"q": "1 - p"},                 constants the book defines once
+     "dists": {"gamma": {"scipy": "gamma",   the explicit parametrisation table: SciPy's
+                         "args": {"a": "alpha", "scale": "beta", "loc": "gamma"},
+                         "points": [{"alpha": 2.5, "beta": 1.5, "gamma": 0, "@x": 2.2,
+                                     "@t": 0.2}, {...}, {...}]}},
+     "entries": [{"id": "gamma pdf (17.1)", "where": {"tag": "17.1"}, "eq": "rhs",
+                  "qty": "pdf", "dist": "gamma", "var": "x"}],
+     "scan": [{"pages": "357-380", "dist": "gamma"}]}
+
+``args`` are Python expressions in the book's parameter names (``"mu / lam"``), so a
+parametrisation mismatch is a fix to this table, never a failure. Each point gives the
+book's parameters and the argument of each quantity: ``@x`` (pdf, pmf, cdf, sf, hazard),
+``@t`` (mgf, cgf, cf), ``@z`` (pgf), ``@p`` (quantile); moments take r = 1, 2, 3 at the
+three points unless the entry fixes ``r``. ``scan`` harvests every display row of those
+pages whose left-hand side names a quantity (f(x), F(x), M(t), E[X], \mu'_r, \beta_2, ...).
+
+Each entry is evaluated at every point (the book's formula through the identity checks'
+LaTeX parser, mpmath; the reference by SciPy in an external Python, ``--scipy-python``,
+crosscheck_ref.py) and compared at a relative tolerance of 1e-8, loosened only to the
+reference's own quadrature error (recorded). ``inconclusive``: it cannot be evaluated (no
+parse, symbols the table does not give, SciPy has no value). Every entry has a hard limit of
+ITEM_TIMEOUT seconds. Results go to crosscheck.json and REPORT.md (formulas); the screen gets
+counts. ``mark_formulas`` gives the formulas that passed status ``crosschecked`` in a
+formulas.jsonl (the earlier status kept as ``was``; a flagged formula stays flagged).
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import queue
+import re
+import subprocess
+import sys
+import threading
+from pathlib import Path
+
+from gpdf.pipeline.manuals import ManualsError, parse_pages, write_atomic
+from gpdf.pipeline.mathocr import latex as L
+from gpdf.pipeline.mathocr import watch
+
+TOL = 1e-8
+ITEM_TIMEOUT = watch.ITEM_TIMEOUT
+REF_SCRIPT = Path(__file__).with_name("crosscheck_ref.py")
+ENV_VAR = "GPDF_SCIPY_PYTHON"
+ARG_OF = {"pdf": "@x", "pmf": "@x", "cdf": "@x", "sf": "@x", "hazard": "@x", "quantile": "@p",
+          "mgf": "@t", "cgf": "@t", "cf": "@t", "pgf": "@z", "isf": "@a", "cum_hazard": "@x",
+          "laplace": "@s", "log_cf": "@t"}
+DEFAULT_ARGS = {"@p": 0.3, "@a": 0.2, "@s": 0.4, "@z": 0.6, "@t": 0.25}
+MOMENTS = ("raw_moment", "central_moment", "cumulant")
+SCALARS = ("mean", "var", "sd", "skew", "skew2", "kurt", "excess_kurt", "entropy", "mode",
+           "median")
+QUANTITIES = tuple(ARG_OF) + MOMENTS + SCALARS
+CF_UNIT = "i"
+
+
+class CrosscheckError(Exception):
+    """The spec or the pages cannot be used; the message is for the user."""
+
+
+# ---------------------------------------------------------------- the reference worker
+
+class RefWorker:
+    """crosscheck_ref.py in an external Python with SciPy, one JSON line per request; a
+    request past its timeout kills the worker (a fresh one starts for the next)."""
+
+    def __init__(self, python: str, script: Path | None = None, timeout: float | None = None):
+        self.python = python
+        self.script = Path(script or REF_SCRIPT)
+        self.timeout = timeout or ITEM_TIMEOUT
+        self.proc = None
+
+    def _start(self):
+        self.proc = subprocess.Popen([self.python, "-I", str(self.script)], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                     encoding="utf-8", bufsize=1)
+        self.lines: queue.Queue = queue.Queue()
+        self.err: list[str] = []
+        out, q, err = self.proc.stdout, self.lines, self.proc.stderr
+
+        def read():
+            for s in out:
+                q.put(s)
+            q.put(None)                       # the worker ended
+        threading.Thread(target=read, daemon=True).start()
+        threading.Thread(target=lambda: [self.err.append(s) for s in err], daemon=True).start()
+
+    def ask(self, req: dict) -> dict:
+        """One answer, matched to its request by id: a late answer to an abandoned request
+        is dropped, and any interruption (the entry's own time limit) resets the worker."""
+        if self.proc is None or self.proc.poll() is not None:
+            self._start()
+        self.n = getattr(self, "n", 0) + 1
+        try:
+            self.proc.stdin.write(json.dumps({**req, "id": self.n}) + "\n")
+            self.proc.stdin.flush()
+            while True:
+                line = self.lines.get(timeout=self.timeout)
+                if line is None:
+                    last = next((s.strip() for s in reversed(self.err) if s.strip()),
+                                "no message")
+                    self.close()
+                    return {"error": f"the reference worker ended: {last}"}
+                ans = json.loads(line)
+                if ans.get("id", self.n) == self.n:
+                    return ans
+        except queue.Empty:
+            self.close()
+            return {"error": f"the reference took over {self.timeout:g} s"}
+        except (OSError, ValueError) as e:
+            self.close()
+            return {"error": f"reference worker: {e}"}
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        if self.proc is not None:
+            try:
+                self.proc.kill()
+                self.proc.wait(10)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            self.proc = None
+
+
+# ---------------------------------------------------------------- locating formulas
+
+def load_pages(src) -> dict[int, str]:
+    from gpdf.pipeline.mathocr.score import ScoreError, read_pages
+    try:
+        mds, _, _ = read_pages(src)
+    except ScoreError as e:
+        raise CrosscheckError(str(e)) from None
+    return {int(k[1:]): v for k, v in mds.items()}
+
+
+def _displays(md: str) -> list[tuple[str, str | None]]:
+    return [L.split_tag(body, trailing) for body, trailing in L.extract(md)[0]]
+
+
+def locate(pages: dict[int, str], where: dict) -> tuple[int, str, int, str | None]:
+    """(file, kind 'd' or 'i', 1-based position, LaTeX) of a spec's ``where``."""
+    if "tag" in where:
+        want = re.sub(r"\s", "", str(where["tag"]))
+        files = [int(where["page"])] if "page" in where else sorted(pages)
+        for f in files:
+            for k, (body, tag) in enumerate(_displays(pages.get(f, "")), 1):
+                if tag == want:
+                    return f, "d", k, body
+        raise CrosscheckError(f"no display tagged ({want})")
+    f = int(where["page"])
+    if f not in pages:
+        raise CrosscheckError(f"page {f} not in the pages")
+    if "display" in where:
+        ds = _displays(pages[f])
+        k = int(where["display"])
+        if not 1 <= k <= len(ds):
+            raise CrosscheckError(f"page {f} has {len(ds)} displays, not {k}")
+        return f, "d", k, ds[k - 1][0]
+    if "inline_n" in where:
+        spans = L.extract(pages[f])[1]
+        k = int(where["inline_n"])
+        if not 1 <= k <= len(spans):
+            raise CrosscheckError(f"page {f} has {len(spans)} inline spans, not {k}")
+        return f, "i", k, spans[k - 1]
+    if "inline" in where:
+        spans = L.extract(pages[f])[1]
+        for k, s in enumerate(spans, 1):
+            if re.search(where["inline"], s):
+                return f, "i", k, s
+        raise CrosscheckError(f"no inline span on page {f} matches {where['inline']!r}")
+    raise CrosscheckError("where needs a tag, a display or an inline pattern")
+
+
+ROW_SPLIT = re.compile(r"\\\\(?:\[[^\]]*\])?")
+
+
+def rows(latex: str) -> list[str]:
+    from gpdf.pipeline.mathocr import identities as I
+    body = I.ALIGN_ENV.sub(" ", latex)
+    return [r.replace("&", " ").strip() for r in ROW_SPLIT.split(body) if r.strip()]
+
+
+def piece(latex: str, row=None, eq=None) -> str:
+    """The part of a display an entry checks: a row, then the right-hand side (``eq``
+    "rhs": after the last top-level "="), equation ``eq`` (identities.equations), or the
+    whole (side conditions dropped)."""
+    from gpdf.pipeline.mathocr import identities as I
+    s = rows(latex)[int(row)] if row is not None else latex
+    if isinstance(eq, int):
+        eqs = I.equations(s)
+        if not 0 <= eq < len(eqs):
+            raise CrosscheckError(f"equation {eq} not found ({len(eqs)} in the piece)")
+        return eqs[eq][1]
+    s = I._clean(I._pre(s)) if eq in ("rhs", None, "full") else s
+    if eq == "rhs":
+        s = I._split_top(s, ["="])[-1]
+    return I._strip_conditions(s)
+
+
+# ---------------------------------------------------------------- the book's value
+
+def _brackets(s: str) -> str:
+    r"""\Gamma[...] and \exp[...]: square brackets as the call's parentheses."""
+    out, i = [], 0
+    for m in re.finditer(r"\\(Gamma|exp|log)\s*(\\[bB]ig[lr]?\s*|\\left\s*)?\[", s):
+        if m.start() < i:
+            continue
+        depth, j = 1, m.end()
+        while j < len(s) and depth:
+            depth += {"[": 1, "]": -1}.get(s[j], 0)
+            j += 1
+        inner = re.sub(r"\\([bB]ig[lr]?|right)\s*$", "", s[m.end():j - 1])
+        out.append(s[i:m.start()] + "\\" + m.group(1) + " (" + inner + ")")
+        i = j
+    return "".join(out) + s[i:]
+
+
+def book_expr(text: str, notation=(), defs=None):
+    """A sympy expression of a formula piece, or None."""
+    from gpdf.pipeline.mathocr import identities as I
+    s = text
+    for rx, rep in notation:
+        s = re.sub(rx, rep, s)
+    s = re.sub(r"\\ln\b", r"\\log", _brackets(I._clean(s)))
+    return I._parse(s, defs)
+
+
+def evaluate(expr, values: dict):
+    """complex value of expr with the named values put in; (None, reason) if it can't."""
+    import sympy
+    from gpdf.pipeline.mathocr import identities as I
+    names = {}
+    for sym in expr.free_symbols:
+        names.setdefault(I._canon(sym.name), []).append(sym)
+    missing = sorted(n for n in names if n not in values)
+    if missing:
+        return None, "symbols the table does not give: " + ", ".join(missing)
+    sub = {sym: sympy.nsimplify(values[n]) if isinstance(values[n], int) else values[n]
+           for n, syms in names.items() for sym in syms}
+    try:
+        v = complex(sympy.N(expr.xreplace(sub), 25))      # xreplace: see identities._parse
+    except (TypeError, ValueError, ZeroDivisionError, OverflowError) as e:
+        return None, f"not a number ({type(e).__name__})"
+    if math.isnan(v.real) or math.isnan(v.imag) or math.isinf(abs(v)):
+        return None, "not a finite number"
+    return v, None
+
+
+# ---------------------------------------------------------------- harvesting
+
+_P = r"(?:\^\{?\\prime\}?|')"
+MOMENT_LHS = [
+    (re.compile(r"^\\mu\s*(?:" + _P + r"\s*_\s*\{?\s*(\w)\s*\}?|_\s*\{?\s*(\w)\s*\}?\s*" + _P + r")"
+                r"\s*(?:\(\s*X\s*\))?$"), "raw_moment"),
+    (re.compile(r"^E\s*[\[(]\s*X\s*\^\s*\{?\s*(\w)\s*\}?\s*[\])]$"), "raw_moment"),
+    (re.compile(r"^\\mu\s*_\s*\{?\s*(\w)\s*\}?\s*(?:\(\s*X\s*\))?$"), "central_moment"),
+    (re.compile(r"^\\kappa\s*_\s*\{?\s*(\w)\s*\}?\s*(?:\(\s*X\s*\))?$"), "cumulant"),
+]
+SCALAR_LHS = [
+    (re.compile(r"^\\sqrt\s*\{\s*\\beta\s*_\s*\{?1\}?\s*\}\s*(?:\(\s*X\s*\))?$"), "skew"),
+    (re.compile(r"^\\beta\s*_\s*\{?1\}?\s*(?:\(\s*X\s*\))?$"), "skew2"),
+    (re.compile(r"^\\beta\s*_\s*\{?2\}?\s*(?:\(\s*X\s*\))?$"), "kurt"),
+    (re.compile(r"^\\alpha\s*_\s*\{?3\}?\s*\(\s*X\s*\)$"), "skew"),
+    (re.compile(r"^\\alpha\s*_\s*\{?4\}?\s*\(\s*X\s*\)$"), "kurt"),
+    (re.compile(r"^\\sigma\s*\(\s*X\s*\)$"), "sd"),
+    (re.compile(r"^\\sigma\s*\^\s*\{?2\}?\s*\(\s*X\s*\)$"), "var"),
+    (re.compile(r"^H\s*\(\s*X\s*\)$"), "entropy"),
+    (re.compile(r"^(?:\\operatorname\{median\}|\\mathrm\{median\}|\\text\{median\})"
+                r"\s*(?:\(\s*X\s*\))?$", re.I), "median"),
+    (re.compile(r"^(?:\\operatorname\{mode\}|\\mathrm\{mode\}|\\text\{mode\})"
+                r"\s*(?:\(\s*X\s*\))?$", re.I), "mode"),
+]
+FROM_IDENTITY = {"density": "pdf", "cdf": "cdf", "survival": "sf", "hazard": "hazard",
+                 "mgf": "mgf", "cf": "cf", "pgf": "pgf", "mean": "mean", "variance": "var",
+                 "pmf": "pmf"}
+PMF_LHS = re.compile(r"^(?:\\Pr|P)\s*[\[(]\s*X\s*=\s*([a-z])\s*[\])]$")
+
+
+def quantity(lhs: str, before: str = "") -> tuple[str | None, str | None, int | str | None]:
+    """(quantity, variable, moment order) a left-hand side names, or (None, None, None)."""
+    from gpdf.pipeline.mathocr import identities as I
+    s = I._clean(lhs).strip()
+    m = PMF_LHS.match(s)
+    if m:
+        return "pmf", m.group(1), None
+    for rx, q in MOMENT_LHS:
+        m = rx.match(s)
+        if m:
+            r = next(g for g in m.groups() if g)
+            if q == "central_moment" and r == "1":
+                return None, None, None
+            return q, None, int(r) if r.isdigit() else r
+    for rx, q in SCALAR_LHS:
+        if rx.match(s):
+            return q, None, None
+    kind, variables, _ = I.classify(lhs, before)
+    q = FROM_IDENTITY.get(kind or "")
+    if q is None or len(variables) > 1:
+        return None, None, None
+    if q == "mgf" and re.search(r"\\log|\\ln", s):
+        return None, None, None                      # E[e^{t log X}]: a Mellin transform
+    if q == "mgf" and re.search(r"e\s*\^\s*\{?\s*\(?\s*i\s*t", s):
+        q = "cf"                                     # E[e^{itX}]
+    return q, (variables[0] if variables else None), None
+
+
+def harvest(pages: dict[int, str], scan: list[dict], dists: dict) -> list[dict]:
+    from gpdf.pipeline.mathocr import identities as I
+    out = []
+    for sc in scan:
+        try:
+            files = {i + 1 for i in parse_pages(sc["pages"], 10 ** 6)}
+        except ManualsError as e:
+            raise CrosscheckError(str(e)) from None
+        dist = sc["dist"]
+        discrete = bool(dists.get(dist, {}).get("discrete"))
+        for f in sorted(files & set(pages)):
+            md = pages[f]
+            for k, (body, tag) in enumerate(_displays(md), 1):
+                for i, (lhs, rhs) in enumerate(I.equations(body)):
+                    q, var, r = quantity(lhs)
+                    if q is None:
+                        continue
+                    if q == "pdf" and discrete:
+                        q = "pmf"
+                    e = {"id": f"p{f:03d}-d{k:02d}#{i} {q}", "where": {"page": f, "display": k},
+                         "eq": i, "qty": q, "dist": dist, "harvested": True}
+                    if var:
+                        e["var"] = var
+                    if isinstance(r, int):
+                        e["r"] = r
+                    elif r:
+                        e["r_symbol"] = r
+                    out.append(e)
+    return out
+
+
+# ---------------------------------------------------------------- one entry
+
+def _eval_all(exprs: dict, point: dict) -> dict:
+    """{name: value} of Python expressions in the book's parameter names; a name that is a
+    Python keyword (lambda) is written with a trailing underscore (lambda_)."""
+    import keyword
+    params = {k: v for k, v in point.items() if not k.startswith("@")}
+    env = {**params, **{k + "_": v for k, v in params.items() if keyword.iskeyword(k)},
+           "math": math, "sqrt": math.sqrt, "exp": math.exp, "log": math.log, "pi": math.pi,
+           "gamma": math.gamma} | params
+    return {k: (eval(v, {"__builtins__": {}}, env) if isinstance(v, str) else v)  # noqa: S307
+            for k, v in exprs.items()}
+
+
+def _args(dist: dict, point: dict) -> dict:
+    """SciPy's arguments from the book's parameters."""
+    return _eval_all(dist.get("args", {}), point)
+
+
+def _close(b: complex, s: complex, tol: float) -> tuple[bool, float]:
+    d = abs(b - s)
+    if abs(s) < 1e-12:
+        return d <= tol, d
+    rel = d / abs(s)
+    return rel <= tol, rel
+
+
+def check_entry(e: dict, pages: dict[int, str], spec: dict, ref) -> dict:
+    """One entry; an ``identify`` entry (no quantity named) is tried against every quantity
+    its free variable allows, and passes under the first that matches."""
+    res = {"id": e.get("id"), "qty": e.get("qty"), "dist": e["dist"],
+           "harvested": bool(e.get("harvested")), "status": "inconclusive", "points": []}
+    try:
+        with watch.hard_timeout(ITEM_TIMEOUT):
+            prep = _prepare(e, pages, spec, res)
+    except watch.ItemTimeout:
+        res["reason"] = f"over {ITEM_TIMEOUT:g} s (parsing)"
+        return res
+    if prep is None:
+        return res
+    expr, dist = prep
+    cands = [e["qty"]] if e.get("qty") else _candidates(expr, e, dist)
+    if not cands:
+        res["reason"] = res.get("reason") or "no quantity fits its variables"
+        return res
+    tried = []
+    for q in cands:
+        sub = {"status": "inconclusive", "points": []}
+        try:
+            with watch.hard_timeout(ITEM_TIMEOUT):
+                _compare(expr, e, q, dist, spec, ref, sub)
+        except watch.ItemTimeout:
+            sub["reason"] = f"over {ITEM_TIMEOUT:g} s"
+        tried.append((q, sub))
+        if sub["status"] == "passed":
+            break
+    if e.get("qty"):
+        res.update(tried[0][1])
+        return res
+    res["identify"] = True
+    passed = [(q, s) for q, s in tried if s["status"] == "passed"]
+    if passed:
+        res.update(passed[0][1])
+        res["qty"] = passed[0][0]
+        return res
+    failed = [(q, s) for q, s in tried if s["status"] == "failed"]
+    res["qty"] = None
+    res["status"] = "inconclusive"
+    res["unidentified"] = True
+    res["reason"] = "matches none of " + ", ".join(cands)
+    if failed:
+        q, s = min(failed, key=lambda x: x[1].get("worst", 1e300))
+        res["closest"] = {"qty": q, "worst": s.get("worst"), "points": s["points"]}
+    return res
+
+
+def _prepare(e, pages, spec, res):
+    """Locate, cut and parse the entry's formula: (sympy expression, table row) or None."""
+    try:
+        f, kind, k, latex = locate(pages, e["where"])
+    except CrosscheckError as ex:
+        res["reason"] = str(ex)
+        return None
+    m = re.search(r'<!--\s*page\s+printed="([^"]*)"', pages[f])
+    res.update(file=f, printed=m.group(1) if m else None, formula=f"p{f:03d}-{kind}{k:02d}",
+               latex=latex)
+    if e.get("qty") and e["qty"] not in QUANTITIES:
+        res["reason"] = f"unknown quantity {e['qty']}"
+        return None
+    dist = spec["dists"].get(e["dist"])
+    if dist is None:
+        res["reason"] = f"distribution {e['dist']} not in the table"
+        return None
+    try:
+        text = piece(latex, e.get("row"), e.get("eq", "rhs" if kind == "d" else "full"))
+    except (CrosscheckError, IndexError) as ex:
+        res["reason"] = str(ex)
+        return None
+    res["piece"] = text
+    defs = {**spec.get("defs", {}), **e.get("defs", {})}
+    expr = book_expr(text, spec.get("notation", []) + e.get("notation", []), defs)
+    if expr is None:
+        res["reason"] = "the formula does not parse"
+        return None
+    return expr, dist
+
+
+VAR_CLASSES = {   # the quantities a formula in this free variable may be (identify mode)
+    "x": ["pdf", "cdf", "sf", "hazard", "cum_hazard"], "y": ["pdf", "cdf", "sf", "hazard"],
+    "t": ["mgf", "cf", "log_cf", "cgf"], "s": ["laplace"], "r": ["raw_moment", "cumulant",
+                                                                 "central_moment"],
+    "alpha": ["isf", "quantile"], "p": ["quantile", "isf"], "u": ["quantile", "isf"]}
+DISCRETE_CLASSES = {"x": ["pmf", "cdf", "sf", "hazard"], "y": ["pmf", "cdf", "sf"],
+                    "k": ["pmf", "cdf", "sf"], "i": ["pmf", "cdf", "sf"],
+                    "t": ["pgf", "mgf", "cf", "log_cf", "cgf"], "z": ["pgf"], "s": ["pgf"],
+                    "r": ["raw_moment", "cumulant", "central_moment"]}
+SCALAR_CLASS = ["mean", "var", "sd", "skew", "kurt", "excess_kurt", "mode", "median", "entropy"]
+
+
+def _candidates(expr, e, dist) -> list[str]:
+    from gpdf.pipeline.mathocr import identities as I
+    known = set()
+    for p in dist["points"]:
+        known |= {k for k in p if not k.startswith("@")}
+    known |= set(dist.get("derived", {})) | set(dist.get("standard", {})) | set(e.get("fixed", {}))
+    free = sorted({I._canon(s.name) for s in expr.free_symbols} - known)
+    if not free:
+        return list(SCALAR_CLASS)
+    if len(free) > 1:
+        return []
+    classes = DISCRETE_CLASSES if dist.get("discrete") else VAR_CLASSES
+    out = classes.get(free[0], [])
+    e.setdefault("var", free[0])
+    if free[0] == "r":
+        e["r_symbol"] = "r"
+    return out
+
+
+def _compare(expr, e, q, dist, spec, ref, res):
+    """Compare expr as quantity q at the table's points; fills res (status, points, ...)."""
+    from gpdf.pipeline.mathocr import identities as I
+    tol = float(e.get("tol", spec.get("tol", TOL)))
+    worst, failed, why = 0.0, False, None
+    present = {I._canon(s.name) for s in expr.free_symbols}
+    # a standardized form (a density without sigma): the table's standard values
+    standard = {} if e.get("no_standard") else {
+        k2: v for k2, v in dist.get("standard", {}).items() if k2 not in present}
+    if standard:
+        res["standardized"] = standard
+    for n, point in enumerate(dist["points"]):
+        point = {**DEFAULT_ARGS, **point, **standard, **e.get("fixed", {})}
+        # derived parameters (theta = alpha * beta, phi = lambda / mu), after the standard values
+        point.update(_eval_all(dist.get("derived", {}), point))
+        values = {k2: v for k2, v in point.items() if not k2.startswith("@")}
+        arg = None
+        if q in ARG_OF:
+            arg = point.get(e.get("arg", ARG_OF[q]))
+            values[e.get("var") or ARG_OF[q][1:]] = arg
+        r = None
+        if q in MOMENTS:
+            r = e.get("r") or [1, 2, 3][n % 3] + (1 if q == "central_moment" else 0)
+            if isinstance(r, list):              # one order per point (even orders only, ...)
+                r = r[n % len(r)]
+            if e.get("r_symbol"):
+                values[e["r_symbol"]] = r
+        b, why = evaluate(expr, values)
+        if b is None:
+            res["points"].append({"values": values, "book": None})
+            res["reason"] = why
+            return res
+        args = _args(dist, point)
+        a = ref.ask({"dist": dist["scipy"], "args": args, "qty": "skew" if q == "skew2" else q,
+                     "x": arg, "r": r})
+        if "error" in a:
+            res["points"].append({"values": values, "book": [b.real, b.imag]})
+            res["reason"] = "reference: " + a["error"]
+            return res
+        s = complex(a["value"], a.get("imag") or 0.0)
+        if q == "skew2":
+            s = s * s
+        t = tol
+        if a.get("tol_floor", 0) * 10 > t:
+            t = a["tol_floor"] * 10
+            res["tol_reason"] = f"loosened to {t:.1e}: {a['how']} error estimate"
+        ok, err = _close(b, s, t)
+        worst = max(worst, err)
+        failed |= not ok
+        res["points"].append({"values": values, "args": args, "book": [b.real, b.imag],
+                              "ref": [s.real, s.imag], "err": err, "ok": ok, "tol": t})
+    res["status"] = "failed" if failed else "passed"
+    res["worst"] = worst
+    return res
+
+
+def identify_entries(pages: dict[int, str], specs: list[dict]) -> list[dict]:
+    """Every display row and every inline span with an operation in it, on the given pages:
+    entries without a quantity, tried against what their variable allows (a book whose
+    summary tables lost their row labels)."""
+    out = []
+    for sp in specs:
+        try:
+            files = {i + 1 for i in parse_pages(sp["pages"], 10 ** 6)}
+        except ManualsError as ex:
+            raise CrosscheckError(str(ex)) from None
+        for f in sorted(files & set(pages)):
+            md = pages[f]
+            for k, (body, tag) in enumerate(_displays(md), 1):
+                n_rows = len(rows(body))
+                for rw in range(n_rows):
+                    out.append({"id": f"p{f:03d}-d{k:02d}r{rw} ?", "where": {"page": f, "display": k},
+                                "row": rw if n_rows > 1 else None, "eq": "rhs",
+                                "dist": sp["dist"], "identify": True, "harvested": True})
+            if sp.get("inline", True):
+                for k, s in enumerate(L.extract(md)[1], 1):
+                    if not INLINE_OPERATION.search(s) or INLINE_RELATION.search(s):
+                        continue
+                    out.append({"id": f"p{f:03d}-i{k:02d} ?", "where": {"page": f, "inline_n": k},
+                                "eq": "rhs", "dist": sp["dist"], "identify": True,
+                                "harvested": True})
+    return out
+
+
+INLINE_OPERATION = re.compile(r"\\frac|\\exp|\\Gamma|\\log|\\sqrt|\^|/|\\binom|[+\-]|\\cdot|\(")
+INLINE_RELATION = re.compile(r"<|>|\\le|\\ge|\\in\b|\\to\b|\\sim|,|\\ne")
+
+
+# ---------------------------------------------------------------- the run
+
+def run(spec_path, out, python: str | None = None, only=None, ref=None) -> dict:
+    spec_path = Path(spec_path)
+    try:
+        spec = json.loads(spec_path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise CrosscheckError(f"{spec_path}: {e}") from None
+    src = Path(spec["pages"])
+    if not src.is_absolute():
+        src = spec_path.parent / src
+    pages = load_pages(src)
+    entries = list(spec.get("entries", []))
+    seen = set()                 # (file, kind, position, quantity) of the hand entries
+    for e in entries:
+        try:
+            f, kind, k, _ = locate(pages, e["where"])
+            seen.add((f, kind, k, e["qty"]))
+        except (CrosscheckError, KeyError):
+            pass                 # reported when the entry is checked
+    covered = {(f, kind, k) for f, kind, k, _ in seen}
+    for h in identify_entries(pages, spec.get("identify", [])):
+        try:
+            f, kind, k, _ = locate(pages, h["where"])
+        except CrosscheckError:
+            continue
+        if (f, kind, k) not in covered and h["id"] not in set(spec.get("skip", [])):
+            h.update(spec.get("overrides", {}).get(h["id"], {}))
+            entries.append(h)
+    skip = set(spec.get("skip", []))
+    over = spec.get("overrides", {})          # harvested id -> fields to set (r, dist, fixed, ...)
+    for h in harvest(pages, spec.get("scan", []), spec.get("dists", {})):
+        key = (h["where"]["page"], "d", h["where"]["display"], h["qty"])
+        if key not in seen and h["id"] not in skip:
+            h.update(over.get(h["id"], {}))
+            entries.append(h)
+    if only:
+        entries = [e for e in entries if e.get("id") in set(only)]
+    own = ref is None
+    if own:
+        python = python or os.environ.get(ENV_VAR)
+        if not python:
+            raise CrosscheckError(f"no Python with SciPy: give --scipy-python or set ${ENV_VAR}")
+        ref = RefWorker(python)
+    try:
+        results = [check_entry(e, pages, spec, ref) for e in entries]
+        for r in results:
+            if r.get("identify") and r.get("qty") and r["id"].endswith("?"):
+                r["id"] = r["id"][:-1] + r["qty"]
+    finally:
+        if own:
+            ref.close()
+    counts = {s: sum(1 for r in results if r["status"] == s)
+              for s in ("passed", "failed", "inconclusive")}
+    counts["run"] = len(results)
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    res = {"spec": str(spec_path), "pages": str(src), "counts": counts, "results": results}
+    write_atomic(out / "crosscheck.json", json.dumps(res, ensure_ascii=False, indent=1) + "\n")
+    write_atomic(out / "REPORT.md", report_md(res))
+    return res
+
+
+def report_md(res: dict) -> str:
+    c = res["counts"]
+    lines = ["# Cross-check against SciPy (private: quotes the book's formulas)", "",
+             f"Spec `{res['spec']}`; {c['run']} entries: {c['passed']} passed, {c['failed']} "
+             f"failed, {c['inconclusive']} inconclusive.", ""]
+    for st in ("failed", "inconclusive", "passed"):
+        rs = [r for r in res["results"] if r["status"] == st]
+        if not rs:
+            continue
+        lines += [f"## {st} ({len(rs)})", ""]
+        for r in rs:
+            where = f"file {r.get('file')} (p. {r.get('printed')}) {r.get('formula', '')}"
+            extra = (f" worst {r['worst']:.2e}" if "worst" in r else "") + (
+                f"; {r['reason']}" if r.get("reason") else "") + (
+                f"; {r['tol_reason']}" if r.get("tol_reason") else "")
+            if r.get("closest"):
+                extra += f"; closest {r['closest']['qty']} (worst {r['closest']['worst']:.2e})"
+            lines.append(f"- **{r['id']}** [{r['qty']}, {r['dist']}] {where}:{extra}")
+            if r.get("piece"):
+                lines.append(f"  `{r['piece']}`")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def report(res: dict) -> str:
+    c = res["counts"]
+    by = {}
+    for r in res["results"]:
+        q = r["qty"] or ("unidentified" if r.get("unidentified") else "?")
+        by.setdefault(q, [0, 0, 0])
+        by[q][("passed", "failed", "inconclusive").index(r["status"])] += 1
+    return "\n".join([f"{c['run']} entries: {c['passed']} passed, {c['failed']} failed, "
+                      f"{c['inconclusive']} inconclusive"]
+                     + [f"  {q}: {p} passed, {f} failed, {i} inconclusive"
+                        for q, (p, f, i) in sorted(by.items())])
+
+
+# ---------------------------------------------------------------- formulas.jsonl
+
+def mark_formulas(formulas, results, meta=None) -> dict:
+    """Status ``crosschecked`` for the formulas whose every entry passed (none failed);
+    the earlier status is kept as ``was``, a flagged formula stays flagged. Returns counts,
+    with how many of those had not been reviewed."""
+    formulas = Path(formulas)
+    recs = [json.loads(s) for s in formulas.read_text("utf-8").splitlines() if s.strip()]
+    per: dict[str, list] = {}
+    for r in results:
+        if r.get("formula") and r["status"] in ("passed", "failed"):
+            per.setdefault(r["formula"], []).append(r)
+    marked = unreviewed = 0
+    for rec in recs:
+        rs = per.get(rec["id"])
+        if not rs:
+            continue
+        rec["crosscheck"] = {"passed": sum(r["status"] == "passed" for r in rs),
+                             "failed": sum(r["status"] == "failed" for r in rs),
+                             "entries": [r["id"] for r in rs]}
+        if all(r["status"] == "passed" for r in rs) and rec["status"] != "flagged":
+            if rec["status"] != "crosschecked":
+                rec["was"] = rec["status"]
+                rec["status"] = "crosschecked"
+            marked += 1
+            if rec.get("was") not in ("replaced", "reviewed_accept", "flagged"):
+                unreviewed += 1
+    write_atomic(formulas, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs))
+    by_status: dict[str, int] = {}
+    for r in recs:
+        by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+    if meta and Path(meta).is_file():
+        m = json.loads(Path(meta).read_text("utf-8"))
+        m.setdefault("method", {})["formulas_by_status"] = by_status
+        write_atomic(Path(meta), json.dumps(m, ensure_ascii=False, indent=1) + "\n")
+    return {"crosschecked": marked, "never_reviewed": unreviewed, "by_status": by_status}
+
+
+def _main_python() -> str:              # for tests: this interpreter
+    return sys.executable

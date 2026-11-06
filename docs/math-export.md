@@ -398,6 +398,55 @@ file given by `--meta`. The block holds:
   numeric checks and failures;
 - `formulas_by_status`.
 
+## Cross-checking against SciPy
+
+```powershell
+gpdf-cli math-crosscheck --spec SPEC.json --out DIR --scipy-python C:\path\python.exe [--formulas DELIVERY\formulas.jsonl --meta DELIVERY\meta.json]
+```
+
+A per-book spec (JSON, kept private: it quotes the book's notation) names the final pages
+(a text.md, pages folder or export), an explicit **parametrisation table** (per
+distribution: the SciPy name, SciPy's arguments as Python expressions in the book's
+parameter names, such as `"scale": "1 / lambda_"` (a keyword gets a trailing `_`), and
+three parameter points with the argument of each quantity: `@x`, `@t`, `@z`, `@p`), the
+**entries** (located by `\tag`, by page and display number, or by an inline pattern; `row`
+and `eq` pick a row and the side) and **scan** ranges, where every display row whose
+left-hand side names a quantity (`f(x)`, `p_X(x)`, `F(x)`, `\Pr[X = x]`, `M(t)`, `\varphi(t)`,
+`G(z)`, `E[X]`, `\operatorname{var}(X)`, `\mu'_r`, `E[X^r]`, `\mu_r`, `\kappa_r`,
+`\sqrt{\beta_1}`, `\beta_1`, `\beta_2`, `H(X)`, median, mode) is harvested for that section's
+distribution. `notation` rewrites (regex, replacement) and `defs` put the book's own
+functions and constants in before parsing. A table row can name `standard` values (a
+density printed without σ is the σ = 1 form; the result records it) and `derived`
+parameters (θ = αβ, φ = λ/μ), computed after them. `skip` and `overrides` (by harvested
+id) take out or adjust harvested entries. **identify** ranges are for a book whose summary
+tables lost their row labels (Forbes): every display row and every inline span with an
+operation in it is tried against each quantity its free variable allows (none: mean, var,
+sd, skewness, kurtosis, mode, median, entropy; x: pdf/pmf, cdf, sf, hazard, cumulative
+hazard; t: mgf, cf, log cf, cgf (pgf for a discrete row); s: Laplace transform; r:
+moments, cumulants; α, p: inverse survival, quantile) and passes under the first it
+matches; one that matches none is `unidentified` (inconclusive, with the closest quantity)
+and goes to the page image.
+
+Quantities: pdf, pmf, cdf, sf, hazard, quantile, raw and central moments, cumulants, mean,
+var, sd, skewness (`skew`, `skew2` = β₁), kurtosis (`kurt` = β₂, `excess_kurt`), mgf, cgf,
+cf, pgf, entropy, mode, median. Each entry is evaluated at the three points, the book's side
+through the identity checks' LaTeX parser (sympy, mpmath) and SciPy's side by
+`crosscheck_ref.py` in the external Python (SciPy is never a g-pdf dependency; the worker
+imports nothing from g-pdf), and compared at a relative tolerance of 1e-8 (absolute where
+the reference is 0), loosened only to ten times the reference's own quadrature error
+estimate (mgf, cf, pgf by quadrature or sum; the reason is recorded). A parametrisation
+mismatch is fixed in the table, never counted as a failure. An entry is **inconclusive**
+when it can't be evaluated: it does not parse, it leaves symbols the table does not give,
+SciPy has no value, or it runs past the 20 s per-entry limit (the reference worker is
+restarted after a request past it). `crosscheck.json` and `REPORT.md` (formulas) go to
+`--out`, counts by quantity to the screen; exit code 2 when an entry failed. A failure is
+checked against the page image: an engine misread is fixed in the text and recorded as a
+replace (reviewer `cross-check`), a printed error gets an independent re-check before it is
+flagged `possible_source_typo`. With `--formulas`, every formula all of whose entries passed
+gets status `crosschecked` in that formulas.jsonl (the earlier status kept as `was`; a
+flagged formula stays flagged; a copy is kept as `formulas.jsonl.before-crosscheck`), and
+`--meta` updates `method.formulas_by_status`.
+
 ## Scoring
 
 ```powershell

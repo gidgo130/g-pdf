@@ -42,6 +42,9 @@
                                                     # LaTeX read raw from a file or stdin
     gpdf-cli math-score --ref DIR_or_text.md --cand DIR_or_text.md --out DIR [--pages RANGE]
     gpdf-cli math-check-pages DIR [--out FILE.json]       # delimiters, row breaks, braces, flags
+    gpdf-cli math-crosscheck --spec FILE --out DIR [--scipy-python PATH] [--formulas FILE]
+                                                    # transcribed formulas against SciPy
+                                                    # through the book's parametrisation
     gpdf-cli math-watch --log FILE [--watch PATH ...] [--stall S] -- CMD ...
                                                     # run a long step, stop it when its log
                                                     # and cache stop growing (exit code 3)
@@ -507,6 +510,25 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the pages folder, a math-export folder with pages/, or a text.md")
     mk.add_argument("--out", metavar="FILE", type=Path,
                     help="write every problem, with its formula, to this JSON file")
+    mx = sub.add_parser("math-crosscheck", help="transcribed formulas against SciPy",
+                        description="Evaluate the formulas a spec names (or harvests by their "
+                                    "left-hand sides) at three parameter points through the "
+                                    "book's own parametrisation table, and compare them with "
+                                    "SciPy run by an external Python (--scipy-python or "
+                                    "$GPDF_SCIPY_PYTHON; SciPy is not a g-pdf dependency). "
+                                    "crosscheck.json and REPORT.md (formulas) in --out; counts "
+                                    "on screen. See docs/math-export.md.")
+    mx.add_argument("--spec", type=Path, required=True, metavar="FILE",
+                    help="the cross-check spec (JSON; keep it in the run's private folder)")
+    mx.add_argument("--out", type=Path, required=True, metavar="DIR",
+                    help="folder for crosscheck.json and REPORT.md")
+    mx.add_argument("--scipy-python", metavar="PATH", help="a Python with SciPy")
+    mx.add_argument("--only", action="append", metavar="ID", help="only this entry (repeatable)")
+    mx.add_argument("--formulas", type=Path, metavar="FILE",
+                    help="give the formulas that passed status crosschecked in this "
+                         "formulas.jsonl (a copy is kept as FILE.before-crosscheck)")
+    mx.add_argument("--meta", type=Path, metavar="FILE",
+                    help="with --formulas: update this meta.json's formulas_by_status")
     mw = sub.add_parser("math-watch", help="run a long step; stop it when it stops growing",
                         description="Run CMD (after --) with its output in --log, write a "
                                     "heartbeat file, and stop it with its child processes when "
@@ -527,6 +549,25 @@ def build_parser() -> argparse.ArgumentParser:
                     help=argparse.SUPPRESS)
     mw.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- CMD ...")
     return p
+
+
+def _math_crosscheck_main(args) -> int:
+    from gpdf.pipeline.mathocr import crosscheck
+
+    try:
+        res = crosscheck.run(args.spec, args.out, args.scipy_python, args.only)
+        print(crosscheck.report(res))
+        if args.formulas:
+            backup = args.formulas.with_name(args.formulas.name + ".before-crosscheck")
+            if not backup.exists():
+                shutil.copy2(args.formulas, backup)
+            c = crosscheck.mark_formulas(args.formulas, res["results"], args.meta)
+            print(f"formulas.jsonl: {c['crosschecked']} crosschecked ({c['never_reviewed']} of "
+                  f"them never reviewed); copy before in {backup.name}")
+    except (crosscheck.CrosscheckError, OSError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    return EXIT_UNREVIEWED if res["counts"]["failed"] else EXIT_OK
 
 
 def _math_watch_main(args, parser) -> int:
@@ -589,6 +630,8 @@ def main(argv: list[str] | None = None) -> int:
         return _math_check_pages_main(args)
     if args.command == "math-watch":
         return _math_watch_main(args, parser)
+    if args.command == "math-crosscheck":
+        return _math_crosscheck_main(args)
     if args.sheet_only:
         for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
                          ("--report", args.report), ("--accept-flagged", args.accept_flagged)):
