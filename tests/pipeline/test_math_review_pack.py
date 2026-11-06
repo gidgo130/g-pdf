@@ -312,6 +312,18 @@ def test_decide_fills_an_inline_span_from_its_item_and_keeps_one_decision_per_ke
     assert r"\(a_2\)" in (export / "pages" / "p001.md").read_text("utf-8")
 
 
+def test_decide_with_a_relative_batch_path_writes_the_batch_decisions_file(export, tmp_path,
+                                                                          monkeypatch):
+    # a reviewer ran `math-decide --batch .` from the batch folder: the decisions went to
+    # decisions/.jsonl (the name of "." is empty)
+    from gpdf.pipeline.mathocr import decide
+    out, b = _packed(export, tmp_path)
+    monkeypatch.chdir(b)
+    decide.decide(".", "p001-d01", "accept")
+    assert lines(out / "decisions" / "batch01.jsonl")[0]["key"] == "p001-d01"
+    assert decide.status(".")["decided"] == 1
+
+
 def test_decide_places_a_missing_display_by_an_exact_piece_of_the_page(export, tmp_path):
     from gpdf.pipeline.mathocr import decide
     out, b = _packed(export, tmp_path)

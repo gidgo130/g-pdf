@@ -52,7 +52,7 @@ def decide(batch, key: str, action: str, *, latex: str | None = None,
            after: str | None = None, run_text: str | None = None,
            occurrence: int | None = None, structure_change: bool = False) -> dict:
     """Check one decision against its item and write it; returns the decision written."""
-    batch = Path(batch)
+    batch = Path(batch).resolve()           # "." would give an empty batch name
     items = _items(batch)
     order = {it["key"]: n for n, it in enumerate(items)}
     if key not in order:
@@ -143,7 +143,7 @@ def _write(batch: Path, order: dict, d: dict) -> None:
 
 def status(batch) -> dict:
     """{total, decided, missing: [keys without a decision]} for one batch."""
-    batch = Path(batch)
+    batch = Path(batch).resolve()
     keys = [it["key"] for it in _items(batch)]
     path = decisions_path(batch)
     done = ({json.loads(s).get("key") for s in path.read_text("utf-8").splitlines() if s.strip()}
