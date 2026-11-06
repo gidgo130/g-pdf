@@ -437,6 +437,21 @@ def _parse(s: str, defs: dict | None = None, depth: int = 0):
     return expr
 
 
+_EXP_MAG = 4096
+
+
+def _exp(x):
+    """mpmath.exp, except past |x| = 2^4096, where exp is 0 or overflows at any working
+    precision and mpmath would first compute ln 2 to log2|x| bits: e^{-e^{-y}} at a
+    quadrature node far below 0 never returned (JKB p706), and the deadline is only
+    read between evaluations."""
+    if mpmath.mag(x) > _EXP_MAG:
+        if not isinstance(x, mpmath.mpc) and x < 0:
+            return mpmath.mpf(0)
+        raise OverflowError("exp argument too large")
+    return mpmath.exp(x)
+
+
 def _lambdify(expr, variables: list[str]):
     """(fn(vars..., params...), params) or None."""
     if any(_canon(s.name) in UNKNOWN_CONSTANTS for s in expr.free_symbols):
@@ -448,7 +463,8 @@ def _lambdify(expr, variables: list[str]):
         var_syms.append(found[0] if found else sympy.Symbol(v))
     params = [x for x in syms if _canon(x.name) not in variables]
     try:
-        fn = sympy.lambdify(var_syms + params, expr, modules="mpmath", dummify=True)
+        fn = sympy.lambdify(var_syms + params, expr, modules=[{"exp": _exp}, "mpmath"],
+                            dummify=True)
     except Exception:  # noqa: BLE001
         return None
     return fn, [_canon(p.name) for p in params]

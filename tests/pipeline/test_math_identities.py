@@ -290,6 +290,24 @@ def test_the_deadline_stops_a_formula_inside_its_integrals(monkeypatch):
     assert __import__("time").monotonic() - t0 < 1.0        # it did not finish the work
 
 
+def test_a_double_exponential_density_finishes():
+    # JKB p706: the quadrature reaches y far below 0, where e^{-y} has a binary exponent
+    # near 10^20; mpmath's exp of that would compute ln 2 to as many bits and never
+    # return, and the deadline is only read between evaluations. A subprocess, so a
+    # regression fails the test instead of hanging the suite.
+    import subprocess
+    import sys
+    code = ("from gpdf.pipeline.mathocr import identities as I\n"
+            "r = I.check_display(r'p_{Y}(y) = e^{-e^{-y}} e^{-y}, \\quad -\\infty < y < \\infty,')\n"
+            "print(r.kind, r.status, r.support)\n")
+    try:
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                             timeout=60).stdout.split()
+    except subprocess.TimeoutExpired:
+        out = ["did", "not", "finish"]
+    assert out == ["density", "passed", "(-inf,inf)"]
+
+
 def test_counts_over_a_page():
     ctx = I.Context()
     results = [check(r"f(x) = \lambda e^{-\lambda x}", ctx=ctx),
