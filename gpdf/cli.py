@@ -442,6 +442,10 @@ def build_parser() -> argparse.ArgumentParser:
     md.add_argument("--page-text", help="missing_display: the exact page text it replaces")
     md.add_argument("--after", help="missing_display: the exact page text it follows")
     md.add_argument("--run-text", help="inline_missing: the exact page text of the run")
+    md.add_argument("--withdraw", nargs="?", const="all", metavar="WHAT",
+                    choices=("all", "accept", "replace", "flag"),
+                    help="remove KEY's decision instead of writing one: all of them (default), "
+                         "or only its accept, replace or flag")
     md.add_argument("--structure-change", action="store_true",
                     help="the page really prints the structure differently (needs --reason)")
     mf = sub.add_parser("math-review-followup",
@@ -1038,6 +1042,14 @@ def _math_decide_main(args) -> int:
             st = decide.status(args.batch)
             print(f"{st['decided']} of {st['total']} items decided"
                   + (f"; still to decide: {' '.join(st['missing'])}" if st["missing"] else ""))
+            return EXIT_OK
+        if args.withdraw:
+            if args.action is not None:
+                print("gpdf-cli: error: --withdraw takes no action (accept, replace, flag); "
+                      "use --withdraw accept|replace|flag", file=sys.stderr)
+                return EXIT_ERROR
+            gone = decide.withdraw(args.batch, args.key, args.withdraw)
+            print(f"{args.key}: {', '.join(x['action'] for x in gone)} withdrawn")
             return EXIT_OK
         if args.action is None:
             raise decide.DecideError("give the action: accept, replace or flag")

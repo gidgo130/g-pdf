@@ -137,12 +137,13 @@ Write the whole display body without `\tag{…}`.
 ## Decisions: `{decisions}`
 
 Write every decision with the helper, **never by hand**: it reads the LaTeX raw and writes
-the JSON itself. Below, `D` stands for the command `{decide}`, and KEY for the item's `"key"`.
+the JSON. Below, `D` stands for the command `{decide}`, and KEY for the item's `"key"`.
 
 ```
 D KEY accept
 D KEY replace --latex-file work\KEY.tex --reason "printed sign is minus"
 D KEY flag --flag-type possible_source_typo --subtype math_error --note "..."
+D KEY --withdraw flag
 D status
 ```
 

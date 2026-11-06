@@ -325,6 +325,28 @@ def test_decide_refuses_a_collapsed_row_break_and_writes_nothing(export, tmp_pat
     assert d["structure_change"] is True
 
 
+def test_decide_withdraw_removes_a_decision_cleanly(export, tmp_path, capsys):
+    # B-2: a reviewer removed accept lines by script to leave flag-only items
+    from gpdf.pipeline.mathocr import decide
+    out, b = _packed(export, tmp_path)
+    decide.decide(b, "p001-d01", "accept")
+    decide.decide(b, "p001-d01", "flag", flag_type="possible_source_typo", note="sign")
+    decide.decide(b, "p002-d01", "accept")
+    assert [x["action"] for x in decide.withdraw(b, "p001-d01", "accept")] == ["accept"]
+    assert [(x["key"], x["action"]) for x in lines(out / "decisions" / "batch01.jsonl")] == [
+        ("p001-d01", "flag"), ("p002-d01", "accept")]
+    with pytest.raises(decide.DecideError, match="no replace"):
+        decide.withdraw(b, "p002-d01", "replace")         # it is an accept: kept
+    with pytest.raises(decide.DecideError, match="unknown key"):
+        decide.withdraw(b, "p009-d01")
+    assert cli.main(["math-decide", "--batch", str(b), "p001-d01", "--withdraw"]) == 0
+    assert "withdrawn" in capsys.readouterr().out
+    assert [x["key"] for x in lines(out / "decisions" / "batch01.jsonl")] == ["p002-d01"]
+    assert decide.status(b)["missing"][:1] == ["p001-d01"]
+    assert cli.main(["math-decide", "--batch", str(b), "p001-d01", "--withdraw"]) == 2
+    assert cli.main(["math-decide", "--batch", str(b), "p002-d01", "accept", "--withdraw"]) == 1
+
+
 def test_decide_fills_an_inline_span_from_its_item_and_keeps_one_decision_per_key(export, tmp_path):
     from gpdf.pipeline.mathocr import decide
     out, b = _packed(export, tmp_path)

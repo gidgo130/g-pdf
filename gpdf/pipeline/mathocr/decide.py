@@ -141,6 +141,30 @@ def _write(batch: Path, order: dict, d: dict) -> None:
     write_atomic(path, "".join(json.dumps(x, ensure_ascii=False) + "\n" for x in keep))
 
 
+WITHDRAW = ("all", "accept", "replace", "flag")
+
+
+def withdraw(batch, key: str, what: str = "all") -> list[dict]:
+    """Remove KEY's decisions of one kind (accept, replace, flag) or all of them; returns
+    the decisions removed. Nothing to remove is a refusal, so a typo can't pass silently."""
+    batch = Path(batch).resolve()
+    items = _items(batch)
+    order = {it["key"]: n for n, it in enumerate(items)}
+    if key not in order:
+        raise DecideError(f"unknown key {key!r}: use an item's \"key\" from items.jsonl")
+    if what not in WITHDRAW:
+        raise DecideError(f"--withdraw takes one of {', '.join(WITHDRAW)}")
+    path = decisions_path(batch)
+    old = ([json.loads(s) for s in path.read_text("utf-8").splitlines() if s.strip()]
+           if path.is_file() else [])
+    gone = [x for x in old if x.get("key") == key and what in ("all", x.get("action"))]
+    if not gone:
+        raise DecideError(f"no {'decision' if what == 'all' else what} of {key} to withdraw")
+    write_atomic(path, "".join(json.dumps(x, ensure_ascii=False) + "\n"
+                               for x in old if not any(x is g for g in gone)))
+    return gone
+
+
 def status(batch) -> dict:
     """{total, decided, missing: [keys without a decision]} for one batch."""
     batch = Path(batch).resolve()
