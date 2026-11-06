@@ -442,6 +442,9 @@ def build_parser() -> argparse.ArgumentParser:
     md.add_argument("--subtype", help="a possible_source_typo's math_error or notation")
     md.add_argument("--tag", help="the printed equation number, when it was misread")
     md.add_argument("--occurrence", type=int, help="which occurrence on the page (inline)")
+    md.add_argument("--span", help="a page inline item: the latex_primary of the span to replace")
+    md.add_argument("--span-file", type=Path, metavar="FILE",
+                    help="the same, read raw from a file (for LaTeX with backslashes)")
     md.add_argument("--page-text", help="missing_display: the exact page text it replaces")
     md.add_argument("--after", help="missing_display: the exact page text it follows")
     md.add_argument("--run-text", help="inline_missing: the exact page text of the run")
@@ -1102,7 +1105,14 @@ def _math_decide_main(args) -> int:
             if lf is not None and not lf.is_absolute() and not lf.exists():
                 lf = args.batch / lf                # work\KEY.tex: relative to the batch
             latex = lf.read_text("utf-8-sig") if lf is not None else sys.stdin.read()
+        span = args.span
+        if args.span_file is not None:
+            sf = args.span_file
+            if not sf.is_absolute() and not sf.exists():
+                sf = args.batch / sf
+            span = sf.read_text("utf-8-sig").strip()
         d = decide.decide(args.batch, args.key, args.action, latex=latex, reason=args.reason,
+                          span=span,
                           note=args.note, flag_type=args.flag_type, subtype=args.subtype,
                           tag=args.tag, page_text=args.page_text, after=args.after,
                           run_text=args.run_text, occurrence=args.occurrence,

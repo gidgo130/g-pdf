@@ -53,6 +53,13 @@ of 50, and a brief of about a page.
 
 Helper scripts, renders and notes stay in the batch folder: they hold the book's formulas.
 
+When a book's inline items are reviewed whole (`--kinds ...,inline,inline_missing
+--inline-sample 0`), an `inline` item is one page with several spans. `math-decide KEY accept` then
+accepts every span (the decision names them, so provenance counts them reviewed); `math-decide KEY
+replace --span-file work\SPAN.tex [--occurrence N] --latex-file work\NEW.tex --reason ...` replaces
+one span, and further replaces of the same key add their spans to the same decision. An
+`inline_missing` item's replaces likewise keep every run written (one call per run).
+
 ## Which model
 
 Sonnet reviews the displays. Batch B-1 tested Opus on the 12 KBJ items where Sonnet had

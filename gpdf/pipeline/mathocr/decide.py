@@ -50,7 +50,8 @@ def decide(batch, key: str, action: str, *, latex: str | None = None,
            reason: str | None = None, note: str | None = None, flag_type: str | None = None,
            subtype: str | None = None, tag: str | None = None, page_text: str | None = None,
            after: str | None = None, run_text: str | None = None,
-           occurrence: int | None = None, structure_change: bool = False) -> dict:
+           occurrence: int | None = None, structure_change: bool = False,
+           span: str | None = None) -> dict:
     """Check one decision against its item and write it; returns the decision written."""
     batch = Path(batch).resolve()           # "." would give an empty batch name
     items = _items(batch)
@@ -74,13 +75,16 @@ def decide(batch, key: str, action: str, *, latex: str | None = None,
         if it["kind"] == "inline_span":
             d["spans"] = [{"latex_primary": it["latex_primary"], "latex": it["latex_primary"],
                            "occurrence": it.get("occurrence")}]
+        elif it["kind"] == "inline":          # a page's grouped spans: all of them accepted
+            d["spans"] = [{"latex_primary": x["latex_primary"], "latex": x["latex_primary"],
+                           "occurrence": x.get("occurrence")} for x in it.get("spans", [])]
     else:
         if latex is None or not latex.strip():
             raise DecideError("a replace needs the LaTeX: --latex-file FILE, or on stdin")
         if not (reason or "").strip():
             raise DecideError("a replace needs --reason")
         d.update(_replace(it, latex.strip(), page_text, after, run_text, occurrence,
-                          structure_change))
+                          structure_change, span))
     if tag is not None:
         if action == "flag" or it["kind"] in ("inline_span", "inline_missing"):
             raise DecideError("--tag goes with an accept or replace of a display")
@@ -89,12 +93,31 @@ def decide(batch, key: str, action: str, *, latex: str | None = None,
         d["reason"] = reason.strip()
     if structure_change:
         d["structure_change"] = True
-    _write(batch, order, d)
-    return d
+    return _write(batch, order, d, it)
 
 
-def _replace(it, latex, page_text, after, run_text, occurrence, structure_change) -> dict:
+def _replace(it, latex, page_text, after, run_text, occurrence, structure_change,
+             span=None) -> dict:
     kind, primary = it["kind"], it.get("latex_primary")
+    if kind == "inline":                      # one span of a page's grouped inline item
+        if span is None or not span.strip():
+            raise DecideError("a page inline item holds several spans: name the one to replace "
+                              "with --span (its latex_primary, or --span-file)")
+        hits = [x for x in it.get("spans", []) if _norm(x["latex_primary"]) == _norm(span)]
+        if not hits:
+            raise DecideError("--span is not one of the item's spans (copy its latex_primary)")
+        primary = hits[0]["latex_primary"]
+        occ = occurrence or hits[0].get("occurrence")
+        if occ is None:
+            raise DecideError("this span occurs several times in the page: pass --occurrence N "
+                              "from its occurrence_candidates")
+        if _norm(latex) == _norm(primary):
+            raise DecideError("the LaTeX is the same as the span: nothing to replace")
+        if not structure_change:
+            problems = structure_problems(primary, latex)
+            if problems:
+                raise DecideError("structure lost: " + "; ".join(problems))
+        return {"spans": [{"latex_primary": primary, "latex": latex, "occurrence": occ}]}
     if kind == "inline_missing":
         if not run_text:
             raise DecideError("an inline_missing replace needs --run-text (the exact page text)")
@@ -131,14 +154,45 @@ def _replace(it, latex, page_text, after, run_text, occurrence, structure_change
     return out
 
 
-def _write(batch: Path, order: dict, d: dict) -> None:
+def _merge(it: dict, d: dict, prev: dict | None) -> dict:
+    """A page inline item's replaces accumulate their spans (with the unchanged spans whose
+    place is known, so the item counts as reviewed), an inline_missing item's its runs."""
+    if d.get("action") != "replace":
+        return d
+    if it["kind"] == "inline":
+        spans = {}
+        for x in it.get("spans", []):
+            if x.get("occurrence") is not None:
+                spans[(x["latex_primary"], x["occurrence"])] = dict(
+                    latex_primary=x["latex_primary"], latex=x["latex_primary"],
+                    occurrence=x["occurrence"])
+        for x in (prev or {}).get("spans") or []:
+            if prev.get("action") == "replace" or x.get("occurrence") is not None:
+                spans[(x["latex_primary"], x.get("occurrence"))] = dict(x)
+        for x in d["spans"]:
+            spans.pop((x["latex_primary"], None), None)
+            spans[(x["latex_primary"], x["occurrence"])] = dict(x)
+        return {**d, "spans": list(spans.values())}
+    if it["kind"] == "inline_missing" and prev and prev.get("action") == "replace":
+        runs = {(r["text"], r.get("occurrence")): r for r in prev.get("runs") or []}
+        for r in d["runs"]:
+            runs[(r["text"], r.get("occurrence"))] = r
+        return {**d, "runs": list(runs.values())}
+    return d
+
+
+def _write(batch: Path, order: dict, d: dict, it: dict | None = None) -> dict:
     path = decisions_path(batch)
     path.parent.mkdir(parents=True, exist_ok=True)
     old = ([json.loads(s) for s in path.read_text("utf-8").splitlines() if s.strip()]
            if path.is_file() else [])
+    if it is not None:
+        prev = next((x for x in old if (x.get("key"), _slot(x)) == (d["key"], _slot(d))), None)
+        d = _merge(it, d, prev)
     keep = [x for x in old if (x.get("key"), _slot(x)) != (d["key"], _slot(d))] + [d]
     keep.sort(key=lambda x: (order.get(x.get("key"), len(order)), _slot(x) == "flag"))
     write_atomic(path, "".join(json.dumps(x, ensure_ascii=False) + "\n" for x in keep))
+    return d
 
 
 WITHDRAW = ("all", "accept", "replace", "flag")

@@ -325,6 +325,74 @@ def test_decide_refuses_a_collapsed_row_break_and_writes_nothing(export, tmp_pat
     assert d["structure_change"] is True
 
 
+def test_decide_replaces_single_spans_of_a_page_inline_item_and_they_apply(export, tmp_path):
+    # method (a) reviews every inline item of a page; the reviewer must be able to correct one
+    # span of a grouped item (Batch B-3, DM: reviewers parked span fixes in flag notes)
+    from gpdf.pipeline.mathocr import decide
+    out = tmp_path / "rev"
+    pack.pack(export, out, kinds=("inline",), inline_sample=0)
+    b = out / "batch01"
+    with pytest.raises(decide.DecideError, match="--span"):
+        decide.decide(b, "p001-inline", "replace", latex="a_2", reason="x")
+    with pytest.raises(decide.DecideError, match="not one of the item"):
+        decide.decide(b, "p001-inline", "replace", span="z", latex="a_2", reason="x")
+    with pytest.raises(decide.DecideError, match="occurrence"):
+        decide.decide(b, "p001-inline", "replace", span="b", latex="B", reason="x")
+    decide.decide(b, "p001-inline", "replace", span="a_1", latex="a_2", reason="printed a_2")
+    d = decide.decide(b, "p001-inline", "replace", span="b", occurrence=2, latex="B", reason="bold")
+    assert d["action"] == "replace"
+    assert {(s["latex_primary"], s["latex"], s["occurrence"]) for s in d["spans"]} == {
+        ("a_1", "a_2", 1), ("b", "B", 2)}
+    assert len(lines(out / "decisions" / "batch01.jsonl")) == 1      # merged into one decision
+    res = review.apply(export, out / "decisions" / "batch01.jsonl")
+    assert res.refused == []
+    p1 = (export / "pages" / "p001.md").read_text("utf-8")
+    assert "\\(a_2\\)" in p1 and "and \\(B\\) again" in p1 and "\\(b\\) be given" in p1
+
+
+def test_cli_decide_takes_the_span_from_a_file(export, tmp_path):
+    out = tmp_path / "rev"
+    pack.pack(export, out, kinds=("inline",), inline_sample=0)
+    b = out / "batch01"
+    (b / "work" / "span.tex").write_text("a_1\n", "utf-8")
+    (b / "work" / "new.tex").write_text("a_2\n", "utf-8")
+    assert cli.main(["math-decide", "--batch", str(b), "p001-inline", "replace", "--span-file",
+                     "work/span.tex", "--latex-file", str(b / "work" / "new.tex"),
+                     "--reason", "printed a_2"]) == 0
+    d = lines(out / "decisions" / "batch01.jsonl")[0]
+    assert {"latex_primary": "a_1", "latex": "a_2", "occurrence": 1} in d["spans"]
+
+
+def test_decide_accept_of_a_page_inline_item_names_its_spans(export, tmp_path):
+    from gpdf.pipeline.mathocr import decide
+    out = tmp_path / "rev"
+    pack.pack(export, out, kinds=("inline",), inline_sample=0)
+    d = decide.decide(out / "batch01", "p002-inline", "accept")
+    assert [(s["latex_primary"], s["latex"]) for s in d["spans"]] == [("c", "c"), ("d", "d")]
+
+
+def test_decide_keeps_every_run_of_an_inline_missing_item(tmp_path):
+    from gpdf.pipeline.mathocr import decide
+    r = tmp_path / "book"
+    (r / "pages").mkdir(parents=True)
+    md = '<!-- page printed="1" file="1" -->\n\nLet x1 be large and n - 1 small.\n'
+    (r / "pages" / "p001.md").write_text(md, "utf-8")
+    (r / "pages" / "p001.flags.json").write_text("[]", "utf-8")
+    it = {"id": "p001-inline-missing", "file": 1, "printed": "1", "kind": "inline_missing",
+          "reasons": ["inline_missing"], "runs": [
+              {"paragraph": 1, "text": "x1", "why": "digit index", "occurrence": 1},
+              {"paragraph": 1, "text": "n - 1", "why": "operator", "occurrence": 1}]}
+    (r / "review.jsonl").write_text(json.dumps(it) + "\n", "utf-8")
+    pack.pack(r, tmp_path / "rev", kinds=("inline_missing",), inline_sample=0)
+    b = tmp_path / "rev" / "batch01"
+    decide.decide(b, "p001-inline-missing", "replace", latex="x_1", run_text="x1", reason="math")
+    d = decide.decide(b, "p001-inline-missing", "replace", latex="n - 1", run_text="n - 1",
+                      reason="math")
+    assert [r_["text"] for r_ in d["runs"]] == ["x1", "n - 1"]
+    assert review.apply(r, tmp_path / "rev" / "decisions" / "batch01.jsonl").refused == []
+    assert "Let \\(x_1\\) be large and \\(n - 1\\) small." in (r / "pages" / "p001.md").read_text("utf-8")
+
+
 def test_decide_withdraw_removes_a_decision_cleanly(export, tmp_path, capsys):
     # B-2: a reviewer removed accept lines by script to leave flag-only items
     from gpdf.pipeline.mathocr import decide
