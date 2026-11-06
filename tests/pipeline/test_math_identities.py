@@ -308,6 +308,41 @@ def test_a_double_exponential_density_finishes():
     assert out == ["density", "passed", "(-inf,inf)"]
 
 
+def test_a_check_stuck_between_deadline_reads_is_stopped_by_the_item_timeout():
+    # The deadline is only read between function evaluations; a check stuck inside one
+    # (j21b hung 7.5 h that way) must still end, at ITEM_TIMEOUT. A subprocess, so a
+    # regression fails the test instead of hanging the suite.
+    import subprocess
+    import sys
+    code = ("import time\n"
+            "from gpdf.pipeline.mathocr import identities as I\n"
+            "I.ITEM_TIMEOUT = 0.5\n"
+            "def stuck():\n"
+            "    while True:\n"
+            "        try:\n"
+            "            sum(range(1000))\n"
+            "        except Exception:\n"     # a broad handler must not swallow it
+            "            pass\n"
+            "I._slow_start = stuck\n"
+            "t = time.monotonic()\n"
+            "r = I.check_display(r'f(x) = \\lambda e^{-\\lambda x}')\n"
+            "print(r.status, r.reason, time.monotonic() - t < 5)\n")
+    try:
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                             timeout=60).stdout.split()
+    except subprocess.TimeoutExpired:
+        out = ["did", "not", "finish"]
+    assert out == ["skipped", "timeout", "True"]
+
+
+def test_the_item_timeout_does_not_fire_after_the_check():
+    import time
+    from gpdf.pipeline.mathocr import watch
+    with watch.hard_timeout(0.2):
+        pass
+    time.sleep(0.5)                       # a late exception would surface here
+
+
 def test_counts_over_a_page():
     ctx = I.Context()
     results = [check(r"f(x) = \lambda e^{-\lambda x}", ctx=ctx),

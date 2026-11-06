@@ -32,6 +32,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from gpdf.pipeline.mathocr import latex as L
+from gpdf.pipeline.mathocr import watch
 
 try:
     import mpmath
@@ -43,7 +44,8 @@ try:
 except ImportError:                                   # pragma: no cover - depends on extras
     AVAILABLE = False
 
-TIME_LIMIT = 5.0           # seconds per display
+TIME_LIMIT = 5.0           # seconds per display (read between function evaluations)
+ITEM_TIMEOUT = 20.0        # hard limit per display (watch.hard_timeout), whatever it is doing
 _clock = time.monotonic    # the deadline's clock (tests inject a counting one)
 DRAWS = 4                  # parameter draws, stratified over (LO, HI)
 LO, HI = 0.3, 2.5
@@ -1016,10 +1018,19 @@ def _expression(lhs: str, rhs: str, before: str, ctx: Context):
 
 
 def check_display(latex: str, before: str = "", ctx: Context | None = None) -> Result:
-    """Classify and check one display; never raises for a formula that will not do."""
+    """Classify and check one display; never raises for a formula that will not do.
+    Past ITEM_TIMEOUT seconds (parsing included) the display is skipped as a timeout."""
     if not AVAILABLE:                       # pragma: no cover - depends on extras
         return Result(None, "skipped", reason="mathcheck extra not installed")
     ctx = ctx or Context()
+    try:
+        with watch.hard_timeout(ITEM_TIMEOUT):
+            return _check_display(latex, before, ctx)
+    except watch.ItemTimeout:
+        return Result(None, "skipped", reason="timeout")
+
+
+def _check_display(latex: str, before: str, ctx: Context) -> Result:
     eqs = equations(latex)
     if not eqs:
         return Result(None, "skipped", reason="no identity")

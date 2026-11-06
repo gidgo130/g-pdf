@@ -133,6 +133,23 @@ def _tesseract(explicit, notices) -> tesseract.Tesseract | None:
         return None
 
 
+class _Heartbeat:
+    """OUT/<stem>/heartbeat.json, rewritten at every stage and page: a stall watcher
+    (gpdf-cli math-watch --watch) sees a long silent stage progress, or stop."""
+
+    def __init__(self, path: Path):
+        self.path = path
+
+    def beat(self, stage: str, **kw) -> None:
+        import os
+        data = {"pid": os.getpid(), "stage": stage,
+                "at": datetime.now().isoformat(timespec="seconds"), **kw}
+        try:
+            write_atomic(self.path, json.dumps(data) + "\n")
+        except OSError:                     # never stop a run over its heartbeat
+            pass
+
+
 def run(opts: Options, progress=None) -> Summary:
     with awake.KeepAwake(opts.keep_awake):
         return _run(opts, progress)
@@ -148,6 +165,13 @@ def _run(opts: Options, progress=None) -> Summary:
         raise MathExportError(f"{pdf} not found")
     root = Path(opts.out) / pdf.stem
     root.mkdir(parents=True, exist_ok=True)
+    hb = _Heartbeat(root / "heartbeat.json")
+    say_user = say
+
+    def say(msg, *a, **k):                  # every progress line is a heartbeat too
+        hb.beat(_stage[0], message=str(msg))
+        say_user(msg, *a, **k)
+    _stage = ["start"]
     sha = engine.sha256_of(pdf)
     cache_key, render_pdf, djvu_info = sha, pdf, None
     if djvu.is_djvu(pdf):
@@ -171,6 +195,7 @@ def _run(opts: Options, progress=None) -> Summary:
         mk = _marker(opts, notices)
         cache = engine.Cache(opts.cache or root / "cache", cache_key, eng.version, opts.dpi,
                              opts.ocr_mode)
+        _stage[0] = "engine"
         say(f"engine: mineru-kit {eng.version} ({eng.exe})")
         engine_seconds = {}
         te, ae = time.time(), awake.awake_clock()
@@ -192,6 +217,7 @@ def _run(opts: Options, progress=None) -> Summary:
         if mk:
             math_pages = [p for p in pages if marker.has_math(std[p].blocks)
                           or (p in basic and marker.has_math(basic[p].blocks))]
+            _stage[0] = "marker"
             mcache = marker.Cache(opts.cache or root / "cache", cache_key, mk.version)
             say(f"marker: {mk.version} with llama.cpp b{mk.llama_build} on {len(math_pages)} "
                 f"math pages ({len(mcache.missing(math_pages))} not cached)")
@@ -210,6 +236,8 @@ def _run(opts: Options, progress=None) -> Summary:
             third = {p: marker.blocks(mcache.read(p)) for p in math_pages}
 
         # labels
+        _stage[0] = "assembly"
+        hb.beat("assembly")
         tess = _tesseract(opts.tesseract, notices)
         cands, sources = labels.collect(doc, pages, lambda p: std[p].blocks, tess,
                                         root / "cache" / "ocr")
@@ -250,7 +278,11 @@ def _run(opts: Options, progress=None) -> Summary:
         # identities
         ident_counts, ident_records = {}, []
         if want_ident:
-            ident_counts = _identities(assembled, items_of, _ranges(pages), say, ident_records)
+            _stage[0] = "identities"
+            ident_counts = _identities(assembled, items_of, _ranges(pages), say, ident_records,
+                                       beat=lambda p: hb.beat("identities", page=p))
+        _stage[0] = "outputs"
+        hb.beat("outputs")
 
         # outputs
         all_items = [it for pg in assembled for it in items_of[pg.file]]
@@ -318,6 +350,7 @@ def _run(opts: Options, progress=None) -> Summary:
                    "engine_seconds": engine_seconds,
                    "cache_bytes": cache_bytes, "totals": totals, "pages": per_page}
         write_atomic(root / "run.json", json.dumps(run_rec, ensure_ascii=False, indent=1) + "\n")
+        hb.beat("done")
         return Summary(root, len(assembled), totals["displays"], totals["inline_spans"], kinds,
                        totals["identities"], seconds, engine_seconds, cache_bytes, fit.runs,
                        fit.steps, fit.rejected, notices)
@@ -363,7 +396,8 @@ def _sum_counts(per_page: dict) -> dict:
     return out
 
 
-def _identities(assembled, items_of, ranges, say, records: list | None = None) -> dict:
+def _identities(assembled, items_of, ranges, say, records: list | None = None,
+                beat=None) -> dict:
     """Run the identity pass page by page; failures become (or join) review items."""
     from gpdf.pipeline.mathocr import identities
 
@@ -385,6 +419,8 @@ def _identities(assembled, items_of, ranges, say, records: list | None = None) -
         for pg in assembled:
             if not a <= pg.file <= b:
                 continue
+            if beat:
+                beat(pg.file)
             results = []
             before = ""
             n = 0

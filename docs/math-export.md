@@ -138,6 +138,18 @@ apart (`awake_seconds`, `engine_seconds.total_awake`, `.marker_awake`,
 `.marker_per_page_awake`; Windows' unbiased interrupt time, the monotonic clock
 elsewhere), so timings stay honest if the machine sleeps anyway.
 
+**Stall watching.** Every progress line, stage and identity-pass page rewrites
+`OUT/<stem>/heartbeat.json` (pid, stage, page, time). `gpdf-cli math-watch --log FILE
+--watch PATH ... [--stall 600] [--heartbeat FILE] [--step NAME] -- CMD ...` runs a long step
+(an engine group, an assembly, a checks script) and stops it, child processes included,
+when its log and watched paths (the cache folder, the step's own heartbeat) have not grown
+for `--stall` seconds (600 by default; 300 for checks); exit code 3 then, and the watcher's
+heartbeat says `stalled` with the reason, so a driver marks the step `retry_later` and goes
+on. Each identity check also has a hard per-display limit (`ITEM_TIMEOUT`, 20 s) on top of
+its own 5 s deadline: the deadline is read only between function evaluations, the hard
+limit interrupts whatever the check is doing (Batch B-2's j21b check sat inside mpmath for
+7.5 hours).
+
 Time on the trial machine (RTX 4060 laptop, 8 GB): about 7 s per page for the
 standard tier and 6 s for the basic one, plus about a minute of model loading
 per tier. Raw engine output is cached per page under `OUT/<stem>/cache/`, keyed

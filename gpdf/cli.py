@@ -42,6 +42,9 @@
                                                     # LaTeX read raw from a file or stdin
     gpdf-cli math-score --ref DIR_or_text.md --cand DIR_or_text.md --out DIR [--pages RANGE]
     gpdf-cli math-check-pages DIR [--out FILE.json]       # delimiters, row breaks, braces, flags
+    gpdf-cli math-watch --log FILE [--watch PATH ...] [--stall S] -- CMD ...
+                                                    # run a long step, stop it when its log
+                                                    # and cache stop growing (exit code 3)
                                                     # score a transcription against a reference
                                                     # (score.json, REPORT.md; numbers on screen)
 
@@ -494,7 +497,41 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the pages folder, a math-export folder with pages/, or a text.md")
     mk.add_argument("--out", metavar="FILE", type=Path,
                     help="write every problem, with its formula, to this JSON file")
+    mw = sub.add_parser("math-watch", help="run a long step; stop it when it stops growing",
+                        description="Run CMD (after --) with its output in --log, write a "
+                                    "heartbeat file, and stop it with its child processes when "
+                                    "the log and the --watch paths (cache folders, the step's "
+                                    "own heartbeat) have not grown for --stall seconds. Exit "
+                                    "code 0 done, 3 stalled, otherwise the step's own code.")
+    mw.add_argument("--stall", type=float, default=600.0, metavar="SECONDS",
+                    help="seconds without growth before the step is stopped (default 600; "
+                         "300 for checks)")
+    mw.add_argument("--watch", type=Path, action="append", default=[], metavar="PATH",
+                    help="a file or folder whose growth counts as progress (repeatable)")
+    mw.add_argument("--log", type=Path, required=True, metavar="FILE",
+                    help="the step's stdout and stderr")
+    mw.add_argument("--heartbeat", type=Path, metavar="FILE",
+                    help="JSON written every poll: pid, idle seconds, status, reason")
+    mw.add_argument("--step", default="", help="the step's name in the heartbeat")
+    mw.add_argument("--poll", type=float, default=15.0, metavar="SECONDS",
+                    help=argparse.SUPPRESS)
+    mw.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- CMD ...")
     return p
+
+
+def _math_watch_main(args, parser) -> int:
+    from gpdf.pipeline.mathocr import watch
+
+    cmd = args.cmd[1:] if args.cmd[:1] == ["--"] else args.cmd
+    if not cmd:
+        parser.error("math-watch needs the command after --")
+    r = watch.run_watched(cmd, args.watch, args.log, args.heartbeat, stall=args.stall,
+                          poll=args.poll, step=args.step)
+    print(f"{args.step or 'step'}: {r.status} after {r.seconds:.0f} s"
+          + (f" ({r.reason})" if r.reason else ""))
+    if r.status == "stalled":
+        return watch.EXIT_STALLED
+    return r.returncode or 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -540,6 +577,8 @@ def main(argv: list[str] | None = None) -> int:
         return _math_score_main(args)
     if args.command == "math-check-pages":
         return _math_check_pages_main(args)
+    if args.command == "math-watch":
+        return _math_watch_main(args, parser)
     if args.sheet_only:
         for flag, on in (("--dry-run", args.dry_run), ("--no-sheet", args.no_sheet),
                          ("--report", args.report), ("--accept-flagged", args.accept_flagged)):

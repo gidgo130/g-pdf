@@ -113,7 +113,8 @@ def test_math_export_writes_the_atlas_layout(setup, tmp_path, capsys):
     assert run(exe, home, pdf, out, "--pages", "1-4") == 0
     root = out / "book"
     assert sorted(p.name for p in root.iterdir()) == [
-        "cache", "crops", "logs", "meta.json", "pages", "review.jsonl", "run.json", "text.md"]
+        "cache", "crops", "heartbeat.json", "logs", "meta.json", "pages", "review.jsonl",
+        "run.json", "text.md"]
     assert sorted(p.name for p in (root / "pages").iterdir()) == [
         "p001.flags.json", "p001.md", "p002.flags.json", "p002.md", "p003.flags.json", "p003.md",
         "p004.flags.json", "p004.md"]
@@ -279,6 +280,26 @@ def test_identity_pass_runs_when_the_extra_is_installed(setup, tmp_path):
     assert rec["pages"][0]["identities"] == {"checked": 1, "passed": 1, "failed": 0,
                                              "inconclusive": 0, "skipped": 0}
     assert rec["totals"]["identities"]["skipped"] == 3
+
+
+def test_the_run_writes_a_heartbeat_for_a_stall_watcher(setup, tmp_path, monkeypatch):
+    # every stage, and every page of the identity pass, beats: a watcher sees progress
+    # through a long silent stage and can tell a stuck one
+    pytest.importorskip("sympy")
+    pytest.importorskip("antlr4")
+    from gpdf.pipeline.mathocr import run as R
+    beats = []
+    real = R._Heartbeat.beat
+    monkeypatch.setattr(R._Heartbeat, "beat", lambda self, stage, **kw: (
+        beats.append((stage, kw.get("page"))), real(self, stage, **kw)))
+    exe, home, pdf, log = setup
+    out = tmp_path / "out"
+    assert cli.main(["math-export", str(pdf), "--out", str(out), "--mineru", exe,
+                     "--mineru-home", str(home), "--pages", "1-2", "--check-identities"]) == 0
+    hb = json.loads((out / "book" / "heartbeat.json").read_text("utf-8"))
+    assert hb["stage"] == "done" and hb["pid"] > 0
+    assert ("identities", 1) in beats and ("identities", 2) in beats
+    assert [b[0] for b in beats][0] == "engine"
 
 
 def test_section_constants_and_identity_items_from_the_pass():
