@@ -123,33 +123,35 @@ notation-only variants alone: `x'_1` vs `x_1'`, spacing, grouping braces, `\dots
 
 A `replace` starts from `latex_primary` and changes only what is wrong. Keep every `\\`
 row break, every `&`, every `\begin`/`\end` pair and every `\left`/`\right` pair.
-**Never** write `\ ` where a row break was. If you build the LaTeX with a script, write
-the JSON with `json.dumps` from a raw string (`r"..."`), never by hand-escaping. The
-apply step refuses a replace that loses any of these. If the page really prints it
-differently (the rows on one line), add `"structure_change": true` and a `"reason"`.
+The helper below refuses a replace that loses any of these. If the page really prints it
+differently (the rows on one line), add `--structure-change` and a `--reason`.
 Write the whole display body without `\tag{…}`.
 
 ## Decisions: `{decisions}`
 
-`{template}` has one line per item with `"action": "TODO"`. Copy it to `{decisions}` and
-fill it in: every item gets at least one decision. Every replace and flag carries a short
-`"reason"`; for a flag, also put it in `"note"`.
+Write every decision with the helper, **never by hand**: it reads the LaTeX raw and writes
+the JSON itself. Below, `D` stands for the command `{decide}`, and KEY for the item's `"key"`.
 
 ```
-{{"id": "p012-d01", "action": "accept"}}
-{{"id": "p012-d01", "action": "replace", "latex": "...", "reason": "printed sign is minus"}}
-{{"id": "p012-d02", "action": "flag", "flag_type": "possible_source_typo", "note": "...", "reason": "..."}}
-{{"id": "p014-d01", "action": "accept", "tag": "4.27", "reason": "tag misread"}}
-{{"id": "p015-inline", "action": "replace", "spans": [{{"latex_primary": "x_1", "latex": "x_2", "occurrence": 1}}], "reason": "printed x_2"}}
+D KEY accept
+D KEY replace --latex-file work\KEY.tex --reason "printed sign is minus"
+D KEY flag --flag-type possible_source_typo --subtype math_error --note "..."
+D status
 ```
 
-For an inline span, the id is the page's inline item. A `replace` lists the span, with
-`latex_primary` copied exactly and the `occurrence` the item gives. `accept` means the
-span is right; keep the template's `"spans"` line in an accept too (it says which span). Flag types: `possible_source_typo` (the LaTeX matches a page that looks
-wrong), `copy_corrupt` (the printed page itself is damaged or garbled: write what is
-shown and give the likely reading in the note), `formula_uncertain` (you can't decide;
-a flag is better than a guess), `illegible`. An item may get both a `replace` and a
-`flag` (two lines).
+For a replace, write the LaTeX exactly as it should read (single backslashes, `\\` for a
+row break) to a `.tex` file under `work\` with the **Write tool**, never through a shell
+command (a shell argument or heredoc can turn `\\` into `\`). Add `--tag 4.27` when the printed number was misread (with
+accept or replace). An inline span's replace takes the span and its occurrence from the
+item; when the item gives `occurrence_candidates` instead, add `--occurrence N`. A
+`missing_display` replace also takes `--page-text "..."` or `--after "..."`; an
+`inline_missing` replace takes `--run-text "..."`, one call per run. Every replace carries
+a `--reason`, every flag a `--note`. Flag types: `possible_source_typo` (subtype
+`math_error` or `notation`), `copy_corrupt` (the printed page itself is damaged: write what
+is shown, the likely reading in the note), `formula_uncertain` (you can't decide; a flag is
+better than a guess), `illegible`. An item may get a replace and a flag; deciding a key
+again replaces its earlier decision of that kind. A refusal says what to fix. Finish with
+`status`: every item decided.
 
 Scripts and scratch files go under `{batch_dir}\work\` only, never in a temp folder.
 Write `{batch_dir}\notes.md` with one line per replace or flag.

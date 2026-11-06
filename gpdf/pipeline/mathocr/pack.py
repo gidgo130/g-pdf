@@ -31,7 +31,7 @@ CONTEXT = 300                   # characters of page text before a display
 SPAN_CONTEXT = 80               # characters each side of an inline span
 DOC = Path(__file__).resolve().parents[3] / "docs" / "math-review.md"
 BRIEF_RE = re.compile(r"<!-- brief -->\n(.*?)<!-- /brief -->", re.S)
-FIELD_RE = re.compile(r"\{(batch|count|batch_dir|items|render|decisions|template)\}")
+FIELD_RE = re.compile(r"\{(batch|count|batch_dir|items|render|decide|decisions|template)\}")
 HEADING_RE = re.compile(r"(?m)^# (?!#)\S.*$")
 
 RENDER = '''# Renders a region of the source PDF (written by gpdf-cli math-review-pack).
@@ -253,6 +253,7 @@ def pack(export, out, kinds=DISPLAY_KINDS, batch_size: int = BATCH_SIZE,
     pdf = src.get("render_pdf") or src.get("path", "")     # a DjVu's proxy PDF
     write_atomic(out / "render.py", RENDER.format(pdf=pdf))
     render = f'"{sys.executable}" -I "{(out / "render.py").resolve()}"'
+    cli = f'"{sys.executable}" -m gpdf.cli math-decide --batch'
     batches = []
     for n in range(0, len(packed), batch_size):
         chunk = packed[n:n + batch_size]
@@ -267,7 +268,8 @@ def pack(export, out, kinds=DISPLAY_KINDS, batch_size: int = BATCH_SIZE,
         b = bdir.resolve()
         write_atomic(bdir / "BRIEF.md", fill(
             template, batch=name, count=len(chunk), batch_dir=b, items=b / "items.jsonl",
-            render=render, decisions=out.resolve() / "decisions" / f"{name}.jsonl",
+            render=render, decide=f'{cli} "{b}"',
+            decisions=out.resolve() / "decisions" / f"{name}.jsonl",
             template=b / "decisions.template.jsonl"))
         batches.append({"batch": name, "items": len(chunk),
                         "pages": sorted({int(x["file"]) for x in chunk})})

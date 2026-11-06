@@ -246,3 +246,98 @@ def test_a_pooled_sample_draws_over_all_pages_and_the_follow_up_judges_the_pool(
     assert cli.main(["math-review-pack", "--export", str(export), "--out", str(tmp_path / "c"),
                      "--inline-sample", "4", "--inline-pool"]) == 0
     assert json.loads((tmp_path / "c" / "pack.json").read_text("utf-8"))["by_kind"]["inline_span"] == 4
+
+
+# gpdf-cli math-decide: the reviewer writes each decision through a helper that reads the LaTeX
+# raw (a file or stdin) and serialises it, so a `\\` row break can't collapse to `\ `.
+
+def _packed(export, tmp_path, **kw):
+    out = tmp_path / "rev"
+    pack.pack(export, out, inline_sample=10, seed=3, **kw)
+    return out, out / "batch01"
+
+
+def test_decide_writes_a_row_break_replace_raw_and_it_applies(export, tmp_path):
+    from gpdf.pipeline.mathocr import decide
+    out, b = _packed(export, tmp_path)
+    new = r"\begin{aligned} y &= 2 \\ z &= 4 \end{aligned}"
+    d = decide.decide(b, "p002-d01", "replace", latex=new + "\n", reason="printed 4")
+    assert d == {"key": "p002-d01", "id": "p002-d01", "action": "replace", "latex": new,
+                 "reason": "printed 4"}
+    assert lines(out / "decisions" / "batch01.jsonl") == [d]
+    assert review.apply(export, out / "decisions" / "batch01.jsonl").refused == []
+    assert "z &= 4" in (export / "pages" / "p002.md").read_text("utf-8")
+
+
+def test_decide_refuses_a_collapsed_row_break_and_writes_nothing(export, tmp_path):
+    from gpdf.pipeline.mathocr import decide
+    out, b = _packed(export, tmp_path)
+    with pytest.raises(decide.DecideError, match="row break"):
+        decide.decide(b, "p002-d01", "replace", reason="x",
+                      latex=r"\begin{aligned} y &= 2 \ z &= 4 \end{aligned}")
+    with pytest.raises(decide.DecideError, match="same as latex_primary"):
+        decide.decide(b, "p001-d01", "replace", latex=" x^2 = 1 ", reason="x")
+    with pytest.raises(decide.DecideError, match="unknown key"):
+        decide.decide(b, "p009-d01", "accept")
+    with pytest.raises(decide.DecideError, match="note"):
+        decide.decide(b, "p001-d01", "flag", flag_type="possible_source_typo")
+    assert not (out / "decisions" / "batch01.jsonl").exists()
+    d = decide.decide(b, "p002-d01", "replace", reason="rows on one line", structure_change=True,
+                      latex="y = 2, z = 4")
+    assert d["structure_change"] is True
+
+
+def test_decide_fills_an_inline_span_from_its_item_and_keeps_one_decision_per_key(export, tmp_path):
+    from gpdf.pipeline.mathocr import decide
+    out, b = _packed(export, tmp_path)
+    decide.decide(b, "p001-inline#1", "accept")
+    d = decide.decide(b, "p001-inline#1", "replace", latex="a_2", reason="printed a_2")
+    assert d["spans"] == [{"latex_primary": "a_1", "latex": "a_2", "occurrence": 1}]
+    with pytest.raises(decide.DecideError, match="occurrence"):     # b is printed twice
+        decide.decide(b, "p001-inline#2", "replace", latex="h", reason="x")
+    d2 = decide.decide(b, "p001-inline#2", "replace", latex="h", reason="x", occurrence=2)
+    assert d2["spans"][0]["occurrence"] == 2
+    decide.decide(b, "p001-d01", "flag", flag_type="possible_source_typo", subtype="math_error",
+                  note="exponent looks wrong")
+    decide.decide(b, "p001-d01", "accept", tag="1.2", reason="tag misread")
+    got = lines(out / "decisions" / "batch01.jsonl")
+    assert [(x["key"], x["action"]) for x in got] == [
+        ("p001-d01", "accept"), ("p001-d01", "flag"), ("p001-inline#1", "replace"),
+        ("p001-inline#2", "replace")]
+    assert got[1]["reason"] == "exponent looks wrong" and got[1]["subtype"] == "math_error"
+    s = decide.status(b)
+    assert s["decided"] == 3 and "p002-d01" in s["missing"] and s["total"] == len(s["missing"]) + 3
+    rep = review.apply(export, out / "decisions" / "batch01.jsonl")
+    assert rep.refused == []
+    assert r"\(a_2\)" in (export / "pages" / "p001.md").read_text("utf-8")
+
+
+def test_decide_places_a_missing_display_by_an_exact_piece_of_the_page(export, tmp_path):
+    from gpdf.pipeline.mathocr import decide
+    out, b = _packed(export, tmp_path)
+    with pytest.raises(decide.DecideError, match="after"):
+        decide.decide(b, "p002-m01", "replace", latex="w = 4", reason="missing")
+    with pytest.raises(decide.DecideError, match="not in page_md"):
+        decide.decide(b, "p002-m01", "replace", latex="w = 4", reason="m", after="no such text")
+    d = decide.decide(b, "p002-m01", "replace", latex="w = 4", reason="m", after=r"and \(d\).")
+    assert d["after"] == r"and \(d\)." and d["latex"] == "w = 4"
+
+
+def test_cli_decide_reads_the_latex_from_stdin_and_the_brief_names_the_helper(export, tmp_path,
+                                                                             monkeypatch, capsys):
+    import io
+    out, b = _packed(export, tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO(r"\begin{aligned} y &= 3 \\ z &= 3 \end{aligned}"
+                                                 + "\n"))
+    assert cli.main(["math-decide", "--batch", str(b), "p002-d01", "replace",
+                     "--reason", "printed 3"]) == 0
+    assert lines(out / "decisions" / "batch01.jsonl")[0]["latex"].count("\\\\") == 1
+    tex = b / "work" / "x.tex"
+    tex.write_text(r"\begin{aligned} y &= 2 \ z &= 3 \end{aligned}", "utf-8")
+    assert cli.main(["math-decide", "--batch", str(b), "p002-d01", "replace", "--reason", "r",
+                     "--latex-file", "work/x.tex"]) == 2         # relative to the batch
+    assert "row break" in capsys.readouterr().err
+    assert cli.main(["math-decide", "--batch", str(b), "status"]) == 0
+    assert "1 of" in capsys.readouterr().out
+    brief = (b / "BRIEF.md").read_text("utf-8")
+    assert "math-decide" in brief and str(b.resolve()) in brief and not pack.FIELD_RE.search(brief)

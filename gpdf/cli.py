@@ -38,6 +38,8 @@
                                                     # apply the checked review decisions to
                                                     # the page files; rebuild text.md
     gpdf-cli math-review-pack --export DIR --out DIR [--inline-sample N --seed S]
+    gpdf-cli math-decide --batch DIR KEY accept|replace|flag [...]   # one review decision,
+                                                    # LaTeX read raw from a file or stdin
     gpdf-cli math-score --ref DIR_or_text.md --cand DIR_or_text.md --out DIR [--pages RANGE]
     gpdf-cli math-check-pages DIR [--out FILE.json]       # delimiters, row breaks, braces, flags
                                                     # score a transcription against a reference
@@ -408,6 +410,31 @@ def build_parser() -> argparse.ArgumentParser:
     mr.add_argument("--inline-pool", action="store_true",
                     help="draw the N spans from all the packed pages as one pool, not per chapter "
                          "(chapters of a few pages each); the follow-up then judges the pool")
+    md = sub.add_parser("math-decide", help="write one math review decision (LaTeX read raw)",
+                        description="Write one decision for one item of a math-review-pack "
+                                    "batch to <review dir>/decisions/<batch>.jsonl. The LaTeX of "
+                                    "a replace is read raw from --latex-file or stdin (no JSON "
+                                    "escaping), and is refused when it loses a row break, an "
+                                    "&, an environment or a \left/\right pair. KEY 'status' "
+                                    "lists the items still without a decision.")
+    md.add_argument("--batch", metavar="DIR", type=Path, required=True,
+                    help="the batch folder (with items.jsonl)")
+    md.add_argument("key", metavar="KEY", help="the item's key from items.jsonl, or 'status'")
+    md.add_argument("action", nargs="?", choices=("accept", "replace", "flag"))
+    md.add_argument("--latex-file", metavar="FILE", type=Path,
+                    help="the replace LaTeX, as plain text (default: read stdin)")
+    md.add_argument("--reason", help="why (required for a replace)")
+    md.add_argument("--note", help="a flag's note (required for a flag)")
+    md.add_argument("--flag-type", help="formula_uncertain, possible_source_typo, copy_corrupt "
+                                        "or illegible")
+    md.add_argument("--subtype", help="a possible_source_typo's math_error or notation")
+    md.add_argument("--tag", help="the printed equation number, when it was misread")
+    md.add_argument("--occurrence", type=int, help="which occurrence on the page (inline)")
+    md.add_argument("--page-text", help="missing_display: the exact page text it replaces")
+    md.add_argument("--after", help="missing_display: the exact page text it follows")
+    md.add_argument("--run-text", help="inline_missing: the exact page text of the run")
+    md.add_argument("--structure-change", action="store_true",
+                    help="the page really prints the structure differently (needs --reason)")
     mf = sub.add_parser("math-review-followup",
                         help="which chapters' inline items need a full review",
                         description="From a packed review with an inline sample and its "
@@ -507,6 +534,8 @@ def main(argv: list[str] | None = None) -> int:
         return _math_provenance_main(args)
     if args.command == "math-review-followup":
         return _math_review_followup_main(args)
+    if args.command == "math-decide":
+        return _math_decide_main(args)
     if args.command == "math-score":
         return _math_score_main(args)
     if args.command == "math-check-pages":
@@ -951,6 +980,38 @@ def _math_provenance_main(args) -> int:
         print(f"gpdf-cli: error: {e}", file=sys.stderr)
         return EXIT_ERROR
     print(provenance.report(res))
+    return EXIT_OK
+
+
+def _math_decide_main(args) -> int:
+    from gpdf.pipeline.mathocr import decide
+
+    try:
+        if args.key == "status":
+            st = decide.status(args.batch)
+            print(f"{st['decided']} of {st['total']} items decided"
+                  + (f"; still to decide: {' '.join(st['missing'])}" if st["missing"] else ""))
+            return EXIT_OK
+        if args.action is None:
+            raise decide.DecideError("give the action: accept, replace or flag")
+        latex = None
+        if args.action == "replace":
+            lf = args.latex_file
+            if lf is not None and not lf.is_absolute() and not lf.exists():
+                lf = args.batch / lf                # work\KEY.tex: relative to the batch
+            latex = lf.read_text("utf-8-sig") if lf is not None else sys.stdin.read()
+        d = decide.decide(args.batch, args.key, args.action, latex=latex, reason=args.reason,
+                          note=args.note, flag_type=args.flag_type, subtype=args.subtype,
+                          tag=args.tag, page_text=args.page_text, after=args.after,
+                          run_text=args.run_text, occurrence=args.occurrence,
+                          structure_change=args.structure_change)
+    except decide.DecideError as e:
+        print(f"gpdf-cli: refused: {e}", file=sys.stderr)
+        return EXIT_UNREVIEWED
+    except OSError as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    print(f"{d['key']}: {d['action']} written")
     return EXIT_OK
 
 
