@@ -77,7 +77,8 @@ other file or folder, and do not search for reference transcriptions or scores.
 `latex_primary` is what the page file holds now. `latex_second` (a smaller model) and
 `latex_marker` (another engine) are hints only; **the crop decides**. `context` is the
 page text just before the formula. `crops` are 300 dpi images: view them with the Read
-tool. For more detail, render a region: `{render} FILE_PAGE OUT.png --box X0 Y0 X1 Y1
+tool. **Open every item's crop before you decide it**, however short the span, and decide
+items one at a time, not in a loop; the reviewer's tool calls are checked for this afterwards. For more detail, render a region: `{render} FILE_PAGE OUT.png --box X0 Y0 X1 Y1
 --dpi 500`, where the box is in page fractions (0..1, left top right bottom) and OUT
 lies under `{batch_dir}\renders\`.
 

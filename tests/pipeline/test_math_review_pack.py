@@ -188,6 +188,8 @@ def test_the_brief_carries_the_tag_nesting_and_source_typo_rules(export, tmp_pat
     assert "never accept plus tag" in brief.lower()
     assert "nesting" in brief
     assert "looks mathematically wrong" in brief and "never plain `accept`" in brief
+    # Batch B-2: reviewers accepted short inline spans in a loop without opening their crops
+    assert "Open every item's crop" in brief and "not in a loop" in brief
 
 
 def test_an_identity_item_carries_the_check_and_its_numbers(tmp_path):
