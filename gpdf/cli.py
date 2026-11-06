@@ -410,6 +410,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="N random flagged inline spans per chapter, each its own item (default "
                          "40, all when a chapter has fewer; 0: none)")
     mr.add_argument("--seed", type=int, default=0, help="the inline sample's seed (default 0)")
+    mr.add_argument("--identity-failed", action="store_true",
+                    help="only the displays whose numeric identity check failed, whatever their "
+                         "kind (a full assembly's failures; no inline sample)")
+    mr.add_argument("--skip-reviewed", type=Path, action="append", default=[], metavar="DIR",
+                    help="with --identity-failed: leave out displays that a pack under DIR "
+                         "already gave with a failed check (repeatable)")
     mr.add_argument("--inline-pool", action="store_true",
                     help="draw the N spans from all the packed pages as one pool, not per chapter "
                          "(chapters of a few pages each); the follow-up then judges the pool")
@@ -1000,7 +1006,9 @@ def _math_review_pack_main(args) -> int:
         summary = pack.pack(args.export, args.out, tuple(k.strip() for k in args.kinds.split(",")
                                                          if k.strip()),
                             args.batch_size, args.pages, args.inline_sample, args.seed,
-                            inline_pool=args.inline_pool)
+                            inline_pool=args.inline_pool,
+                            identity_failed=args.identity_failed,
+                            skip_reviewed=args.skip_reviewed)
     except (pack.PackError, OSError) as e:
         print(f"gpdf-cli: error: {e}", file=sys.stderr)
         return EXIT_ERROR

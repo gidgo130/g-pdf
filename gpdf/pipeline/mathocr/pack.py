@@ -195,9 +195,35 @@ def _template(item: dict) -> dict:
     return d
 
 
+def _identity_failed(it: dict) -> bool:
+    return bool(it.get("identity")) or any(str(r).startswith("identity failed")
+                                           for r in it.get("reasons", []))
+
+
+def _latex_key(s: str | None) -> str:
+    return re.sub(r"\s+", "", re.sub(r"\\tag\{[^}]*\}", "", s or ""))
+
+
+def _reviewed_with_check(dirs) -> set[str]:
+    """LaTeX keys of the display items packed under DIRS that carried a failed check."""
+    seen = set()
+    for d in dirs:
+        for f in sorted(Path(d).rglob("items.jsonl")):
+            for line in f.read_text("utf-8").splitlines():
+                if line.strip():
+                    x = json.loads(line)
+                    if x.get("identity_check") and x.get("latex_primary"):
+                        seen.add(_latex_key(x["latex_primary"]))
+    return seen
+
+
 def pack(export, out, kinds=DISPLAY_KINDS, batch_size: int = BATCH_SIZE,
          pages: str | None = None, inline_sample: int = 0, seed: int = 0,
-         doc: Path = DOC, inline_pool: bool = False) -> dict:
+         doc: Path = DOC, inline_pool: bool = False, identity_failed: bool = False,
+         skip_reviewed=()) -> dict:
+    """``identity_failed``: only the displays whose numeric check failed, whatever their
+    kind (a full assembly's failures, e.g. a pair across groups); ``skip_reviewed``: review
+    folders whose packed items already carried a failed check for the same LaTeX."""
     root, out = Path(export), Path(out)
     review = root / "review.jsonl"
     if not review.is_file():
@@ -223,6 +249,15 @@ def pack(export, out, kinds=DISPLAY_KINDS, batch_size: int = BATCH_SIZE,
             mds[file] = p.read_text("utf-8") if p.is_file() else ""
         return mds[file]
 
+    skipped = 0
+    if identity_failed:
+        seen = _reviewed_with_check(skip_reviewed)
+        keep_items = [it for it in items if _identity_failed(it)
+                      and it["kind"] not in ("inline", "inline_missing")]
+        skipped = sum(1 for it in keep_items if _latex_key(it.get("latex_primary")) in seen)
+        items = [it for it in keep_items if _latex_key(it.get("latex_primary")) not in seen]
+        kinds = tuple(sorted({it["kind"] for it in items})) or kinds
+        inline_sample = 0
     packed = []
     for it in items:
         if it["kind"] in kinds and it["kind"] not in ("inline", "inline_missing"):
@@ -280,7 +315,8 @@ def pack(export, out, kinds=DISPLAY_KINDS, batch_size: int = BATCH_SIZE,
     summary = {"export": str(root.resolve()), "kinds": list(kinds), "pages": pages,
                "batch_size": batch_size, "inline_sample": inline_sample, "seed": seed,
                "inline_pool": inline_pool, "items": len(packed), "by_kind": by_kind, "chapters": sample,
-               "batches": batches}
+               "batches": batches, "identity_failed": identity_failed,
+               "skip_reviewed": [str(d) for d in skip_reviewed], "skipped_reviewed": skipped}
     write_atomic(out / "pack.json", json.dumps(summary, ensure_ascii=False, indent=1) + "\n")
     return summary
 

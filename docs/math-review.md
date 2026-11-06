@@ -44,6 +44,12 @@ of 50, and a brief of about a page.
    `\left`/`\right` pair, or unbalanced braces) is fixed in the decision, not forced.
 5. Score against a reference when there is one (`gpdf-cli math-score`); layout errors are
    reported apart from value and style errors.
+6. A book run in engine groups is assembled once more over all its pages (engine-free, from
+   the cache), and that run's identity pass can fail displays no group failed (a pair or a
+   constant across a group boundary: JKB p172-d03). Pack those too: `gpdf-cli
+   math-review-pack --export FULL\<stem> --out REVIEW_DIR --identity-failed --skip-reviewed
+   GROUP_REVIEWS` packs every display of the full assembly whose check failed, whatever its
+   kind, except those a group pack already gave with a failed check for the same LaTeX.
 
 Helper scripts, renders and notes stay in the batch folder: they hold the book's formulas.
 

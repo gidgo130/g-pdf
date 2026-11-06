@@ -206,6 +206,42 @@ def test_an_identity_item_carries_the_check_and_its_numbers(tmp_path):
                                                   "sum": 1.5}]}
 
 
+def test_the_full_assemblys_identity_failures_are_packed_unless_already_reviewed_with_them(tmp_path):
+    # JKB p172-d03: a display failed its check only in the full assembly, so no group pack
+    # carried it. --identity-failed packs every display whose check failed, whatever its
+    # kind; --skip-reviewed leaves out those an earlier pack already gave with a failed check.
+    r = tmp_path / "full"
+    (r / "pages").mkdir(parents=True)
+    md = ('<!-- page printed="1" file="1" -->\n\n$$\nf(x) = 2x\n$$\n\n$$\nF(x) = x^3\n$$\n\n'
+          '$$\ng(x) = 3x\n$$\n\n$$\nh = 1\n$$\n')
+    (r / "pages" / "p001.md").write_text(md, "utf-8")
+    ident = dict(identity=["integrates to 1"], identity_kind="density",
+                 identity_details=[{"integral": 2.0}])
+    full = [item("p001-d01", 1, "identity", "f(x) = 2x", **ident),
+            {**item("p001-d02", 1, "disagree", "F(x) = x^3", "F(x) = x^2", **ident),
+             "reasons": ["tiers disagree", "identity failed: integrates to 1"]},
+            item("p001-d03", 1, "identity", "g(x) = 3x", **ident),
+            item("p001-d04", 1, "disagree", "h = 1", "h = 7")]
+    (r / "review.jsonl").write_text("".join(json.dumps(i) + "\n" for i in full), "utf-8")
+    # the group pack had d03 with its failed check, d02 without one (it failed only now)
+    g = tmp_path / "groups" / "g1" / "batch01"
+    g.mkdir(parents=True)
+    (g / "items.jsonl").write_text(
+        json.dumps({"key": "p001-d03", "latex_primary": "g(x) = 3x",
+                    "identity_check": {"failed": ["integrates to 1"]}}) + "\n"
+        + json.dumps({"key": "p001-d02", "latex_primary": "F(x) = x^3"}) + "\n", "utf-8")
+    s = pack.pack(r, tmp_path / "rev", identity_failed=True, skip_reviewed=[tmp_path / "groups"])
+    got = lines(tmp_path / "rev" / "batch01" / "items.jsonl")
+    assert [x["id"] for x in got] == ["p001-d01", "p001-d02"]
+    assert all(x["identity_check"]["failed"] == ["integrates to 1"] for x in got)
+    assert s["skipped_reviewed"] == 1
+    assert cli.main(["math-review-pack", "--export", str(r), "--out", str(tmp_path / "rev2"),
+                     "--identity-failed", "--skip-reviewed", str(tmp_path / "groups"),
+                     "--inline-sample", "0"]) == 0
+    assert [x["id"] for x in lines(tmp_path / "rev2" / "batch01" / "items.jsonl")] == [
+        "p001-d01", "p001-d02"]
+
+
 @pytest.mark.parametrize("sampled, errors, full", [
     (40, 0, False), (40, 1, False), (40, 2, True), (19, 1, True), (19, 0, False), (20, 1, False)])
 def test_the_inline_follow_up_rule(sampled, errors, full):
