@@ -45,15 +45,22 @@ def _quad(f, d):
 
 
 def _discrete_sum(f, d):
+    """sum of f(k) over the support; f takes a numpy array of k. An infinite support is cut
+    where the pmf has fallen below 1e-20 (the pmf, not sf: some sf take minutes far out)."""
     lo, hi = _support(d)
     lo = int(lo)
-    top = int(hi) if not math.isinf(hi) else int(min(d.isf(1e-18), 1e7))
-    top = max(top, lo)
-    ks = np.arange(lo, top + 1)
-    return float(np.sum([f(k) for k in ks])), 0.0
+    if math.isinf(hi):
+        top = lo + 64
+        while top < 10 ** 7 and d.pmf(top) > 1e-20:
+            top = top * 2
+    else:
+        top = int(hi)
+    ks = np.arange(lo, max(int(top), lo) + 1)
+    return float(np.sum(f(ks))), 0.0
 
 
 def _expect(f, d, discrete):
+    """E[f(X)]; f must take numpy arrays (np.cos, x ** k)."""
     if discrete:
         return _discrete_sum(lambda k: f(k) * d.pmf(k), d)
     return _quad(lambda y: f(y) * d.pdf(y), d)
@@ -105,6 +112,8 @@ def answer(q):
         out["value"] = float(d.var())
     elif qty == "sd":
         out["value"] = float(d.std())
+    elif qty == "cv":                            # coefficient of variation
+        out["value"] = float(d.std() / d.mean())
     elif qty == "skew":
         out["value"] = float(d.stats(moments="s"))
     elif qty == "kurt":                          # beta_2 = excess + 3
@@ -129,7 +138,7 @@ def answer(q):
         out["how"] = "scipy raw moments, cumulant recursion"
     elif qty in ("mgf", "cgf"):              # e^{ty + log f(y)}: no overflow far out
         if discrete:
-            v, err = _discrete_sum(lambda k: float(np.exp(x * k + d.logpmf(k))), d)
+            v, err = _discrete_sum(lambda k: np.exp(x * k + d.logpmf(k)), d)
         else:
             v, err = _quad(lambda y: float(np.exp(x * y + d.logpdf(y))), d)
         out["value"] = v if qty == "mgf" else math.log(v)
@@ -154,13 +163,13 @@ def answer(q):
         out["tol_floor"] = _rel(math.hypot(e1, e2), math.hypot(re_, im_))
         out["how"] = "Fourier quadrature (QAWF) of f(y)"
     elif qty == "cf":
-        re_, e1 = _expect(lambda y: math.cos(x * y), d, discrete)
-        im_, e2 = _expect(lambda y: math.sin(x * y), d, discrete)
+        re_, e1 = _expect(lambda y: np.cos(x * y), d, discrete)
+        im_, e2 = _expect(lambda y: np.sin(x * y), d, discrete)
         out["value"], out["imag"] = re_, im_
         out["tol_floor"] = _rel(math.hypot(e1, e2), math.hypot(re_, im_))
         out["how"] = "quadrature of e^{ity} f(y)" if not discrete else "sum of e^{itk} p(k)"
     elif qty == "pgf":
-        v, err = _expect(lambda k: x ** k, d, discrete)
+        v, err = _expect(lambda k: np.power(float(x), k), d, discrete)
         out["value"], out["tol_floor"] = v, _rel(err, v)
         out["how"] = "sum of z^k p(k)"
     elif qty == "entropy":

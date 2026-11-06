@@ -17,7 +17,11 @@ def answer(q):
         table = {"pdf": lambda: math.exp(-x / s) / s, "cdf": lambda: 1 - math.exp(-x / s),
                  "sf": lambda: math.exp(-x / s), "mean": lambda: s, "var": lambda: s * s,
                  "mgf": lambda: 1 / (1 - s * x), "raw_moment": lambda: math.factorial(r) * s ** r,
-                 "kurt": lambda: 9.0, "skew": lambda: 2.0}
+                 "kurt": lambda: 9.0, "skew": lambda: 2.0, "cv": lambda: 1.0}
+    elif d == "branch":         # a log cf answered on another branch of the complex log
+        if qty != "log_cf":
+            return {"error": "only log_cf"}
+        return {"value": -0.5 * x * x, "imag": x + 2 * math.pi, "tol_floor": 0.0, "how": "fake"}
     elif d == "norm":
         m, s = a.get("loc", 0.0), a["scale"]
         table = {"pdf": lambda: math.exp(-((x - m) / s) ** 2 / 2) / (s * math.sqrt(2 * math.pi)),

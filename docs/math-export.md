@@ -421,7 +421,8 @@ parameters (θ = αβ, φ = λ/μ), computed after them. `skip` and `overrides` 
 id) take out or adjust harvested entries. **identify** ranges are for a book whose summary
 tables lost their row labels (Forbes): every display row and every inline span with an
 operation in it is tried against each quantity its free variable allows (none: mean, var,
-sd, skewness, kurtosis, mode, median, entropy; x: pdf/pmf, cdf, sf, hazard, cumulative
+sd, skewness, kurtosis, mode, median, entropy, coefficient of variation, raw moments of
+order 2-4, central moments and cumulants of order 3-4, a constant pdf; x: pdf/pmf, cdf, sf, hazard, cumulative
 hazard; t: mgf, cf, log cf, cgf (pgf for a discrete row); s: Laplace transform; r:
 moments, cumulants; α, p: inverse survival, quantile) and passes under the first it
 matches; one that matches none is `unidentified` (inconclusive, with the closest quantity)
@@ -434,7 +435,8 @@ through the identity checks' LaTeX parser (sympy, mpmath) and SciPy's side by
 `crosscheck_ref.py` in the external Python (SciPy is never a g-pdf dependency; the worker
 imports nothing from g-pdf), and compared at a relative tolerance of 1e-8 (absolute where
 the reference is 0), loosened only to ten times the reference's own quadrature error
-estimate (mgf, cf, pgf by quadrature or sum; the reason is recorded). A parametrisation
+estimate (mgf, cf, pgf by quadrature or sum; the reason is recorded); a log cf is compared
+on the reference's branch of the complex log (modulo 2πi). A parametrisation
 mismatch is fixed in the table, never counted as a failure. An entry is **inconclusive**
 when it can't be evaluated: it does not parse, it leaves symbols the table does not give,
 SciPy has no value, or it runs past the 20 s per-entry limit (the reference worker is

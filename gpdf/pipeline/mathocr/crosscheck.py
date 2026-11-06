@@ -59,7 +59,7 @@ ARG_OF = {"pdf": "@x", "pmf": "@x", "cdf": "@x", "sf": "@x", "hazard": "@x", "qu
 DEFAULT_ARGS = {"@p": 0.3, "@a": 0.2, "@s": 0.4, "@z": 0.6, "@t": 0.25}
 MOMENTS = ("raw_moment", "central_moment", "cumulant")
 SCALARS = ("mean", "var", "sd", "skew", "skew2", "kurt", "excess_kurt", "entropy", "mode",
-           "median")
+           "median", "cv")
 QUANTITIES = tuple(ARG_OF) + MOMENTS + SCALARS
 CF_UNIT = "i"
 
@@ -203,7 +203,8 @@ def piece(latex: str, row=None, eq=None) -> str:
         if not 0 <= eq < len(eqs):
             raise CrosscheckError(f"equation {eq} not found ({len(eqs)} in the piece)")
         return eqs[eq][1]
-    s = I._clean(I._pre(s)) if eq in ("rhs", None, "full") else s
+    if eq in ("rhs", None, "full"):      # a whole display: no alignment left over
+        s = I._clean(I._pre(I.ALIGN_ENV.sub(" ", s).replace("&", " ")))
     if eq == "rhs":
         s = I._split_top(s, ["="])[-1]
     return I._strip_conditions(s)
@@ -356,7 +357,7 @@ def _eval_all(exprs: dict, point: dict) -> dict:
     params = {k: v for k, v in point.items() if not k.startswith("@")}
     env = {**params, **{k + "_": v for k, v in params.items() if keyword.iskeyword(k)},
            "math": math, "sqrt": math.sqrt, "exp": math.exp, "log": math.log, "pi": math.pi,
-           "gamma": math.gamma} | params
+           "gamma": math.gamma, "round": round, "abs": abs} | params
     return {k: (eval(v, {"__builtins__": {}}, env) if isinstance(v, str) else v)  # noqa: S307
             for k, v in exprs.items()}
 
@@ -440,14 +441,18 @@ def _prepare(e, pages, spec, res):
     if dist is None:
         res["reason"] = f"distribution {e['dist']} not in the table"
         return None
+    # the rewrites go on the raw LaTeX, before the piece is cut (an entry may join rows)
+    src = latex
+    for rx, rep in spec.get("notation", []) + e.get("notation", []):
+        src = re.sub(rx, rep, src)
     try:
-        text = piece(latex, e.get("row"), e.get("eq", "rhs" if kind == "d" else "full"))
+        text = piece(src, e.get("row"), e.get("eq", "rhs" if kind == "d" else "full"))
     except (CrosscheckError, IndexError) as ex:
         res["reason"] = str(ex)
         return None
     res["piece"] = text
     defs = {**spec.get("defs", {}), **e.get("defs", {})}
-    expr = book_expr(text, spec.get("notation", []) + e.get("notation", []), defs)
+    expr = book_expr(text, (), defs)
     if expr is None:
         res["reason"] = "the formula does not parse"
         return None
@@ -463,7 +468,9 @@ DISCRETE_CLASSES = {"x": ["pmf", "cdf", "sf", "hazard"], "y": ["pmf", "cdf", "sf
                     "k": ["pmf", "cdf", "sf"], "i": ["pmf", "cdf", "sf"],
                     "t": ["pgf", "mgf", "cf", "log_cf", "cgf"], "z": ["pgf"], "s": ["pgf"],
                     "r": ["raw_moment", "cumulant", "central_moment"]}
-SCALAR_CLASS = ["mean", "var", "sd", "skew", "kurt", "excess_kurt", "mode", "median", "entropy"]
+SCALAR_CLASS = ["mean", "var", "sd", "skew", "kurt", "excess_kurt", "mode", "median", "entropy",
+                "cv", "raw_moment@2", "raw_moment@3", "raw_moment@4", "central_moment@3",
+                "central_moment@4", "cumulant@3", "cumulant@4", "pdf"]       # pdf: a constant one
 
 
 def _candidates(expr, e, dist) -> list[str]:
@@ -486,8 +493,14 @@ def _candidates(expr, e, dist) -> list[str]:
 
 
 def _compare(expr, e, q, dist, spec, ref, res):
-    """Compare expr as quantity q at the table's points; fills res (status, points, ...)."""
+    """Compare expr as quantity q at the table's points; fills res (status, points, ...).
+    ``q@n`` is a moment of fixed order n (identify mode)."""
     from gpdf.pipeline.mathocr import identities as I
+    if "@" in q:
+        q, fixed_r = q.split("@")
+        e = {**e, "r": int(fixed_r)}
+    if q == "pdf" and dist.get("discrete"):
+        q = "pmf"
     tol = float(e.get("tol", spec.get("tol", TOL)))
     worst, failed, why = 0.0, False, None
     present = {I._canon(s.name) for s in expr.free_symbols}
@@ -531,6 +544,12 @@ def _compare(expr, e, q, dist, spec, ref, res):
         if a.get("tol_floor", 0) * 10 > t:
             t = a["tol_floor"] * 10
             res["tol_reason"] = f"loosened to {t:.1e}: {a['how']} error estimate"
+        if not (math.isfinite(s.real) and math.isfinite(s.imag)):
+            res["points"].append({"values": values, "book": [b.real, b.imag]})
+            res["reason"] = "reference: not a finite number here"
+            return res
+        if q == "log_cf":            # a complex log is defined up to 2*pi*i: same branch first
+            b = complex(b.real, b.imag - 2 * math.pi * round((b.imag - s.imag) / (2 * math.pi)))
         ok, err = _close(b, s, t)
         worst = max(worst, err)
         failed |= not ok

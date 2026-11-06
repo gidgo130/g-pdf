@@ -109,6 +109,47 @@ def test_identify_names_unlabelled_formulas_by_what_they_match(tmp_path):
     assert "unidentified" in C.report(res)
 
 
+def test_identify_knows_fixed_order_moments_and_the_coefficient_of_variation(tmp_path):
+    md = ('<!-- page printed="1" file="1" -->\n\nRows \\(2\\theta^{2}\\) and \\(\\theta / \\theta\\)'
+          ' and\n\n$$\n\\begin{array}{l} \\mu_{2}^{\\prime} = 2 \\theta^{2} \\\\ \\qquad + 0\n'
+          '\\end{array}\n\\tag{9.1}\n$$\n')
+    (tmp_path / "text.md").write_text(md, "utf-8")
+    p = tmp_path / "spec.json"
+    p.write_text(json.dumps({"pages": "text.md", "dists": DISTS,
+                             "identify": [{"pages": "1", "dist": "expon", "inline": True}],
+                             "entries": [{"id": "rows joined", "where": {"tag": "9.1"}, "qty": "raw_moment",
+                                          "r": 2, "dist": "expon",
+                                          "notation": [[r"\\qquad", " "], [r"\\\\", " "]]}]}), "utf-8")
+    ref = C.RefWorker(sys.executable, FAKE)
+    try:
+        res = C.run(p, tmp_path / "out", ref=ref)
+    finally:
+        ref.close()
+    got = {r["id"]: r for r in res["results"]}
+    assert got["p001-i01 raw_moment@2"]["status"] == "passed"
+    assert got["p001-i02 cv"]["status"] == "passed"
+    # the rewrites go on before the piece is cut: the continuation row is joined, and no
+    # \end{array} is left over in the right-hand side
+    assert got["rows joined"]["status"] == "passed" and "array" not in got["rows joined"]["piece"]
+
+
+def test_a_log_cf_is_compared_on_the_same_branch(tmp_path):
+    md = '<!-- page printed="1" file="1" -->\n\n$$\ni t - \\frac{1}{2} t^{2}\n\\tag{2.1}\n$$\n'
+    (tmp_path / "text.md").write_text(md, "utf-8")
+    p = tmp_path / "spec.json"
+    p.write_text(json.dumps({"pages": "text.md",
+                             "dists": {"branch": {"scipy": "branch",
+                                                  "points": [{"@t": 0.5}, {"@t": -1.2}, {"@t": 2.0}]}},
+                             "entries": [{"id": "lcf", "where": {"tag": "2.1"}, "eq": "full",
+                                          "qty": "log_cf", "dist": "branch"}]}), "utf-8")
+    ref = C.RefWorker(sys.executable, FAKE)
+    try:
+        res = C.run(p, tmp_path / "out", ref=ref)
+    finally:
+        ref.close()
+    assert res["results"][0]["status"] == "passed"
+
+
 def test_a_parametrisation_is_a_table_fix_not_a_failure(book):
     # the same book read with the rate in the table: everything still agrees
     # (a book name that is a Python keyword is written with a trailing _ in "args")
