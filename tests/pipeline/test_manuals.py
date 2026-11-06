@@ -765,3 +765,37 @@ def test_cli_coverage_report_lists_pages_with_missing_words(tmp_path, capsys):
     assert "### pdf 1 · no label" in md
     assert "Jaws are numbered They are designed installed numerical order guides." in md
     assert "synth" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- write_atomic on Windows
+
+def test_write_atomic_retries_a_transient_access_denied(tmp_path, monkeypatch):
+    # an antivirus scanner or the indexer holds the target for a moment: Windows says
+    # "Access is denied" (PermissionError) on the replace; a short backoff gets through
+    from gpdf.pipeline import manuals as M
+    real, calls, waits = M.os.replace, [], []
+
+    def flaky(a, b):
+        calls.append(b)
+        if len(calls) < 3:
+            raise PermissionError(13, "Access is denied")
+        real(a, b)
+    monkeypatch.setattr(M.os, "replace", flaky)
+    monkeypatch.setattr(M.time, "sleep", waits.append)
+    target = tmp_path / "out.md"
+    M.write_atomic(target, "text\n")
+    assert target.read_text("utf-8") == "text\n" and len(calls) == 3
+    assert waits and waits == sorted(waits) and sum(waits) < 5
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_write_atomic_gives_up_after_its_retries(tmp_path, monkeypatch):
+    from gpdf.pipeline import manuals as M
+
+    def denied(a, b):
+        raise PermissionError(13, "Access is denied")
+    monkeypatch.setattr(M.os, "replace", denied)
+    monkeypatch.setattr(M.time, "sleep", lambda s: None)
+    with pytest.raises(PermissionError):
+        M.write_atomic(tmp_path / "out.md", "text\n")
+    assert not list(tmp_path.glob("*.tmp"))

@@ -1396,10 +1396,27 @@ def render_md(entry: dict, meta: dict, records: list[dict]) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+WRITE_RETRIES = (0.05, 0.1, 0.2, 0.4, 0.8, 1.6)   # seconds between tries (3.15 s in all)
+
+
 def write_atomic(path: Path, text: str):
+    """Write through a .tmp file and replace. On Windows an antivirus scanner or the search
+    indexer can hold either file for a moment ("Access is denied"): try again with a short
+    backoff, and on giving up remove the .tmp file and raise."""
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8", newline="\n")
-    os.replace(tmp, path)
+    for wait in (*WRITE_RETRIES, None):
+        try:
+            tmp.write_text(text, encoding="utf-8", newline="\n")
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if wait is None:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+                raise
+            time.sleep(wait)
 
 
 def _stats(entry: dict, meta: dict, records: list[dict], fig_dir: Path, seconds: float) -> dict:
