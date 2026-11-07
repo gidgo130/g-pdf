@@ -239,3 +239,74 @@ def test_real_scipy_when_configured(book):
         pytest.skip("set GPDF_SCIPY_PYTHON to a Python with SciPy")
     res = C.run(spec(book), book / "out", python=py)
     assert res["counts"]["passed"] == 6 and res["counts"]["failed"] == 1
+
+
+PW = ('<!-- page printed="20" file="1" -->\n\n'
+      # 1: a piecewise cdf (left brace + array), commas before the conditions
+      '$$\nF(x) = \\left\\{ \\begin{array}{ll} 0, & x < 0, \\\\ 1 - e^{-x/\\theta}, & x \\geq 0, '
+      '\\end{array} \\right.\n\\tag{3.1}\n$$\n\n'
+      # 2: cases with "if" and "otherwise"
+      '$$\nf(x) = \\begin{cases} \\frac{1}{\\theta} e^{-x/\\theta} & \\text{if } x \\geq 0 \\\\ '
+      '0 & \\text{otherwise} \\end{cases}\n\\tag{3.2}\n$$\n\n'
+      # 3: a printed error in the zero branch, seen only below 0
+      '$$\nF(x) = \\begin{cases} 1 & x < 0 \\\\ 1 - e^{-x/\\theta} & x \\ge 0 \\end{cases}\n'
+      '\\tag{3.3}\n$$\n\n'
+      # 4: one row per branch, each with its condition (harvested)
+      '$$\n\\begin{aligned} F(x) &= 0, \\quad x < 0 \\\\ F(x) &= 1 - e^{-x/\\theta}, \\quad '
+      'x \\geq 0 \\end{aligned}\n$$\n\n'
+      # 5: a condition on a parameter; 6: one that is no relation (kept as before)
+      '$$\nE[X] = \\theta, \\quad \\theta > 1\n\\tag{3.5}\n$$\n\n'
+      '$$\nE[X] = \\theta, \\quad x \\in \\mathbb{N}\n\\tag{3.6}\n$$\n\n'
+      # 7: no point inside; 8: parity (the odd branch is wrong)
+      '$$\nF(x) = 5, \\quad x < -10\n\\tag{3.7}\n$$\n\n'
+      "$$\n\\mu_r^{\\prime} = \\left\\{ \\begin{array}{ll} r! \\, \\theta^{r} & (r \\text{ even}) "
+      "\\\\ 0 & (r \\text{ odd}) \\end{array} \\right.\n\\tag{3.8}\n$$\n")
+
+
+def test_piecewise_branches_and_row_conditions(tmp_path):
+    # each branch is evaluated only at the points inside its condition; a "probe" argument
+    # reaches a branch the table's points miss (x < 0); a point outside every branch is
+    # skipped, not compared; a condition that is no relation leaves the points as they were
+    (tmp_path / "text.md").write_text(PW, "utf-8")
+    dists = {"expon": {**DISTS["expon"], "probe": {"@x": [-0.7]}}}
+    e = [{"id": f"({t})", "where": {"tag": t}, "qty": q, "dist": "expon"}
+         for t, q in (("3.1", "cdf"), ("3.2", "pdf"), ("3.3", "cdf"), ("3.5", "mean"),
+                      ("3.6", "mean"), ("3.7", "cdf"))]
+    e.append({"id": "(3.8)", "where": {"tag": "3.8"}, "qty": "raw_moment", "dist": "expon",
+              "r_symbol": "r", "r": [1, 2, 3]})
+    res = run(tmp_path, dists=dists, entries=e, scan=[{"pages": "1", "dist": "expon"}])
+    r = by_id(res)
+    assert r["(3.1)"]["status"] == "passed"
+    assert [b["points"] for b in r["(3.1)"]["branches"]] == [3, 3]      # probes; table points
+    assert r["(3.2)"]["status"] == "passed"
+    assert r["(3.2)"]["branches"][1]["condition"] == "\\text{otherwise}"
+    assert [b["points"] for b in r["(3.2)"]["branches"]] == [3, 3]
+    assert r["(3.3)"]["status"] == "failed"                             # 1 for x < 0
+    rows = {x["id"]: x for x in res["results"] if x["harvested"]}
+    assert rows["p001-d04#0 cdf"]["status"] == "passed"                 # only the probe point
+    assert rows["p001-d04#1 cdf"]["status"] == "passed"
+    assert r["(3.5)"]["status"] == "passed" and r["(3.5)"]["outside"] == 1     # theta = 0.5
+    assert r["(3.6)"]["status"] == "passed" and not r["(3.6)"].get("outside")
+    assert r["(3.7)"]["status"] == "inconclusive" and "no point" in r["(3.7)"]["reason"]
+    assert r["(3.8)"]["status"] == "failed"                             # r = 1, 3 give 0
+    assert [b["points"] for b in r["(3.8)"]["branches"]] == [1, 2]
+    # a formula is crosschecked only when every branch was compared somewhere
+    fj = tmp_path / "formulas.jsonl"
+    fj.write_text("".join(json.dumps({"id": f"p001-d0{k}", "status": "engines_agree"}) + "\n"
+                          for k in (1, 3)), "utf-8")
+    C.mark_formulas(fj, [r["(3.1)"], {**r["(3.1)"], "formula": "p001-d03", "branches": [
+        {"points": 3}, {"points": 0}]}])
+    recs = [json.loads(s) for s in fj.read_text("utf-8").splitlines()]
+    assert [x["status"] for x in recs] == ["crosschecked", "engines_agree"]
+    assert recs[1]["crosscheck"]["partial"] is True
+    # a support list is integers from its first value (to its last, when one is printed)
+    t = C.condition("x = 1, 2, \\dots ,")
+    assert C.holds(t, {"x": 2}) is True and C.holds(t, {"x": 0}) is False
+    assert C.holds(t, {"x": 2.5}) is False
+    t = C.condition("\\text{for } k = 0, 1, \\ldots, n")
+    assert C.holds(t, {"k": 3, "n": 5}) is True and C.holds(t, {"k": 6, "n": 5}) is False
+    # an entry without a condition never gets the probe argument
+    plain = run(tmp_path, dists=dists, scan=[],
+                entries=[{"id": "m", "where": {"tag": "3.5"}, "eq": "rhs", "qty": "mean",
+                          "dist": "expon", "row": None, "notation": [[r",\s*\\quad.*", ""]]}])
+    assert len(by_id(plain)["m"]["points"]) == 3

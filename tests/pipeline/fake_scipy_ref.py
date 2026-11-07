@@ -14,8 +14,10 @@ def answer(q):
         time.sleep(float(os.environ.get("FAKE_REF_SLEEP", "60")))
     if d == "expon":
         s = a["scale"]
-        table = {"pdf": lambda: math.exp(-x / s) / s, "cdf": lambda: 1 - math.exp(-x / s),
-                 "sf": lambda: math.exp(-x / s), "mean": lambda: s, "var": lambda: s * s,
+        neg = x is not None and qty in ("pdf", "cdf", "sf") and x < 0     # below the support
+        table = {"pdf": lambda: 0.0 if neg else math.exp(-x / s) / s,
+                 "cdf": lambda: 0.0 if neg else 1 - math.exp(-x / s),
+                 "sf": lambda: 1.0 if neg else math.exp(-x / s), "mean": lambda: s, "var": lambda: s * s,
                  "mgf": lambda: 1 / (1 - s * x), "raw_moment": lambda: math.factorial(r) * s ** r,
                  "kurt": lambda: 9.0, "skew": lambda: 2.0, "cv": lambda: 1.0}
     elif d == "branch":         # a log cf answered on another branch of the complex log

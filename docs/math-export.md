@@ -433,6 +433,23 @@ moments, cumulants; α, p: inverse survival, quantile) and passes under the firs
 matches; one that matches none is `unidentified` (inconclusive, with the closest quantity)
 and goes to the page image.
 
+**Piecewise formulas and side conditions.** A display `lhs = \begin{cases} value & condition
+\\ ... \end{cases}` (or a left brace with an `array` or `aligned`) is one entry checked branch
+by branch: at each point only the branch whose condition holds is evaluated (the first that
+holds; an `otherwise` branch when every other fails). A row without `&` takes its condition
+after a comma, `\quad` or a word (`if`, `for`); a row that starts with an operator continues the
+previous value. A plain row keeps its side condition the same way (`F(x) = 0, \quad x < 0`, or a
+row of its own that is only a relation). A condition is read as chained relations (`<`, `\le`,
+`=`, `\ne`, ...; `\infty` allowed) joined by commas or `and`, a parity (`r` even/odd), or a
+support list (`x = 1, 2, \ldots` or `k = 0, 1, \ldots, n`: integers from the first value, to the
+last when one is printed); a condition that cannot be read (`x \in \mathbb{N}`) is no
+condition, so the points stay as they were. A point outside every condition is skipped and counted (`outside`);
+an entry with no point inside is inconclusive. A table row or an entry may give `probe`
+arguments (`{"@x": [-0.7]}`), tried at every point for entries with a condition only, so a
+branch the points miss (x < 0 of a cdf) is reached. The result lists each branch with its
+condition and the points it got; a formula with a branch that got no point is not marked
+`crosschecked` (its record says `partial`).
+
 Quantities: pdf, pmf, cdf, sf, hazard, quantile, raw and central moments, cumulants, mean,
 var, sd, skewness (`skew`, `skew2` = β₁), kurtosis (`kurt` = β₂, `excess_kurt`), mgf, cgf,
 cf, pgf, entropy, mode, median. Each entry is evaluated at the three points, the book's side

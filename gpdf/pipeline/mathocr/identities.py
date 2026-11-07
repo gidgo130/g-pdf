@@ -250,16 +250,18 @@ def _pre(body: str) -> str:
     return re.sub(r"\\q?quad\b", " ; ", body)       # _clean would make spaces of them
 
 
-def equations(latex: str) -> list[tuple[str, str]]:
+def equations(latex: str, conditions: bool = False) -> list[tuple]:
     """(lhs, rhs) pairs of a display: aligned rows, = chains and equations separated by a
     comma, \\quad or a word split; side conditions dropped; an equation whose side holds a
-    sum, an integral or dots is left out. Empty for a display that is no identity."""
+    sum, an integral or dots is left out. Empty for a display that is no identity. With
+    ``conditions``: (lhs, rhs, condition) triples, the condition being what followed the
+    equation on its row (or a row of its own that is only a relation), "" if none."""
     body, _ = L.split_tag(latex)
     if NOT_IDENTITY.search(body) or UNSUPPORTED_ENV.search(body):
         return []
     body = ALIGN_ENV.sub(" ", _pre(body))
     rows = [r.replace("&", " ") for r in re.split(r"\\\\(?:\[[^\]]*\])?", body)]
-    eqs, lhs = [], None
+    eqs, conds, lhs = [], [], None
     for row in rows:
         row = _clean(row).strip().strip(",.;").strip()
         if not row:
@@ -274,9 +276,12 @@ def equations(latex: str) -> list[tuple[str, str]]:
             while k < len(parts):
                 pieces = _split_top(parts[k], SEPARATORS)
                 r = pieces[0].strip().rstrip(".,;").strip()
+                chain = len(pieces) > 1 and k + 1 < len(parts)
                 if r:
                     eqs.append((lhs, r))
-                if len(pieces) > 1 and k + 1 < len(parts):
+                    conds.append(" , ".join(p.strip() for p in pieces[1:-1 if chain else None]
+                                            if p.strip()))
+                if chain:
                     # "mu = np, sigma^2 = npq": the last piece before the next "=" is a
                     # new left-hand side; a condition without "=" ends the chain
                     lhs = pieces[-1].strip()
@@ -286,7 +291,11 @@ def equations(latex: str) -> list[tuple[str, str]]:
         elif eqs and not RELATION.search(row):
             l, r = eqs[-1]
             eqs[-1] = (l, r + " " + _strip_conditions(row))
-    return [(l, r) for l, r in eqs if not UNSUPPORTED.search(l) and not UNSUPPORTED.search(r)]
+        elif eqs and not conds[-1]:
+            conds[-1] = row                  # a row that is only a relation: t > 0
+    out = [(l, r, c) for (l, r), c in zip(eqs, conds)
+           if not UNSUPPORTED.search(l) and not UNSUPPORTED.search(r)]
+    return out if conditions else [(l, r) for l, r, _ in out]
 
 
 def definitions(latex: str) -> dict[str, str]:

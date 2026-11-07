@@ -196,18 +196,213 @@ def piece(latex: str, row=None, eq=None) -> str:
     """The part of a display an entry checks: a row, then the right-hand side (``eq``
     "rhs": after the last top-level "="), equation ``eq`` (identities.equations), or the
     whole (side conditions dropped)."""
+    return cut(latex, row, eq)[0]
+
+
+def cut(latex: str, row=None, eq=None) -> tuple[str, str]:
+    """(piece, its side condition): the condition is what followed the piece on its row
+    after a comma, \\quad or a word ("" if nothing)."""
     from gpdf.pipeline.mathocr import identities as I
     s = rows(latex)[int(row)] if row is not None else latex
     if isinstance(eq, int):
-        eqs = I.equations(s)
+        eqs = I.equations(s, conditions=True)
         if not 0 <= eq < len(eqs):
             raise CrosscheckError(f"equation {eq} not found ({len(eqs)} in the piece)")
-        return eqs[eq][1]
+        return eqs[eq][1], eqs[eq][2]
     if eq in ("rhs", None, "full"):      # a whole display: no alignment left over
         s = I._clean(I._pre(I.ALIGN_ENV.sub(" ", s).replace("&", " ")))
     if eq == "rhs":
         s = I._split_top(s, ["="])[-1]
-    return I._strip_conditions(s)
+    rest = [p.strip() for p in I._split_top(s, I.SEPARATORS)[1:] if p.strip()]
+    return I._strip_conditions(s), " , ".join(rest)
+
+
+# ---------------------------------------------------------------- branches and conditions
+
+PIECE_OPEN = re.compile(r"\\left\s*\\\{\s*\\begin\{(array|aligned)\}(?:\{[^{}]*\})?"
+                        r"|\\begin\{(cases)\}")
+PIECE_TAIL = re.compile(r"\s*(?:\\right\s*\.)?\s*[.,;]?\s*")
+COND_START = re.compile(r",|\\q?quad(?![A-Za-z])|\\(?:text|mbox|textrm)\s*\{")
+CONTINUES = re.compile(r"\s*(?:\\q?quad\s*)*(?:\\times|\\cdot|[+\-])")
+TEXT_CMD = re.compile(r"\\(?:text|mbox|textrm|mathrm)\s*\{([^{}]*)\}")
+COND_WORDS = re.compile(r"(?<![A-Za-z\\])(?:if|for|when|where|and|with)(?![A-Za-z])")
+ELSE_WORDS = re.compile(r"(?:otherwise|elsewhere|else)", re.I)
+SUPPORT_LIST = re.compile(r"(.+?)\s*=\s*(-?\d+)\s*,(?:\s*-?\d+\s*,)*\s*(?:\\[lc]?dots|\\dotsc|\.\.\.)"
+                          r"\s*(?:,\s*(.+?))?\s*,?")
+REL_TOKEN = re.compile(r"(\\(?:leqslant|geqslant|leq|geq|neq|le|ge|ne|lt|gt)(?![A-Za-z])|<|>|=)")
+_EPS = 1e-12
+REL_OK = {"<": lambda a, b: a < b, ">": lambda a, b: a > b,
+          "\\lt": lambda a, b: a < b, "\\gt": lambda a, b: a > b,
+          "=": lambda a, b: abs(a - b) <= _EPS * (1 + abs(a)),
+          "\\ne": lambda a, b: abs(a - b) > _EPS * (1 + abs(a))}
+for _k in ("\\le", "\\leq", "\\leqslant"):
+    REL_OK[_k] = lambda a, b: a <= b + _EPS * (1 + abs(b))
+for _k in ("\\ge", "\\geq", "\\geqslant"):
+    REL_OK[_k] = lambda a, b: a >= b - _EPS * (1 + abs(b))
+REL_OK["\\neq"] = REL_OK["\\ne"]
+
+
+def _first_top(s: str, rx) -> int | None:
+    """Where rx first matches at brace/bracket depth 0."""
+    depth = 0
+    for i, c in enumerate(s):
+        if c in "{([":
+            depth += 1
+        elif c in "})]":
+            depth -= 1
+        elif depth == 0 and rx.match(s, i):
+            return i
+    return None
+
+
+def piecewise(latex: str) -> tuple[str, list[tuple[str, str]]] | None:
+    """(lhs, [(value, condition)]) of a display ``lhs = {value & condition \\\\ ...}`` (a cases
+    environment, or a left brace and an array or aligned), or None. A row without ``&``
+    takes its condition after a comma, \\quad or a word; a row that starts with an operator
+    continues the previous value when that one had no condition."""
+    from gpdf.pipeline.mathocr import identities as I
+    body, _ = L.split_tag(latex)
+    m = PIECE_OPEN.search(body)
+    if not m:
+        return None
+    name = m.group(1) or m.group(2)
+    depth, end = 1, None
+    for t in re.finditer(r"\\(begin|end)\{" + name + r"\}", body[m.end():]):
+        depth += 1 if t.group(1) == "begin" else -1
+        if depth == 0:
+            end = (m.end() + t.start(), m.end() + t.end())
+            break
+    if end is None or not PIECE_TAIL.fullmatch(body[end[1]:]):
+        return None
+    head = I._split_top(body[:m.start()], ["="])
+    if len(head) != 2 or not head[0].strip() or head[1].strip():
+        return None
+    out: list[tuple[str, str]] = []
+    for row in ROW_SPLIT.split(body[m.end():end[0]]):
+        if not row.strip():
+            continue
+        cells = I._split_top(row, ["&"])
+        value, cond = cells[0], " ".join(cells[1:]).strip()
+        if not cond:
+            i = _first_top(value, COND_START)
+            if i:
+                value, cond = value[:i], value[i:]
+        value = value.strip().rstrip(",.;").strip()
+        if out and not out[-1][1] and CONTINUES.match(value):
+            out[-1] = (out[-1][0] + " " + value, cond)
+        elif value:
+            out.append((value, cond))
+    return (head[0].strip(), out) if len(out) >= 2 else None
+
+
+def condition(text: str, defs=None):
+    """A side condition read for evaluation: None (none), "else" (otherwise), "unknown"
+    (cannot be read: kept as no condition), or a list of tests, each ("chain", sides,
+    relations) or ("parity", expr, "even" | "odd"), all of which must hold."""
+    s = TEXT_CMD.sub(r" \1 ", text or "")
+    from gpdf.pipeline.mathocr import identities as I
+    s = COND_WORDS.sub(" , ", I._clean(s)).strip().strip(".,;").strip()
+    if s.startswith("(") and s.endswith(")"):
+        s = s[1:-1].strip()
+    if not s:
+        return None
+    if ELSE_WORDS.fullmatch(s):
+        return "else"
+    m = SUPPORT_LIST.fullmatch(s)
+    if m:                                  # x = 0, 1, ..., n: integers from 0 (to n)
+        var = book_expr(m.group(1), (), defs)
+        hi = book_expr(m.group(3), (), defs) if m.group(3) else None
+        if var is None or (m.group(3) and hi is None):
+            return "unknown"
+        return [("support", var, int(m.group(2)), hi)]
+    tests = []
+    for c in I._split_top(s, [",", ";"]):
+        c = c.strip().strip("()").strip()
+        if not c:
+            continue
+        m = re.fullmatch(r"(.+?)\s+(?:is\s+)?(even|odd)", c)
+        if m:
+            ex = book_expr(m.group(1), (), defs)
+            if ex is None:
+                return "unknown"
+            tests.append(("parity", ex, m.group(2)))
+            continue
+        parts = REL_TOKEN.split(c)
+        sides, rels = parts[0::2], parts[1::2]
+        if not rels:
+            return "unknown"
+        exprs = []
+        for sd in sides:
+            sd = sd.strip()
+            if sd.lstrip("+-").strip() == "\\infty":
+                exprs.append(-math.inf if sd.startswith("-") else math.inf)
+                continue
+            ex = book_expr(sd, (), defs) if sd else None
+            if ex is None:
+                return "unknown"
+            exprs.append(ex)
+        tests.append(("chain", exprs, rels))
+    return tests or None
+
+
+def holds(tests, values: dict) -> bool | None:
+    """Whether every test holds at these values; None if one cannot be evaluated (and none
+    fails)."""
+    unknown = False
+    for t in tests:
+        if t[0] == "support":
+            v, _ = evaluate(t[1], values)
+            top = evaluate(t[3], values)[0] if t[3] is not None else None
+            if v is None or (t[3] is not None and top is None):
+                unknown = True
+                continue
+            if abs(v.real - round(v.real)) > 1e-9 or v.real < t[2] - 1e-9 or (
+                    top is not None and v.real > top.real + 1e-9):
+                return False
+            continue
+        if t[0] == "parity":
+            v, _ = evaluate(t[1], values)
+            if v is None:
+                unknown = True
+                continue
+            if abs(v.real - round(v.real)) > 1e-9 or (round(v.real) % 2 == 0) != (t[2] == "even"):
+                return False
+            continue
+        vals = []
+        for ex in t[1]:
+            if isinstance(ex, float):
+                vals.append(ex)
+                continue
+            v, _ = evaluate(ex, values)
+            if v is None or abs(v.imag) > _EPS:
+                vals = None
+                break
+            vals.append(v.real)
+        if vals is None:
+            unknown = True
+            continue
+        if not all(REL_OK[op](a, b) for a, op, b in zip(vals, t[2], vals[1:])):
+            return False
+    return None if unknown else True
+
+
+def pick(branches: list[dict], values: dict) -> int | None:
+    """The branch to evaluate at these values: the first whose condition holds; else the
+    "otherwise" branch when every other condition fails; else the one branch whose condition
+    cannot be read (or that has none) when every other fails; else None (outside)."""
+    states = []
+    for b in branches:
+        t = b["tests"]
+        states.append(None if t in (None, "unknown") else "else" if t == "else" else holds(t, values))
+    for i, s in enumerate(states):
+        if s is True:
+            return i
+    if "else" in states and all(s is False or s == "else" for s in states):
+        return states.index("else")
+    rest = [i for i, s in enumerate(states) if s is None]
+    if len(rest) == 1 and all(s is False or s is None for s in states):
+        return rest[0]
+    return None
 
 
 # ---------------------------------------------------------------- the book's value
@@ -330,14 +525,17 @@ def harvest(pages: dict[int, str], scan: list[dict], dists: dict) -> list[dict]:
         for f in sorted(files & set(pages)):
             md = pages[f]
             for k, (body, tag) in enumerate(_displays(md), 1):
-                for i, (lhs, rhs) in enumerate(I.equations(body)):
+                pw = piecewise(body)
+                eqs = [(pw[0], None)] if pw else I.equations(body)
+                for i, (lhs, rhs) in enumerate(eqs):
                     q, var, r = quantity(lhs)
                     if q is None:
                         continue
                     if q == "pdf" and discrete:
                         q = "pmf"
                     e = {"id": f"p{f:03d}-d{k:02d}#{i} {q}", "where": {"page": f, "display": k},
-                         "eq": i, "qty": q, "dist": dist, "harvested": True}
+                         "eq": "piecewise" if pw else i, "qty": q, "dist": dist,
+                         "harvested": True}
                     if var:
                         e["var"] = var
                     if isinstance(r, int):
@@ -388,7 +586,7 @@ def check_entry(e: dict, pages: dict[int, str], spec: dict, ref) -> dict:
         return res
     if prep is None:
         return res
-    expr, dist = prep
+    expr, dist = prep                      # the branches (one, for a formula without cases)
     cands = [e["qty"]] if e.get("qty") else _candidates(expr, e, dist)
     if not cands:
         res["reason"] = res.get("reason") or "no quantity fits its variables"
@@ -445,18 +643,32 @@ def _prepare(e, pages, spec, res):
     src = latex
     for rx, rep in spec.get("notation", []) + e.get("notation", []):
         src = re.sub(rx, rep, src)
+    eq = e.get("eq", "rhs" if kind == "d" else "full")
+    pw = piecewise(src) if kind == "d" and e.get("row") is None and eq in (
+        "rhs", "full", "piecewise") else None
+    if eq == "piecewise" and pw is None:
+        res["reason"] = "not a piecewise display"
+        return None
     try:
-        text = piece(src, e.get("row"), e.get("eq", "rhs" if kind == "d" else "full"))
+        parts = [(piece(v, None, "full"), c) for v, c in pw[1]] if pw else \
+            [cut(src, e.get("row"), eq)]
     except (CrosscheckError, IndexError) as ex:
         res["reason"] = str(ex)
         return None
-    res["piece"] = text
+    res["piece"] = " ; ".join(t for t, _ in parts)
     defs = {**spec.get("defs", {}), **e.get("defs", {})}
-    expr = book_expr(text, (), defs)
-    if expr is None:
+    branches = []
+    for text, cond in parts:
+        expr = book_expr(text, (), defs)
+        if expr is None and not pw:
+            res["reason"] = "the formula does not parse"
+            return None
+        branches.append({"expr": expr, "tests": condition(cond, defs), "piece": text,
+                         "condition": cond, "points": 0})
+    if all(b["expr"] is None for b in branches):
         res["reason"] = "the formula does not parse"
         return None
-    return expr, dist
+    return branches, dist
 
 
 VAR_CLASSES = {   # the quantities a formula in this free variable may be (identify mode)
@@ -473,13 +685,18 @@ SCALAR_CLASS = ["mean", "var", "sd", "skew", "kurt", "excess_kurt", "mode", "med
                 "central_moment@4", "cumulant@3", "cumulant@4", "pdf"]       # pdf: a constant one
 
 
-def _candidates(expr, e, dist) -> list[str]:
+def _symbols(branches) -> set[str]:
     from gpdf.pipeline.mathocr import identities as I
+    return {I._canon(s.name) for b in branches if b["expr"] is not None
+            for s in b["expr"].free_symbols}
+
+
+def _candidates(branches, e, dist) -> list[str]:
     known = set()
     for p in dist["points"]:
         known |= {k for k in p if not k.startswith("@")}
     known |= set(dist.get("derived", {})) | set(dist.get("standard", {})) | set(e.get("fixed", {}))
-    free = sorted({I._canon(s.name) for s in expr.free_symbols} - known)
+    free = sorted(_symbols(branches) - known)
     if not free:
         return list(SCALAR_CLASS)
     if len(free) > 1:
@@ -492,10 +709,23 @@ def _candidates(expr, e, dist) -> list[str]:
     return out
 
 
-def _compare(expr, e, q, dist, spec, ref, res):
-    """Compare expr as quantity q at the table's points; fills res (status, points, ...).
-    ``q@n`` is a moment of fixed order n (identify mode)."""
-    from gpdf.pipeline.mathocr import identities as I
+def _cases(dist: dict, e: dict, q: str, branches: list[dict]):
+    """(n, point) to evaluate: the table's points, then each "probe" argument (the dist's or
+    the entry's, e.g. {"@x": [-0.7]}) at every point, for an entry whose branches carry a
+    condition (a probe reaches a branch the points miss: x < 0 of a piecewise cdf)."""
+    pts = list(enumerate(dist["points"]))
+    key = e.get("arg", ARG_OF.get(q))
+    probe = {**dist.get("probe", {}), **e.get("probe", {})}.get(key or "", [])
+    if not any(b["tests"] not in (None, "unknown") for b in branches):
+        probe = []
+    return pts + [(n, {**p, key: v}) for v in probe for n, p in pts]
+
+
+def _compare(branches, e, q, dist, spec, ref, res):
+    """Compare the branches as quantity q at the table's points; fills res (status, points,
+    ...). At each point only the branch whose condition holds is evaluated (``pick``); a point
+    outside every condition is counted (``outside``), not compared. ``q@n`` is a moment of
+    fixed order n (identify mode)."""
     if "@" in q:
         q, fixed_r = q.split("@")
         e = {**e, "r": int(fixed_r)}
@@ -503,13 +733,16 @@ def _compare(expr, e, q, dist, spec, ref, res):
         q = "pmf"
     tol = float(e.get("tol", spec.get("tol", TOL)))
     worst, failed, why = 0.0, False, None
-    present = {I._canon(s.name) for s in expr.free_symbols}
+    for b in branches:
+        b["points"] = 0
+    present = _symbols(branches)
     # a standardized form (a density without sigma): the table's standard values
     standard = {} if e.get("no_standard") else {
         k2: v for k2, v in dist.get("standard", {}).items() if k2 not in present}
     if standard:
         res["standardized"] = standard
-    for n, point in enumerate(dist["points"]):
+    outside = 0
+    for n, point in _cases(dist, e, q, branches):
         point = {**DEFAULT_ARGS, **point, **standard, **e.get("fixed", {})}
         # derived parameters (theta = alpha * beta, phi = lambda / mu), after the standard values
         point.update(_eval_all(dist.get("derived", {}), point))
@@ -525,6 +758,16 @@ def _compare(expr, e, q, dist, spec, ref, res):
                 r = r[n % len(r)]
             if e.get("r_symbol"):
                 values[e["r_symbol"]] = r
+        k = pick(branches, values)
+        if k is None:
+            outside += 1
+            res["points"].append({"values": values, "outside": True})
+            continue
+        if branches[k]["expr"] is None:      # a branch that does not parse: not compared
+            res["points"].append({"values": values, "branch": k, "book": None})
+            continue
+        expr = branches[k]["expr"]
+        branches[k]["points"] += 1
         b, why = evaluate(expr, values)
         if b is None:
             res["points"].append({"values": values, "book": None})
@@ -554,7 +797,19 @@ def _compare(expr, e, q, dist, spec, ref, res):
         worst = max(worst, err)
         failed |= not ok
         res["points"].append({"values": values, "args": args, "book": [b.real, b.imag],
-                              "ref": [s.real, s.imag], "err": err, "ok": ok, "tol": t})
+                              "ref": [s.real, s.imag], "err": err, "ok": ok, "tol": t,
+                              **({"branch": k} if len(branches) > 1 else {})})
+    if len(branches) > 1:
+        res["branches"] = [{"piece": b["piece"], "condition": b["condition"], "points": b["points"],
+                            **({} if b["expr"] is not None else {"parsed": False})}
+                           for b in branches]
+    elif branches[0]["condition"]:
+        res["condition"] = branches[0]["condition"]
+    if outside:
+        res["outside"] = outside
+    if not any(b["points"] for b in branches):
+        res["reason"] = "no point inside its condition" if outside else "no point evaluated"
+        return res
     res["status"] = "failed" if failed else "passed"
     res["worst"] = worst
     return res
@@ -573,6 +828,11 @@ def identify_entries(pages: dict[int, str], specs: list[dict]) -> list[dict]:
         for f in sorted(files & set(pages)):
             md = pages[f]
             for k, (body, tag) in enumerate(_displays(md), 1):
+                if piecewise(body):              # one entry, branch by branch
+                    out.append({"id": f"p{f:03d}-d{k:02d}pw ?", "where": {"page": f, "display": k},
+                                "eq": "piecewise", "dist": sp["dist"], "identify": True,
+                                "harvested": True})
+                    continue
                 n_rows = len(rows(body))
                 for rw in range(n_rows):
                     out.append({"id": f"p{f:03d}-d{k:02d}r{rw} ?", "where": {"page": f, "display": k},
@@ -712,7 +972,11 @@ def mark_formulas(formulas, results, meta=None) -> dict:
         rec["crosscheck"] = {"passed": sum(r["status"] == "passed" for r in rs),
                              "failed": sum(r["status"] == "failed" for r in rs),
                              "entries": [r["id"] for r in rs]}
-        if all(r["status"] == "passed" for r in rs) and rec["status"] != "flagged":
+        # a branch that got no point (unparsed, or outside every point) leaves it unchecked
+        partial = any(b.get("points") == 0 for r in rs for b in r.get("branches") or [])
+        if partial:
+            rec["crosscheck"]["partial"] = True
+        if all(r["status"] == "passed" for r in rs) and rec["status"] != "flagged" and not partial:
             if rec["status"] != "crosschecked":
                 rec["was"] = rec["status"]
                 rec["status"] = "crosschecked"
