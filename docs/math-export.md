@@ -450,6 +450,25 @@ branch the points miss (x < 0 of a cdf) is reached. The result lists each branch
 condition and the points it got; a formula with a branch that got no point is not marked
 `crosschecked` (its record says `partial`).
 
+**Multivariate distributions (step 1).** A table row with `k` (the dimension, what the book's
+`k` stands for) is multivariate: `multinomial`, `multivariate_hypergeom`, `dirichlet_multinomial`,
+`negative_multinomial`, `bivariate_poisson` and `bivariate_binomial` (trivariate reduction), and
+`multivariate_normal` (`args` may be lists: `"p": "[p_1, p_2, p_3]"`, `"cov": "[[...], [...]]"`).
+A point's `"@x": [2, 3, 1]` gives the components `x_1, x_2, ...` (`var`, `first` and
+`components` rename or renumber them; `"@t"` a pgf's, mgf's or cf's vector); `derived` parameters
+are computed in order and see the components. Before parsing, at each point, a sum or product over
+a range the point fixes (`\sum_{i=1}^{k}`, `\prod_{i=0}^{k}`, `\sum_{i=0}^{\min(x_1, x_2)}`) is
+written out term by term, an entry's free indices go in (`"index": [1, 2]` for i, j), a dotted
+list (`x_1 + \cdots + x_k`, `n_1! \cdots n_k!`, `x_1, \dots, x_k`) is written out, a multinomial
+coefficient `\binom{n}{x_1, x_2, x_3}` becomes `n!/(x_1! x_2! x_3!)`, and a bold symbol with a
+subscript is that component. Quantities: `pmf`/`pdf`, `marginal_pmf`/`marginal_pdf` (`index`;
+`sum_out` sums the book's joint over the other component instead), `mean`, `var`, `cov`, `corr`
+(`index`), `fact_moment` (`r`, one order per component, falling factorials), `pgf`, `mgf`, `cf`,
+`cond_pmf`, `cond_mean`, `cond_var` (`index` and `given`). The reference sums exactly over the
+support (a cut where each marginal's tail is below 1e-18 for an infinite one, the mass left out
+recorded as the tolerance floor) and uses closed forms for the normal; `ref_x` gives the
+reference's vector when the book leaves a cell out (`[n - x_1 - x_2, x_1, x_2]`).
+
 Quantities: pdf, pmf, cdf, sf, hazard, quantile, raw and central moments, cumulants, mean,
 var, sd, skewness (`skew`, `skew2` = β₁), kurtosis (`kurt` = β₂, `excess_kurt`), mgf, cgf,
 cf, pgf, entropy, mode, median. Each entry is evaluated at the three points, the book's side

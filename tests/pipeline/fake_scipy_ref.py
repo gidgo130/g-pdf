@@ -8,7 +8,76 @@ import sys
 import time
 
 
+def _comps(n, k):
+    if k == 1:
+        yield (n,)
+        return
+    for a in range(n + 1):
+        for rest in _comps(n - a, k - 1):
+            yield (a,) + rest
+
+
+def multivariate(q):
+    """The multinomial (n, p) by sums over its support, and the bivariate normal."""
+    a, qty, x, idx, given = q["args"], q["qty"], q.get("x"), q.get("index") or [], q.get("given") or []
+    if q["dist"] == "multivariate_normal":
+        (m1, m2), ((s11, s12), (_, s22)) = a["mean"], a["cov"]
+        if qty == "pdf":
+            r = s12 / math.sqrt(s11 * s22)
+            z1, z2 = (x[0] - m1) / math.sqrt(s11), (x[1] - m2) / math.sqrt(s22)
+            v = math.exp(-(z1 * z1 - 2 * r * z1 * z2 + z2 * z2) / (2 * (1 - r * r))) / (
+                2 * math.pi * math.sqrt(s11 * s22 * (1 - r * r)))
+        elif qty == "cond_mean":
+            v = m1 + s12 / s22 * (x[1] - m2)
+        else:
+            return {"error": f"no {qty}"}
+        return {"value": v, "imag": None, "tol_floor": 0.0, "how": "fake mvn"}
+    if q["dist"] == "negative_multinomial":       # pmf and marginals in closed form
+        n, p = a["n"], a["p"]
+        p0 = 1 - sum(p)
+        if qty == "pmf":
+            v = math.exp(math.lgamma(n + sum(x)) - math.lgamma(n) - sum(math.lgamma(y + 1) for y in x)
+                         + n * math.log(p0) + sum(y * math.log(pi) for y, pi in zip(x, p)))
+        elif qty == "marginal_pmf":
+            i, y = idx[0], x[idx[0]]
+            s = p0 / (p0 + p[i])
+            v = math.exp(math.lgamma(n + y) - math.lgamma(n) - math.lgamma(y + 1)) * s ** n * (1 - s) ** y
+        else:
+            return {"error": f"no {qty}"}
+        return {"value": v, "imag": None, "tol_floor": 0.0, "how": "fake negative multinomial"}
+    n, p = a["n"], a["p"]
+
+    def pmf(y):
+        return math.factorial(n) * math.prod(pi ** yi / math.factorial(yi) for pi, yi in zip(p, y))
+    S = [(y, pmf(y)) for y in _comps(n, len(p))]
+
+    def E(f, sel=lambda y: True):
+        tot = sum(w for y, w in S if sel(y))
+        return sum(f(y) * w for y, w in S if sel(y)) / tot
+    i = idx[0] if idx else 0
+    j = idx[1] if len(idx) > 1 else i
+    cov = E(lambda y: y[i] * y[j]) - E(lambda y: y[i]) * E(lambda y: y[j])
+    var = lambda k: E(lambda y: y[k] ** 2) - E(lambda y: y[k]) ** 2  # noqa: E731
+    cond = lambda y: all(y[g] == x[g] for g in given)  # noqa: E731
+
+    def falling(y):
+        out = 1
+        for yi, ri in zip(y, q.get("r") or []):
+            out *= math.prod(yi - m for m in range(ri))
+        return out
+    table = {"pmf": lambda: pmf(x), "marginal_pmf": lambda: E(lambda y: float(y[i] == x[i])),
+             "mean": lambda: E(lambda y: y[i]), "var": lambda: var(i), "cov": lambda: cov,
+             "corr": lambda: cov / math.sqrt(var(i) * var(j)), "fact_moment": lambda: E(falling),
+             "pgf": lambda: E(lambda y: math.prod(t ** yi for t, yi in zip(q["t"], y))),
+             "cond_pmf": lambda: E(lambda y: float(y[i] == x[i]), cond),
+             "cond_mean": lambda: E(lambda y: y[i], cond),
+             "cond_var": lambda: E(lambda y: y[i] ** 2, cond) - E(lambda y: y[i], cond) ** 2}
+    return {"value": table[qty](), "imag": None, "tol_floor": 0.0, "how": "fake multinomial"}
+
+
 def answer(q):
+    if q.get("multivariate"):
+        return multivariate(q)
     d, a, qty, x, r = q["dist"], q.get("args", {}), q["qty"], q.get("x"), q.get("r")
     if d == "hang":
         time.sleep(float(os.environ.get("FAKE_REF_SLEEP", "60")))

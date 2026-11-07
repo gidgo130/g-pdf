@@ -74,7 +74,160 @@ def _raw(d, r):
     return float(d.moment(int(r)))
 
 
+# ---------------------------------------------------------------- multivariate (step 1)
+
+def _compositions(n, k):
+    if k == 1:
+        yield (n,)
+        return
+    for a in range(n + 1):
+        for rest in _compositions(n - a, k - 1):
+            yield (a,) + rest
+
+
+def _top(d):
+    """A cut for an infinite discrete support: sf below 1e-18 (isf gives NaN that far out)."""
+    t = int(d.mean() + 10 * d.std() + 20)
+    while d.sf(t) > 1e-18 and t < 10 ** 6:
+        t *= 2
+    return t + 1
+
+
+def _grid(tops):
+    return np.array(np.meshgrid(*[np.arange(t) for t in tops], indexing="ij")).reshape(len(tops), -1).T
+
+
+def _nm_logpmf(X, n, p, p0):             # negative multinomial: Gamma(n + sum x)/(Gamma(n) prod x!) p0^n prod p^x
+    X = np.atleast_2d(np.asarray(X, float))
+    return (special.gammaln(n + X.sum(1)) - special.gammaln(n) - special.gammaln(X + 1).sum(1)
+            + n * math.log(p0) + (X * np.log(p)).sum(1))
+
+
+def _bp_pmf(x1, x2, t1, t2, t12):        # X1 = Y1 + Y12, X2 = Y2 + Y12, independent Poissons
+    return sum(stats.poisson.pmf(x1 - i, t1) * stats.poisson.pmf(x2 - i, t2) * stats.poisson.pmf(i, t12)
+               for i in range(int(min(x1, x2)) + 1))
+
+
+def _bb_pmf(x1, x2, n, p11, p10, p01):   # (X1, X2) = (Y11 + Y10, Y11 + Y01), Y ~ multinomial(n; p11, p10, p01, p00)
+    p00 = 1 - p11 - p10 - p01
+    return sum(stats.multinomial.pmf([i, x1 - i, x2 - i, n - x1 - x2 + i], n, [p11, p10, p01, p00])
+               for i in range(int(min(x1, x2)) + 1) if n - x1 - x2 + i >= 0)
+
+
+def _mv_pmf(name, a, x):
+    if name == "multinomial":
+        return float(stats.multinomial.pmf(x, int(a["n"]), a["p"]))
+    if name == "multivariate_hypergeom":
+        return float(stats.multivariate_hypergeom.pmf(x, a["m"], int(a["n"])))
+    if name == "dirichlet_multinomial":
+        return float(stats.dirichlet_multinomial.pmf(x, a["alpha"], int(a["n"])))
+    if name == "negative_multinomial":
+        p = np.asarray(a["p"], float)
+        return float(np.exp(_nm_logpmf([x], float(a["n"]), p, 1 - p.sum()))[0])
+    if name == "bivariate_poisson":
+        return float(_bp_pmf(x[0], x[1], a["theta1"], a["theta2"], a["theta12"]))
+    if name == "bivariate_binomial":
+        return float(_bb_pmf(x[0], x[1], int(a["n"]), a["p11"], a["p10"], a["p01"]))
+    raise ValueError(f"no multivariate {name}")
+
+
+def _mv_support(name, a):
+    """(X: one support point per row, w: its probability) for exact sums over the support; an
+    infinite support is cut where each marginal's tail is below 1e-18."""
+    if name in ("multinomial", "dirichlet_multinomial"):
+        k = len(a["p"] if name == "multinomial" else a["alpha"])
+        X = np.array(list(_compositions(int(a["n"]), k)))
+    elif name == "multivariate_hypergeom":
+        X = np.array([c for c in _compositions(int(a["n"]), len(a["m"]))
+                      if all(ci <= mi for ci, mi in zip(c, a["m"]))])
+    elif name == "negative_multinomial":
+        p = np.asarray(a["p"], float)
+        p0, n = 1 - p.sum(), float(a["n"])
+        X = _grid([_top(stats.nbinom(n, p0 / (p0 + pi))) for pi in p])
+        return X, np.exp(_nm_logpmf(X, n, p, p0))
+    elif name == "bivariate_poisson":
+        t1, t2, t12 = a["theta1"], a["theta2"], a["theta12"]
+        X = _grid([_top(stats.poisson(t1 + t12)), _top(stats.poisson(t2 + t12))])
+    elif name == "bivariate_binomial":
+        X = _grid([int(a["n"]) + 1] * 2)
+    else:
+        raise ValueError(f"no multivariate {name}")
+    return X, np.array([_mv_pmf(name, a, list(x)) for x in X])
+
+
+def _mvn(q):
+    a, qty, x, t = q.get("args", {}), q["qty"], q.get("x"), q.get("t")
+    mu, S = np.asarray(a["mean"], float), np.asarray(a["cov"], float)
+    idx, given = q.get("index") or [], q.get("given") or []
+    out = {"value": None, "imag": None, "tol_floor": 0.0, "how": f"multivariate normal {qty} (closed form)"}
+    if qty == "pdf":
+        out["value"] = float(stats.multivariate_normal.pdf(x, mu, S))
+    elif qty == "marginal_pdf":
+        i = idx[0]
+        out["value"] = float(stats.norm.pdf(x[i], mu[i], math.sqrt(S[i, i])))
+    elif qty in ("mean", "var", "cov", "corr"):
+        i = idx[0]
+        j = idx[1] if len(idx) > 1 else i
+        out["value"] = float({"mean": mu[i], "var": S[i, i], "cov": S[i, j],
+                              "corr": S[i, j] / math.sqrt(S[i, i] * S[j, j])}[qty])
+    elif qty in ("mgf", "cf"):
+        tv = np.asarray(t, float)
+        z = complex(0, 1) if qty == "cf" else 1.0
+        v = np.exp(z * tv @ mu + (z * z) * (tv @ S @ tv) / 2)
+        out["value"], out["imag"] = float(np.real(v)), float(np.imag(v))
+    elif qty in ("cond_mean", "cond_var") and len(given) == 1:
+        i, j = idx[0], given[0]
+        out["value"] = float(mu[i] + S[i, j] / S[j, j] * (x[j] - mu[j]) if qty == "cond_mean"
+                             else S[i, i] - S[i, j] ** 2 / S[j, j])
+    else:
+        return {"error": f"no multivariate normal {qty} here"}
+    return out
+
+
+def answer_mv(q):
+    name, a, qty = q["dist"], q.get("args", {}), q["qty"]
+    if name == "multivariate_normal":
+        return _mvn(q)
+    x, idx, given = q.get("x"), q.get("index") or [], q.get("given") or []
+    out = {"value": None, "imag": None, "tol_floor": 0.0, "how": f"{name} {qty}"}
+    if qty in ("pmf", "pdf"):
+        out["value"] = _mv_pmf(name, a, x)
+        return out
+    X, w = _mv_support(name, a)
+    out["tol_floor"] = abs(1.0 - float(w.sum()))
+    out["how"] = f"exact sum over the {name} support ({len(w)} points)"
+    if qty in ("marginal_pmf", "marginal_pdf"):
+        out["value"] = float(w[X[:, idx[0]] == x[idx[0]]].sum())
+    elif qty in ("mean", "var", "cov", "corr"):
+        i = idx[0]
+        j = idx[1] if len(idx) > 1 else i
+        mi, mj = float(w @ X[:, i]), float(w @ X[:, j])
+        cov = float(w @ (X[:, i] * X[:, j])) - mi * mj
+        vi, vj = float(w @ X[:, i] ** 2) - mi * mi, float(w @ X[:, j] ** 2) - mj * mj
+        out["value"] = {"mean": mi, "var": vi, "cov": cov, "corr": cov / math.sqrt(vi * vj)}[qty]
+    elif qty == "fact_moment":
+        f = np.ones(len(w))
+        for i, r in enumerate(q["r"]):
+            for j in range(int(r)):
+                f = f * (X[:, i] - j)
+        out["value"] = float(w @ f)
+    elif qty == "pgf":
+        out["value"] = float(w @ np.prod(np.power(np.asarray(q["t"], float), X), axis=1))
+    elif qty in ("cond_pmf", "cond_mean", "cond_var"):
+        sel = np.all([X[:, g] == x[g] for g in given], axis=0)
+        Xs, ws = X[sel], w[sel] / w[sel].sum()
+        i = idx[0]
+        m = float(ws @ Xs[:, i])
+        out["value"] = {"cond_pmf": float(ws[Xs[:, i] == x[i]].sum()), "cond_mean": m,
+                        "cond_var": float(ws @ Xs[:, i] ** 2) - m * m}[qty]
+    else:
+        return {"error": f"unknown multivariate quantity {qty}"}
+    return out
+
+
 def answer(q):
+    if q.get("multivariate"):
+        return answer_mv(q)
     d = _dist(q["dist"], q.get("args", {}))
     discrete = hasattr(d.dist, "pmf")
     qty, x, r = q["qty"], q.get("x"), q.get("r")

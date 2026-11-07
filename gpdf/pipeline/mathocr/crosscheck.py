@@ -575,7 +575,11 @@ def _close(b: complex, s: complex, tol: float) -> tuple[bool, float]:
 
 def check_entry(e: dict, pages: dict[int, str], spec: dict, ref) -> dict:
     """One entry; an ``identify`` entry (no quantity named) is tried against every quantity
-    its free variable allows, and passes under the first that matches."""
+    its free variable allows, and passes under the first that matches. A multivariate table
+    row (one with ``k``) goes to crosscheck_mv."""
+    if (spec.get("dists", {}).get(e.get("dist")) or {}).get("k"):
+        from gpdf.pipeline.mathocr import crosscheck_mv
+        return crosscheck_mv.check(e, pages, spec, ref)
     res = {"id": e.get("id"), "qty": e.get("qty"), "dist": e["dist"],
            "harvested": bool(e.get("harvested")), "status": "inconclusive", "points": []}
     try:
