@@ -110,6 +110,17 @@ def test_prose_cannot_unbalance_the_math_delimiters():
     assert "Costs \\$5 and (not math) here \\(x\\) end." in md
 
 
+def test_code_blocks_and_headings_cannot_unbalance_the_math_delimiters():
+    # the standard tier wrote a code block holding raw LaTeX with a stray \) (ProbOnto 2.5)
+    pg = page([T("CDF \\left\\{ x \\right.\\) CDF in R $1", kind="code"),
+               T("Costs $5 \\) here", kind="paragraph_title"),
+               {"type": "list", "bbox": [0.1, 0.6, 0.9, 0.7],
+                "content": [T("item \\( one"), "item two \\)"]}])
+    md = pg.render()
+    assert balanced(md)
+    assert "CDF \\left\\{ x \\right.) CDF in R \\$1" in md
+
+
 # ---------------------------------------------------------------- tables, figures, footnotes
 
 def table(html, y=0.5):

@@ -118,18 +118,20 @@ def _parts(block: dict) -> list:
     return [{"type": "text", "content": c}] if isinstance(c, str) else []
 
 
-def plain_text(block: dict) -> str:
-    """The block's text with inline math as \\( \\)."""
+def plain_text(block: dict, safe: bool = False) -> str:
+    """The block's text with inline math as \\( \\); ``safe``: prose that cannot open or
+    close math (text written into the page)."""
     out = []
+    prose, math = (_prose, _math) if safe else (str, str)
     for part in _parts(block):
         if not isinstance(part, dict):
-            out.append(str(part))
+            out.append(prose(str(part)))
         elif part.get("type") == "equation_inline":
-            out.append(r"\(" + str(part.get("content", "")).strip() + r"\)")
+            out.append(r"\(" + math(str(part.get("content", "")).strip()) + r"\)")
         elif isinstance(part.get("content"), (list, dict)):
-            out.append(plain_text(part))
+            out.append(plain_text(part, safe))
         else:
-            out.append(str(part.get("content", "")))
+            out.append(prose(str(part.get("content", ""))))
     return " ".join("".join(out).split())
 
 
@@ -285,7 +287,7 @@ def _footnote(block: dict, n: int) -> str:
 def _list(block: dict) -> str:
     items = []
     for part in _parts(block):
-        text = plain_text(part) if isinstance(part, dict) else str(part)
+        text = plain_text(part, safe=True) if isinstance(part, dict) else _prose(str(part))
         if text:
             items.append("- " + text)
     return "\n".join(items)
@@ -312,7 +314,7 @@ def assemble(blocks: list[dict], file: int, label: Label) -> Page:
         elif kind == "page_number":
             pass
         elif kind in ("doc_title", "paragraph_title"):
-            text = plain_text(b)
+            text = plain_text(b, safe=True)
             if text:
                 page.items.append(Item("heading", "#" * heading_level(text, b) + " " + text))
         elif kind == "equation":
@@ -344,7 +346,7 @@ def assemble(blocks: list[dict], file: int, label: Label) -> Page:
                 if p.text:
                     page.items.append(Item("para", p.text, paragraph=p))
             elif text:
-                page.items.append(Item("text", text))
+                page.items.append(Item("text", plain_text(b, safe=True)))
         i += 1
     page.flags.append({"type": "summary", "display_formulas": len(page.displays),
                        "source": SOURCE})
