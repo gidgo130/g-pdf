@@ -530,8 +530,13 @@ its page markers. Per page: balanced `$$` and `\( \)`; in multi-line environment
 (`aligned`, `array`, `cases`, the matrices, ...) a line ending in a single `\` (or a
 `\[2ex]` with one backslash) where a `\\` row break was meant (`single_backslash_break`),
 and an environment of several lines without any row break (`no_row_breaks`); balanced
-braces, `\begin`/`\end` and `\left`/`\right` in every display and inline span; a flags
-file that parses as a JSON list of objects (`flags_json`, `flags_missing`). The screen gets
+braces, `\begin`/`\end` and `\left`/`\right` in every display and inline span; anywhere on
+the page, a control character (below U+0020 except the newline: `control_character`) and an
+orphaned escape fragment, what a helper script leaves of a command when a string escape
+eats its backslash and first letter (`oldsymbol`, `heta`, `rac{`, `arepsilon`, `imes`,
+`ilde{`, `athbf{`, `ightarrow`, ... not preceded by a backslash or a letter:
+`escape_fragment`); a flags file that parses as a JSON list of objects (`flags_json`,
+`flags_missing`). The screen gets
 counts by kind and the pages; `--out` lists each problem with its formula. Exit code 2 when
 there are problems. Run it on a reference before scoring against it.
 

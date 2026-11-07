@@ -86,3 +86,24 @@ def test_a_text_md_is_split_by_its_page_markers(tmp_path):
     text.write_text(GOOD + '\n<!-- page printed="2" file="11" -->\n\n$$\n\\frac{a}{b\n$$\n', "utf-8")
     res = check.check_pages(text)
     assert res["pages"] == 2 and kinds(res) == [("p011", "braces")]
+
+
+def test_control_characters_and_orphaned_escape_fragments(tmp_path):
+    # a helper that wrote "\b" or "\t" through a string escape leaves a control character
+    # (U+0008, U+0009) or, once that is dropped, the rest of the command: "oldsymbol", "heta"
+    pages = {
+        "p020": GOOD + "\n$$\n\x08oldsymbol{x} = 1\n$$\n",              # backspace control character
+        "p021": GOOD + "\nThe angle \\(heta\\) and \\(\\alpha\\).\n",    # \theta lost its \t
+        "p022": GOOD + "\n$$\n\\frac{1}{2} imes rac{a}{b} + x_ilde{y}\n$$\n",
+        "p023": GOOD + "\nTab\there.\n",
+        "p024": GOOD + "\nThe theta, beta, \\mathbf{x}, \\vartheta, \\boldsymbol{y}, the rights; "
+                       "a weight; \\(\\tilde{x} \\times \\varepsilon \\rightarrow 0\\).\n",
+    }
+    res = check.check_pages(write(tmp_path / "p", pages))
+    assert kinds(res) == [("p020", "control_character"), ("p021", "escape_fragment"),
+                          ("p022", "escape_fragment"), ("p022", "escape_fragment"),
+                          ("p022", "escape_fragment"), ("p023", "control_character")]
+    assert "U+0008" in res["problems"][0]["detail"]
+    assert res["counts"]["escape_fragment"] == 4
+    assert check.check_md("x \x0c y")[0][0] == "control_character"
+    assert check.check_md(GOOD) == []

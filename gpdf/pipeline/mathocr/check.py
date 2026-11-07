@@ -6,7 +6,10 @@ Per page: balanced `$$` and `\( \)`; in a multi-line environment (aligned, array
 the matrices, ...) a line ending in a single `\` (or `\[2ex]` with one backslash) where a
 `\\` row break was meant, and an environment of several lines with no row break at all;
 balanced braces, `\begin`/`\end` and `\left`/`\right` in every display and inline span;
-a flags file that parses as a JSON list of objects (or is missing).
+a flags file that parses as a JSON list of objects (or is missing). Anywhere on the page: a
+control character (below U+0020, except the newline) and an orphaned escape fragment, the
+rest of a command whose backslash and first letter a string escape ate (`\b`oldsymbol,
+`\t`heta, `\f`rac{, `\v`arepsilon, `\r`ightarrow), not preceded by a backslash or a letter.
 
 Problems carry the page and the kind; the formula itself goes only to the JSON output.
 """
@@ -21,13 +24,21 @@ from gpdf.pipeline.manuals import write_atomic
 from gpdf.pipeline.mathocr import latex as L
 
 KINDS = ("display_delimiters", "inline_delimiters", "single_backslash_break", "no_row_breaks",
-         "braces", "begin_end", "left_right", "flags_json", "flags_missing")
+         "braces", "begin_end", "left_right", "control_character", "escape_fragment", "flags_json",
+         "flags_missing")
 MULTILINE = re.compile(r"aligned|align\*?|alignedat|eqnarray\*?|array|subarray|cases|"
                        r"gathered|gather\*?|split|multline\*?|[pbvBV]?matrix|smallmatrix")
 ENV_RE = re.compile(r"\\(begin|end)\s*\{([A-Za-z*]+)\}")
 DELIM_RE = re.compile(r"(\\+)([()])")
 SPACING_BREAK_RE = re.compile(r"(\\+)\[\s*-?[\d.]+\s*(?:ex|em|pt|mm|cm|in|mu)\s*\]")
 TRAILING_BS_RE = re.compile(r"(\\+)[ \t]*$")
+CONTROL_RE = re.compile(r"[\x00-\x09\x0b-\x1f]")
+# what is left of a command after a string escape (\a \b \f \n \r \t \v) took its backslash and
+# first letter; each is checked not to follow a backslash, a letter or a control character
+FRAGMENT_RE = re.compile(
+    r"lpha|pprox|oldsymbol|egin\{|inom\{|ullet|rac\{|orall|abla|onumber|otin|ightarrow|"
+    r"ight[)\]|.\\{]|heta|imes|ilde\{|ext\{|extbf|extrm|riangle|arepsilon|arphi|ec\{|"
+    r"ath(?:bf|rm|cal|bb|it|sf)\{")
 
 
 class CheckError(Exception):
@@ -73,10 +84,25 @@ def _rows(tex: str) -> list[tuple[str, str]]:
     return problems
 
 
+def _context(md: str, i: int, j: int) -> str:
+    return repr(md[max(0, i - 20):j + 20])
+
+
+def _characters(md: str) -> list[tuple[str, str]]:
+    out = [("control_character", f"U+{ord(m.group()):04X} in {_context(md, m.start(), m.end())}")
+           for m in CONTROL_RE.finditer(md)]
+    for m in FRAGMENT_RE.finditer(md):
+        before = md[m.start() - 1] if m.start() else " "
+        if before == "\\" or before.isalpha() or CONTROL_RE.match(before):
+            continue
+        out.append(("escape_fragment", f"{m.group()!r} in {_context(md, m.start(), m.end())}"))
+    return out
+
+
 def check_md(md: str) -> list[tuple[str, str]]:
     """(kind, the formula or a note) for every structural problem of one page."""
+    out = _characters(md)
     md = L.COMMENT_RE.sub("", md)
-    out = []
     if md.count("$$") % 2:
         out.append(("display_delimiters", f"{md.count('$$')} $$"))
     displays = [m.group("a") or m.group("b") or m.group("c") for m in L.DISPLAY_RE.finditer(md)]
