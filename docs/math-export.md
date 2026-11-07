@@ -366,6 +366,11 @@ line per display and inline span of the final pages in page order and no formula
  "status": "replaced", "reviewer": "sonnet", "flags": [], "notes": [], "review_item": "p073-d02"}
 ```
 
+With `--flag-latex` (opt-in) each entry of `flags` also quotes the formula as the final page
+has it, `latex`: the flag's own LaTeX when it is part of the display (a flag on one row or a
+fragment), else the display without its `\tag`; for an inline flag, its span. Without it,
+formulas.jsonl holds no formulas.
+
 `id` gives the formula's position in the final page (`d` for displays, `i` for inline).
 `status` is the first of these that applies:
 

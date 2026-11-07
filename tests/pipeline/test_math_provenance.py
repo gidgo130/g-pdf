@@ -137,3 +137,26 @@ def test_a_flag_attaches_by_equation_number_or_as_a_fragment(export, tmp_path):
     assert recs["p001-d01"]["status"] == "flagged"                  # tag 7.1
     assert recs["p001-d03"]["status"] == "flagged"                  # contains e^{-x}
     assert recs["p001-d02"]["status"] == "reviewed_accept"
+
+
+def test_flag_latex_quotes_the_final_formula_of_each_flag(export, tmp_path):
+    # opt-in: a flag entry quotes the formula as the final page has it; a flag whose LaTeX is
+    # stale (attached by its eq) quotes the display, one quoting part of a display keeps its
+    # fragment; an inline flag quotes its span. The default output stays formula-free.
+    fl = json.loads((export / "pages" / "p001.flags.json").read_text("utf-8"))
+    fl.insert(0, {"type": "possible_source_typo", "eq": "(7.1)", "latex": "x^2 = 3", "note": "stale"})
+    fl.insert(0, {"type": "copy_corrupt", "latex": "e^{-x}", "note": "a fragment"})
+    fl.insert(0, {"type": "formula_uncertain", "eq": "p001 inline", "latex": "c", "note": "span"})
+    (export / "pages" / "p001.flags.json").write_text(json.dumps(fl), "utf-8")
+    provenance.write(export, reviewer="sonnet", flag_latex=True)
+    recs = {r["id"]: r for r in lines(export / "formulas.jsonl")}
+    assert recs["p001-d01"]["flags"] == [{"type": "possible_source_typo", "latex": "x^2 = 2"}]
+    assert recs["p001-d03"]["flags"] == [{"type": "copy_corrupt", "latex": "e^{-x}"}]
+    assert recs["p001-i03"]["flags"] == [{"type": "formula_uncertain", "latex": "c"}]
+    assert recs["p002-d02"]["flags"] == [
+        {"type": "possible_source_typo", "subtype": "math_error", "latex": "w = 5"}]
+    assert "latex" not in recs["p001-d02"]
+    assert cli.main(["math-provenance", "--export", str(export), "--flag-latex"]) == 0
+    assert lines(export / "formulas.jsonl")[0]["flags"][0]["latex"] == "x^2 = 2"
+    provenance.write(export, reviewer="sonnet")
+    assert all("latex" not in f for r in lines(export / "formulas.jsonl") for f in r["flags"])

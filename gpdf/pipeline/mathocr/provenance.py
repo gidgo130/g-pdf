@@ -5,7 +5,10 @@ formulas.jsonl has one line per display and inline span of the final pages, in p
 order: ``id`` (pNNN-dKK / pNNN-iKK, the position in the final page), ``file``,
 ``printed``, ``kind`` (display | inline), ``tag``, ``status``, ``reviewer`` (the model, for
 a reviewed formula), ``flags`` (type and subtype of the flags on it), ``notes`` (the kinds
-of an unreviewed queue item) and ``review_item`` (the queue id). No formulas.
+of an unreviewed queue item) and ``review_item`` (the queue id). No formulas, unless
+``flag_latex``: then each flag entry also quotes the formula as the final page has it
+(``latex``: the flag's own LaTeX when it is part of the display, else the display; an inline
+flag's span).
 
 status, the first that applies:
     flagged           a reviewer's flag (possible_source_typo, copy_corrupt, ...)
@@ -101,8 +104,17 @@ def _attach_flags(page_flags: list, base: list) -> dict[int, list]:
     return out
 
 
+def _flag_entry(f: dict, quote: str | None) -> dict:
+    e = {x: f[x] for x in ("type", "subtype") if f.get(x)}
+    if quote is not None:
+        fk = _nospace(f.get("latex"))
+        e["latex"] = f["latex"] if fk and fk in _nospace(quote) else quote
+    return e
+
+
 def _page_records(file: int, md: str, flags: list, items: list[dict], idents: list[dict],
-                  reviewer: str | None, extra_accepts: list | None = None) -> list[dict]:
+                  reviewer: str | None, extra_accepts: list | None = None,
+                  flag_latex: bool = False) -> list[dict]:
     m = MARKER_RE.search(md)
     printed = m.group(1) if m else None
     displays, inline, _ = L.extract(md)
@@ -113,9 +125,10 @@ def _page_records(file: int, md: str, flags: list, items: list[dict], idents: li
     out = []
 
     # displays: the review state of each, then each flag attached to one display
-    base = []
+    base, finals = [], []
     for body, trailing in displays:
         lat, tag = L.split_tag(body, trailing)
+        finals.append(lat.strip())
         k = _key(lat)
         status, review_item = None, None
         for r in reviewed:
@@ -132,7 +145,7 @@ def _page_records(file: int, md: str, flags: list, items: list[dict], idents: li
     attached = _attach_flags(page_flags, base)
     for n, (k, tag, status, review_item, olds) in enumerate(base, 1):
         notes, also_replaced = [], False
-        fl = [{x: f[x] for x in ("type", "subtype") if f.get(x)} for f in attached.get(n - 1, [])]
+        fl = [_flag_entry(f, finals[n - 1] if flag_latex else None) for f in attached.get(n - 1, [])]
         if fl:
             also_replaced = status == "replaced"
             status = "flagged"
@@ -182,7 +195,7 @@ def _page_records(file: int, md: str, flags: list, items: list[dict], idents: li
 
     for n, span in enumerate(inline, 1):
         k = _key(span)
-        fl = [{x: f[x] for x in ("type", "subtype") if f.get(x)} for f in page_flags
+        fl = [_flag_entry(f, span if flag_latex else None) for f in page_flags
               if _key(f.get("latex")) == k and str(f.get("eq", "")).endswith("inline")]
         rid = take(replaced, k)
         status = "replaced" if rid else None
@@ -204,7 +217,8 @@ def _page_records(file: int, md: str, flags: list, items: list[dict], idents: li
     return out
 
 
-def write(export, out=None, reviewer: str | None = None, meta=None, review_dirs=None) -> dict:
+def write(export, out=None, reviewer: str | None = None, meta=None, review_dirs=None,
+          flag_latex: bool = False) -> dict:
     root = Path(export)
     pages_dir = root / "pages"
     if not pages_dir.is_dir():
@@ -221,7 +235,7 @@ def write(export, out=None, reviewer: str | None = None, meta=None, review_dirs=
         recs += _page_records(file, p.read_text("utf-8"), flags,
                               [it for it in items if int(it["file"]) == file],
                               [r for r in idents if int(r["file"]) == file], reviewer,
-                              extra.get(file))
+                              extra.get(file), flag_latex)
     write_atomic(out / "formulas.jsonl",
                  "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs))
     by_status = {s: sum(1 for r in recs if r["status"] == s) for s in STATUSES}

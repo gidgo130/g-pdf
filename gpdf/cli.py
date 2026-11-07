@@ -480,6 +480,10 @@ def build_parser() -> argparse.ArgumentParser:
     mv.add_argument("--meta", metavar="FILE", type=Path,
                     help="meta.json to add the method block to (default: OUT/meta.json)")
     mv.add_argument("--reviewer", metavar="MODEL", help="the reviewer model (e.g. sonnet)")
+    mv.add_argument("--flag-latex", action="store_true",
+                    help="each flag entry also quotes the formula as the final page has it "
+                         "(the flag's LaTeX when part of the display, else the display; an "
+                         "inline flag's span). Off by default: formulas.jsonl stays formula-free")
     mv.add_argument("--review-dir", metavar="DIR", type=Path, action="append", default=[],
                     help="a math-review-pack folder (repeatable): an inline accept that names no "
                          "spans counts for the spans sampled on its page")
@@ -1072,7 +1076,7 @@ def _math_provenance_main(args) -> int:
 
     try:
         res = provenance.write(args.export, args.out, args.reviewer, args.meta,
-                               args.review_dir)
+                               args.review_dir, flag_latex=args.flag_latex)
     except (provenance.ProvenanceError, OSError, ValueError) as e:
         print(f"gpdf-cli: error: {e}", file=sys.stderr)
         return EXIT_ERROR
