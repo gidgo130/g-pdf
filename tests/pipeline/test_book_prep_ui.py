@@ -170,3 +170,124 @@ def test_unsaved_tab_is_saved_first_or_book_prep_stops(monkeypatch, tmp_path):
     assert book_prep.ensure_saved(tab) == p and tab.saved
     assert book_prep.ensure_saved(FakeTab(p, dirty=True, saves=False)) is None
 
+
+# -- Split Spreads from the window -------------------------------------------------------
+
+@pytest.fixture
+def window(qapp, monkeypatch, tmp_path):
+    """A window with the browser and Downloads replaced; yields (window, opened, downloads)."""
+    from gpdf.ui import prep_actions
+    from gpdf.ui.main_window import MainWindow
+
+    opened = []
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    monkeypatch.setattr(prep_actions, "open_in_browser", opened.append)
+    monkeypatch.setattr(book_prep, "downloads_folder", lambda: downloads)
+    w = MainWindow()
+    yield w, opened, downloads
+    for win in MainWindow.windows():
+        win.close()
+    for _ in range(3):
+        qapp.processEvents()
+
+
+def dry_run_in(qapp, w, src):
+    w.open_path(src)
+    w.book_prep.split_spreads()
+    assert w.book_prep.busy
+    wait(qapp, lambda: not w.book_prep.busy)
+    return w.book_prep.panels[src.resolve()]
+
+
+def review(files, dest, mtime_s=None):
+    """The dry run's decisions with every flagged page reviewed (split), saved at dest."""
+    from gpdf.pipeline.report import Decisions
+
+    dec = Decisions.load(files.decisions)
+    for d in dec.pages:
+        d.reviewed = True
+    dec.save(dest)
+    if mtime_s:
+        os.utime(dest, (mtime_s, mtime_s))
+    return dest
+
+
+def test_split_spreads_dry_run_sheet_review_apply_opens_the_result(qapp, window, src):
+    w, opened, downloads = window
+    panel = dry_run_in(qapp, w, src)
+    files = book_prep.split_files(src)
+    assert opened == [files.sheet] and all(p.is_file() for p in files.dry_run_outputs)
+    assert "0 of 1 flagged pages reviewed" in panel.found.text()
+
+    # the browser saved a repeat download; it is newer than the dry run's file
+    saved = review(files, downloads / "book_split.decisions (1).json",
+                   files.decisions.stat().st_mtime + 60)
+    panel.refresh()
+    assert str(saved) in panel.found.text() and "1 of 1 flagged" in panel.found.text()
+    panel.b_sheet.click()
+    assert opened == [files.sheet] * 2
+
+    panel.apply()
+    wait(qapp, lambda: not w.book_prep.busy)
+    tab = w.current_tab()
+    assert tab.path == files.out.resolve() and tab.document.page_count == 4
+    assert src.resolve() not in w.book_prep.panels
+
+
+@pytest.mark.parametrize("accept, pages", [(True, 4), (False, 3)])
+def test_unreviewed_flagged_page_stays_whole_unless_the_guess_is_accepted(
+        qapp, window, src, monkeypatch, accept, pages):
+    from gpdf.ui import prep_actions
+
+    w, _, _ = window
+    panel = dry_run_in(qapp, w, src)
+    asked = []
+    monkeypatch.setattr(prep_actions, "ask_yes_no", lambda p, t: asked.append(t) or accept)
+    panel.apply()                                   # the dry run's own, unreviewed file
+    wait(qapp, lambda: not w.book_prep.busy)
+    assert len(asked) == 1 and "p. 2" in asked[0] and "detector's guess" in asked[0]
+    assert w.current_tab().document.page_count == pages
+
+
+def test_changed_source_is_refused_plainly_with_a_rerun_offer(qapp, window, src, monkeypatch):
+    from gpdf.ui import prep_actions
+
+    w, _, _ = window
+    panel = dry_run_in(qapp, w, src)
+    st = src.stat()
+    os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + 5 * 10**9))
+    asked = []
+    monkeypatch.setattr(prep_actions, "ask_yes_no", lambda p, t: asked.append(t) or False)
+    panel.apply()
+    assert not w.book_prep.busy and len(asked) == 1
+    assert "has changed since the review sheet was made" in asked[0]
+    assert not book_prep.split_files(src).out.exists()
+
+
+def test_existing_outputs_are_replaced_only_when_confirmed(qapp, window, src, monkeypatch):
+    from gpdf.ui import prep_actions
+
+    w, _, _ = window
+    dry_run_in(qapp, w, src)
+    asked = []
+    monkeypatch.setattr(prep_actions, "ask_replace", lambda p, paths: asked.append(paths) or False)
+    w.book_prep.split_spreads()
+    assert not w.book_prep.busy
+    assert [p.name for p in asked[0]] == [
+        "book_split.decisions.json", "book_split.report.json", "book_split.review.html"]
+
+
+def test_no_decisions_file_asks_for_one(qapp, window, src, monkeypatch):
+    from gpdf.ui import prep_actions
+
+    w, _, _ = window
+    panel = dry_run_in(qapp, w, src)
+    book_prep.split_files(src).decisions.unlink()
+    panel.refresh()
+    assert "No decisions file found yet" in panel.found.text()
+    asked = []
+    monkeypatch.setattr(prep_actions, "choose_decisions_file",
+                        lambda p, start: asked.append(start))
+    panel.apply()
+    assert asked and not w.book_prep.busy

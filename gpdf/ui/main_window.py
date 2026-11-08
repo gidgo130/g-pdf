@@ -30,6 +30,7 @@ from gpdf.core.document import PdfDocument, PdfOpenError
 from gpdf.ui.detachable_tabs import DetachableTabWidget, accepts_drag, dropped_pdf_paths
 from gpdf.ui.doc_tab import DocumentTab
 from gpdf.ui.pdf_view import TOOL_ADD_IMAGE, TOOL_ADD_TEXT, TOOL_BROWSE, TOOL_EDIT_TEXT
+from gpdf.ui.prep_actions import BookPrep
 
 
 class _EmptyState(QWidget):
@@ -74,6 +75,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.resize(1100, 820)
         self._closing = False
+        self.book_prep = BookPrep(self)
 
         self.tabs = DetachableTabWidget()
         self._stack = QStackedWidget()
@@ -157,6 +159,7 @@ class MainWindow(QMainWindow):
         self._a_sidebar = self._action("Toggle &Sidebar", on_tab("toggle_sidebar"), "F4")
         self._a_read = self._action("&Read Aloud", on_tab("toggle_reader"), "Ctrl+Shift+R")
         self._a_ocr = self._action("&OCR This Page…", on_tab("ocr_current_page"))
+        self._a_prep_split = self._action("&Split Spreads…", self.book_prep.split_spreads)
 
         self._tool_group = QActionGroup(self)
         self._tool_actions: dict[str, QAction] = {}
@@ -200,6 +203,9 @@ class MainWindow(QMainWindow):
         for a in (self._a_ocr, self._a_read):
             tools_menu.addAction(a)
 
+        prep_menu = self.menuBar().addMenu("Book &Prep")
+        prep_menu.addAction(self._a_prep_split)
+
         view_menu = self.menuBar().addMenu("&View")
         for a in (self._a_zoom_in, self._a_zoom_out, self._a_fit, self._a_actual):
             view_menu.addAction(a)
@@ -228,6 +234,7 @@ class MainWindow(QMainWindow):
             self._a_select_all, self._a_rot_l, self._a_rot_r, self._a_delete,
             self._a_dup, self._a_blank, self._a_insert, self._a_extract,
             self._a_sidebar, self._a_read, self._a_ocr, *self._tool_actions.values(),
+            self._a_prep_split,
         ]
 
     def _undo(self) -> None:
@@ -502,6 +509,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         self._closing = True
+        self.book_prep.shutdown()
         for i in reversed(range(self.tabs.count())):
             tab = self.tabs.widget(i)
             self.tabs.removeTab(i)
