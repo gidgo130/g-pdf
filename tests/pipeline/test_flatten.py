@@ -93,6 +93,29 @@ def test_image_mask_over_a_filled_rectangle_on_a_rotated_page_is_flattened(tmp_p
             assert corr(h, c[::-1, ::-1]) < 0.5                  # not upside down
 
 
+@pytest.mark.parametrize("extra, flagged", [(None, False), ("text", True), ("image", True)])
+def test_flattening_flags_only_pages_that_lose_something(tmp_path, extra, flagged):
+    """A ventotene page with a clear seam is flattened without a flag ("will be flattened"
+    stays as information); visible text or a second image still asks for review."""
+    doc = pymupdf.open()
+    synth.add_masked_spread(doc)
+    page = doc[0]
+    if extra == "text":
+        page.insert_text((60, 60), "visible", fontname="tiro", fontsize=9)
+    elif extra == "image":
+        page.insert_image(pymupdf.Rect(300, 200, 301, 201),
+                          xref=synth.g4(doc, np.ones((3, 3), bool)))
+    path = tmp_path / "masked.pdf"
+    doc.save(str(path))
+    dec, _ = split.dry_run(path)
+    (d,) = dec.pages
+    assert d.detected.is_spread
+    assert d.detected.flagged == flagged and d.reviewed == (not flagged)
+    assert any(r.startswith("will be flattened") for r in d.detected.reasons)
+    if not flagged:
+        assert d.detected.confidence >= 0.65
+
+
 def reviewed(dry, cut=(0.5, 0.5)):
     """The dry run's decisions with the pieced page split at ``cut``, the others kept."""
     dec = copy.deepcopy(dry)

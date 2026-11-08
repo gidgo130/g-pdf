@@ -65,15 +65,18 @@ def _open_source(src):
 
 def analyze(doc, progress=None) -> list[spreads.PageCut]:
     """Detector verdicts, plus a flag on pages that look like spreads but cannot be split
-    by this method (several images, transparency, unsupported colour, ...)."""
+    by this method (several images, transparency, unsupported colour, ...). A flattened
+    page is flagged only when flattening loses something: visible text burned into the
+    pixels, or several images pieced together; otherwise "will be flattened" is noted."""
     cuts = spreads.detect(doc, progress)
     for c in cuts:
         r = doc[c.page].rect
         if c.is_spread or r.width / r.height >= spreads.SPREAD_ASPECT:
             src, why = images.examine(doc[c.page])
-            if src is None or src.flatten:             # unsplittable, or flattened: review
+            f = src.flatten if src else None
+            if src is None or (f and (f["visible_text_spans"] or f["images"] > 1)):
                 c.confidence = round(min(c.confidence, spreads.FLAG_BELOW - 0.05), 3)
-                c.reasons.extend(why)
+            c.reasons.extend(why)
     return cuts
 
 
