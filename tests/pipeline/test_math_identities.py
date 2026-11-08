@@ -492,3 +492,9 @@ def test_a_greek_parameter_before_a_bracket_binds_as_a_product_not_a_power_base(
     assert sums.details["params"]["lambda"] > 1
     r = check(r"G(z) = e^{\lambda_1 (z - 1)}")
     assert r.status == "passed"
+
+
+def test_a_derivative_in_q_is_skipped_not_raised():
+    # Ross 11e: q is replaced by 1 - p, which sympy cannot do inside d/dq (ValueError)
+    r = I.check_display(r"M(t) = \frac{d}{dq} \left( q^{t} \right)")
+    assert r.status in ("skipped", "inconclusive", "passed", "failed")

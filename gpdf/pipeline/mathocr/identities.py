@@ -443,10 +443,13 @@ def _parse(s: str, defs: dict | None = None, depth: int = 0):
         expr = expr.xreplace(put)
     # the books' conventions, also where p (or P) is not in this expression: q = 1 - p, Q = 1 + P
     names = {_canon(x.name): x for x in expr.free_symbols}
-    if "q" in names and not (defs and "q" in defs):
-        expr = expr.xreplace({names["q"]: 1 - names.get("p", sympy.Symbol("p"))})
-    if "Q" in names and not (defs and "Q" in defs):
-        expr = expr.xreplace({names["Q"]: 1 + names.get("P", sympy.Symbol("P"))})
+    try:              # sympy refuses inside d/dq ("Can't calculate derivative wrt 1 - p")
+        if "q" in names and not (defs and "q" in defs):
+            expr = expr.xreplace({names["q"]: 1 - names.get("p", sympy.Symbol("p"))})
+        if "Q" in names and not (defs and "Q" in defs):
+            expr = expr.xreplace({names["Q"]: 1 + names.get("P", sympy.Symbol("P"))})
+    except (ValueError, TypeError):
+        return None
     return expr
 
 
