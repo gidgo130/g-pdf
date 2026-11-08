@@ -278,6 +278,18 @@ def test_a_flag_after_a_replace_on_the_same_display_is_not_stale(root, tmp_path)
     assert review.apply(root, dec).already == ["p001-d01", "p001-d01"]
 
 
+def test_a_flag_after_a_replace_quotes_the_replaced_latex(root, tmp_path):
+    # Gilchrist p029 / Nelsen p055: the flag record kept the engine's LaTeX, so the
+    # re-check and the quality table saw a formula the page no longer has
+    dec = decide(tmp_path,
+                 {"id": "p001-d01", "action": "replace", "latex": "x^2 = 9"},
+                 {"id": "p001-d01", "action": "flag", "flag_type": "possible_source_typo",
+                  "note": "the page prints 9"})
+    review.apply(root, dec)
+    flag = [f for f in flags_of(root, 1) if f.get("type") == "possible_source_typo"]
+    assert [f["latex"] for f in flag] == ["x^2 = 9"]
+
+
 def test_a_typo_flag_on_an_identity_item_is_a_math_error(root, tmp_path):
     items = ITEMS + [{"id": "p002-d01", "file": 2, "printed": "55", "kind": "identity",
                       "reasons": ["identity failed: sums to 1"], "tag": None,

@@ -197,7 +197,7 @@ def apply(root, decisions_path, dry_run: bool = False) -> Report:
             if rec in flags:
                 rep.already.append(d["id"])
                 continue
-            it = items[d["id"]]
+            it = cur = items[d["id"]]
             if it.get("kind") == "inline_missing":
                 new_md, why = _apply_runs(d, md)
             elif it.get("spans") is not None:
@@ -215,8 +215,9 @@ def apply(root, decisions_path, dry_run: bool = False) -> Report:
                 continue
             md = new_md
             if d["action"] == "flag":
+                # cur: the display as an earlier replace of the same id left it
                 flag = {"type": d["flag_type"], "eq": it.get("tag") or d["id"],
-                        "latex": it.get("latex_primary"), "note": d.get("note", "")}
+                        "latex": cur.get("latex_primary"), "note": d.get("note", "")}
                 # a printed error a numeric check found: the page's mathematics is wrong
                 subtype = d.get("subtype") or (
                     "math_error" if d["flag_type"] == "possible_source_typo"
