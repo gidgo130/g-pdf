@@ -131,3 +131,30 @@ by hand on Windows before a release. Use three or four small PDFs.
     badge; spreads you kept whole say "kept whole". Then run `--dry-run --force`
     there: it prints a `backup:` line, and the `.bak.json` file equals your saved
     decisions.
+
+## Book Prep from the window
+
+35. Copy `private\manual\ventotene.pdf` to a scratch folder and open the copy.
+    Make an edit, then **Book Prep > Split Spreads…**: it asks to save first.
+    Cancel does nothing; Save goes on. A progress dialog counts pages, then the
+    review sheet opens in the default browser. The panel names the
+    `ventotene_prep` folder and shows the dry run's decisions file ("0 of 6
+    flagged pages reviewed"). Review the 6 flagged pages and Save decisions.
+    Save once into Downloads (Firefox, or cancel Edge's dialog); then save again
+    so the browser writes `... (1).json`. Switch back to g-pdf: the panel names
+    the `(1)` file and its time. **Open sheet again** reopens it. **Apply
+    split**: `ventotene_split.pdf` opens with 70 pages, and the status bar says
+    how many were kept whole (p. 23 and 36 if you kept them).
+36. Cancel mid-run: start **Split Spreads…** on a long scan and press Cancel
+    during "Finding spreads" and again during "Writing the review sheet". The
+    dialog closes within a second and no new file appears in the prep folder.
+    Start **OCR Document…** (eng) and cancel after a few pages. The dialog
+    closes once the pages Tesseract is reading are done, and no `_ocr.pdf` or
+    `.gpdf-*.tmp` file is left. Run it again: the language list offers your
+    last choice, and existing outputs are replaced only after you confirm.
+37. Overlay: OCR `ventotene_split.pdf` with eng. The result opens with the OCR
+    check panel; the lowest-confidence page is first, and clicking it goes
+    there. Tick **Show OCR text**: the boxes and words sit on the scanned words,
+    at any zoom. Untick it and the page looks as before; the tab is not marked
+    changed. Repeat on the unsplit `ventotene.pdf` OCR result (pages with
+    /Rotate 90): the boxes still line up. The text pane matches the page.

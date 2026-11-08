@@ -13,6 +13,10 @@ offline, straight from the file, and sends nothing anywhere.
 A sheet never changes a PDF or applies anything. It only saves a decisions
 file. The command reads that file on its next run.
 
+The split sheet can also be used from the g-pdf window: **Book Prep > Split
+Spreads…** writes it, opens it in your browser and applies the decisions file
+you save (see "Book prep from the window" in the [README](../README.md#book-prep-from-the-window)).
+
 ## Saving and loading (all three sheets)
 
 **Save decisions** writes the decisions file:

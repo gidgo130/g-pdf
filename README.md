@@ -173,6 +173,38 @@ the run to those pages, and `--jobs N` sets how many Tesseract processes run at
 once (the default is one fewer than the number of CPUs). If Tesseract fails on
 a page, that page is left without text and the command exits with code 2.
 
+## Book prep from the window
+
+The **Book Prep** menu runs split and OCR on the current tab's file, without a
+terminal. It needs the same `prep` extra, and Tesseract for OCR. It works on the
+file on disk, so a tab with unsaved changes is saved first (or nothing runs).
+The outputs go in a folder next to the file, `<name>_prep\`, with the same file
+names `gpdf-cli` writes. A file that is already inside a `*_prep` folder writes
+beside itself. Existing outputs are replaced only after you confirm. Each step
+shows its progress and can be cancelled.
+
+- **Split Spreads…** runs the dry run and opens the split review sheet in your
+  browser (see [docs/review-sheets.md](docs/review-sheets.md#split-review-sheet)).
+  Review the flagged pages and press **Save decisions**. Save the file in the
+  prep folder, or leave it in Downloads. Back in g-pdf, a panel shows the
+  decisions file it found: the prep folder's, or the newest
+  `<name>_split.decisions*.json` in Downloads (browsers name repeats
+  `... (1).json`). It also shows when the file was saved and how many flagged
+  pages it reviews. Use **Choose another…** for a different file, then
+  **Apply split**. If flagged pages were left unreviewed, g-pdf offers to split
+  them by the detector's guess. If the PDF changed since the dry run, it says so
+  and offers to run the dry run again. `<name>_split.pdf` opens in a new tab.
+- **OCR Document…** asks for the languages (one or more, from the languages
+  your Tesseract has installed). It writes `<name>_ocr.pdf` and
+  `<name>_ocr.report.json`, then opens the result with the OCR check panel.
+- **Check OCR…** opens the panel for a file whose `<name>_ocr.report.json` is
+  next to it or in its prep folder. The panel lists the pages by mean
+  confidence, lowest first (failed pages above them), with the word count and
+  the share of low-confidence words. Click a row to go to that page. **Show OCR
+  text** draws the invisible text layer over the scan as boxes with their text.
+  Nothing is saved; it only changes what is drawn. The pane below shows the
+  page's extracted text, so misreads stand out.
+
 ## Book prep: survey
 
 `gpdf-cli survey` is a read-only look at a whole corpus. It never changes
