@@ -103,14 +103,17 @@ def test_crop_box_crops_and_short_image_leaves_page_background():
 
 def test_small_image_is_refused_for_coverage():
     doc = pymupdf.open()
-    page, _ = g4_page(doc, marked(), rect=pymupdf.Rect(0, 0, 150, 108), page_size=(180, 108))
-    src, why = images.examine(page)
+    page = doc.new_page(width=180, height=108)
+    page.insert_image(pymupdf.Rect(0, 0, 150, 108), keep_proportion=False,
+                      xref=images.image_xobject(doc, 50, 30, 1, 8, bytes(range(50)) * 30))
+    src, why = images.examine(page)                 # 8-bit: cannot be flattened either
     assert src is None and "covers 83%" in why[0]
 
 
 @pytest.mark.parametrize("cover, ok", [(0.84, False), (0.90, True)])
 def test_coverage_limit(cover, ok):
-    """The image may fall short of the page (a blank strip on the left) down to 85%."""
+    """The image may fall short of the page (a blank strip on the left) down to 85%; a
+    1-bit image covering less is flattened instead (the render includes the blank strip)."""
     doc = pymupdf.open()
     page, _ = g4_page(doc, marked(), rect=pymupdf.Rect(180 * (1 - cover), 0, 180, 108),
                       page_size=(180, 108))
@@ -118,7 +121,11 @@ def test_coverage_limit(cover, ok):
     if ok:
         assert why == [] and src.cover == pytest.approx(cover)
     else:
-        assert src is None and why == [f"cannot split: image covers {cover:.0%} of the page"]
+        info = page.get_image_info(xrefs=True)[0]
+        assert images._examine_one(page, info) == (
+            None, [f"cannot split: image covers {cover:.0%} of the page"])
+        dpi = round(500 / (180 * cover / 72))       # the image's width squeezed in
+        assert src.flatten and why == [f"will be flattened at {dpi} dpi: 1 image"]
 
 
 def test_annotation_appearance_is_not_a_drawing():
@@ -137,14 +144,12 @@ def test_unsupported_images_are_refused_with_reasons():
     page.insert_image(pymupdf.Rect(0, 0, 10, 10), xref=images.image_xobject(
         doc, 20, 20, 1, 8, bytes(400)))
     cases["2 images"] = page.number
-    # non-trivial Decode
-    page, x = g4_page(doc, marked())
+    # non-trivial Decode on an 8-bit image (a 1-bit one is flattened: below)
+    page = doc.new_page(width=72, height=72)
+    x = images.image_xobject(doc, 10, 10, 1, 8, bytes(100))
+    page.insert_image(page.rect, xref=x)
     doc.xref_set_key(x, "Decode", "[1 0]")
     cases["Decode"] = page.number
-    # image mask
-    page, x = g4_page(doc, marked())
-    doc.xref_set_key(x, "ImageMask", "true")
-    cases["image mask"] = page.number
     # 16 bits per component
     page = doc.new_page(width=72, height=72)
     x = images.image_xobject(doc, 10, 10, 1, 16, bytes(200))
@@ -157,7 +162,8 @@ def test_unsupported_images_are_refused_with_reasons():
     page = doc.new_page(width=72, height=72)
     page.insert_image(page.rect, pixmap=pymupdf.Pixmap(pymupdf.csRGB, 10, 10, bytes(300), False))
     cases["ICCBased"] = page.number
-    # residual image rotation of 3.5 degrees (the limit is 3)
+    # residual image rotation of 3.5 degrees (the limit is 3); 1-bit, but not flattened:
+    # that would resample the skewed scan
     page, _ = g4_page(doc, marked())
     r, t = page.rect, math.radians(3.5)
     set_cm(page, (r.width * math.cos(t), r.width * math.sin(t), -r.height * math.sin(t),
@@ -171,6 +177,19 @@ def test_unsupported_images_are_refused_with_reasons():
         src, why = images.examine(doc[pno])
         assert src is None, needle
         assert any(needle in w for w in why), (needle, why)
+
+
+@pytest.mark.parametrize("key, value", [("Decode", "[1 0]"), ("ImageMask", "true")])
+def test_one_bit_image_refused_as_is_is_flattened(key, value):
+    """An inverted (Decode [1 0]) or stencil (/ImageMask) 1-bit scan cannot be cut as
+    stored, but the page renders colourless: it is flattened, as shown on screen."""
+    doc = pymupdf.open()
+    page, x = g4_page(doc, marked())
+    doc.xref_set_key(x, key, value)
+    assert images._examine_one(page, page.get_image_info(xrefs=True)[0])[0] is None
+    src, why = images.examine(page)
+    assert src.flatten == {"dpi": 200, "images": 1, "visible_text_spans": 0, "drawings": 0}
+    assert why == ["will be flattened at 200 dpi: 1 image"]
 
 
 def test_halves_whiten_the_wedge_and_count_changed_pixels():

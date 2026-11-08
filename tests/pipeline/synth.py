@@ -392,6 +392,23 @@ def add_pieced_spread(doc, variant=None):
     return page
 
 
+def add_masked_spread(doc, seeds=(27, 28)):
+    """Ventotene-like: /Rotate 90 page, a black filled rectangle over the whole page with a
+    white 1-bit CCITT /ImageMask painted over it (paper painted white, ink left black).
+    Returns the darkness map of the displayed spread and its text-free band."""
+    dark, gap = text_spread(seeds)
+    page = rotated_page(doc, W * PT, H * PT, 90, margin=0)
+    x = g4(doc, ~to_black(dark))                 # sample 0 (painted white) = paper
+    doc.xref_set_key(x, "ImageMask", "true")
+    doc.xref_set_key(x, "ColorSpace", "null")
+    place(page, x, pymupdf.Matrix(W * PT, 0, 0, H * PT, 0, 0))
+    cx = page.get_contents()[0]
+    mb = page.mediabox
+    rect = f"0 0 0 rg 0 0 {mb.width:.3f} {mb.height:.3f} re f 1 1 1 rg "
+    doc.update_stream(cx, rect.encode() + doc.xref_stream(cx))
+    return dark, gap
+
+
 def add_deskewed(doc, name, skew=1.5, encoding="g4", strip=40.0, rotation=90, seeds=(25, 26)):
     """Unruh-like deskewed scan: the stored pixels are tilted by ``skew`` degrees and the
     image matrix turns them back, so the text displays straight. /Rotate ``rotation`` with

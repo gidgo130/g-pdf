@@ -36,6 +36,7 @@ COLOUR_TOL = 8             # every pixel's channels closer together than this
 THRESHOLD = 128            # flattened grey below this is black
 
 DRAWINGS = "cannot split: page has drawings besides the scan"
+ROTATED = "cannot split: image rotated"
 
 G4, JPEG, FLATE = "g4", "jpeg", "flate"
 
@@ -160,11 +161,14 @@ def _drawing_count(page) -> int:
 def examine(page) -> tuple[SourceImage | None, list[str]]:
     """How to split the page: its single full-page image, or a flatten source for a
     pieced-together black-and-white page (with a "will be flattened" reason); else
-    (None, reasons why it cannot be split)."""
+    (None, reasons why it cannot be split). A single image that cannot be split as is
+    (drawings, an image mask, ...) is flattened when the page allows it; if not, the
+    single-image reasons are returned. An image rotated beyond MAX_IMAGE_ROT_DEG is not
+    flattened: that would resample a skewed 1-bit scan."""
     infos = page.get_image_info(xrefs=True)
     if len(infos) == 1:
         src, reasons = _examine_one(page, infos[0])
-        if src is not None or reasons != [DRAWINGS]:
+        if src is not None or any(r.startswith(ROTATED) for r in reasons):
             return src, reasons
     else:
         reasons = [f"cannot split: {len(infos)} images on the page (need exactly one)"]
@@ -229,7 +233,7 @@ def _examine_one(page, info) -> tuple[SourceImage | None, list[str]]:
         reasons.append(f"cannot split: image covers {cover:.0%} of the page")
     rot = _residual_rotation_deg(M)
     if abs(rot) > MAX_IMAGE_ROT_DEG:
-        reasons.append(f"cannot split: image rotated {abs(rot):.1f} deg")
+        reasons.append(f"{ROTATED} {abs(rot):.1f} deg")
     if _drawing_count(page):
         reasons.append(DRAWINGS)
     if doc.xref_get_key(x, "ImageMask")[1] == "true":

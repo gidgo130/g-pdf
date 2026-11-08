@@ -63,6 +63,36 @@ def test_single_scan_with_a_black_line_flattens_a_red_one_does_not():
     assert images.examine(doc[1]) == (None, [images.DRAWINGS])
 
 
+def test_image_mask_over_a_filled_rectangle_on_a_rotated_page_is_flattened(tmp_path):
+    """Ventotene: a white 1-bit /ImageMask painted over a black rectangle on a /Rotate 90
+    page. Splitting the image itself is refused (drawings, image mask, no colour space),
+    but the page renders colourless, so it is flattened and splits into portrait halves."""
+    doc = pymupdf.open()
+    dark, _ = synth.add_masked_spread(doc)
+    src_path = tmp_path / "masked.pdf"
+    doc.save(str(src_path))
+    page = doc[0]
+    assert page.rotation == 90 and page.rect.width > page.rect.height
+    src, why = images.examine(page)
+    assert src is not None and src.flatten == {"dpi": synth.DPI, "images": 1,
+                                               "visible_text_spans": 0, "drawings": 1}
+    assert why == [f"will be flattened at {synth.DPI} dpi: 1 image, 1 drawing"]
+
+    rep = split.split_document(src_path, tmp_path / "out.pdf", accept_flagged=True)
+    (p,) = rep.pages
+    assert (p.action, p.encoding, p.flattened) == (SPLIT, "g4", src.flatten)
+    ink = (1 - dark) * 255
+    with pymupdf.open(tmp_path / "out.pdf") as out:
+        assert len(out) == 2
+        for half, x0, x1 in zip(out, (0, p.cut[0]), (p.cut[0], 1)):
+            assert half.rotation == 0 and half.rect.height > half.rect.width   # portrait
+            h = render(half, dpi=synth.DPI).astype(float)
+            c = ink[:, round(x0 * synth.W): round(x1 * synth.W)]
+            c = np.asarray(Image.fromarray(c.astype(np.float32), "F").resize(h.shape[::-1]))
+            assert corr(h, c) > 0.9
+            assert corr(h, c[::-1, ::-1]) < 0.5                  # not upside down
+
+
 def reviewed(dry, cut=(0.5, 0.5)):
     """The dry run's decisions with the pieced page split at ``cut``, the others kept."""
     dec = copy.deepcopy(dry)
