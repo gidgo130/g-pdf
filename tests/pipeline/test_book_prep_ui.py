@@ -291,3 +291,105 @@ def test_no_decisions_file_asks_for_one(qapp, window, src, monkeypatch):
                         lambda p, start: asked.append(start))
     panel.apply()
     assert asked and not w.book_prep.busy
+
+
+# -- OCR Document from the window ----------------------------------------------------------
+
+TSV_HEAD = ("level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\t"
+            "height\tconf\ttext\n")
+
+
+@pytest.fixture
+def fake_tesseract(monkeypatch, tmp_path):
+    """Tesseract replaced: probe lists eng/spa/osd; a page reads as one invisible word
+    "fakeN" with confidence 90 - 20 * N (page N, 1-based)."""
+    from PIL import Image
+
+    from gpdf.pipeline import tesseract
+
+    tess = tesseract.Tesseract("tesseract", "5.4.0", str(tmp_path / "tessdata"),
+                               ["eng", "osd", "spa"])
+    monkeypatch.setattr(tesseract, "find", lambda explicit=None: "tesseract")
+    monkeypatch.setattr(tesseract, "probe", lambda exe: tess)
+    monkeypatch.setattr(tesseract, "check", lambda t, langs: None)
+    seen = []
+
+    def recognize(t, image, outbase, langs, dpi, timeout=0):
+        n = int(str(outbase)[-5:])
+        seen.append((n, langs))
+        with Image.open(image) as im:
+            w, h = im.width * 72 / dpi, im.height * 72 / dpi
+        d = pymupdf.open()
+        d.new_page(width=w, height=h).insert_text((20, 40), f"fake{n}", render_mode=3)
+        d.save(f"{outbase}.pdf")
+        with open(f"{outbase}.tsv", "w", encoding="utf-8") as f:
+            f.write(TSV_HEAD + f"5\t1\t1\t1\t1\t1\t20\t30\t40\t12\t{90 - 20 * n}\tfake{n}\n")
+        return ""
+
+    monkeypatch.setattr(tesseract, "recognize", recognize)
+    return seen
+
+
+def test_ocr_document_opens_the_result_with_the_check_panel(
+        qapp, window, src, fake_tesseract, monkeypatch):
+    from gpdf.ui import prep_actions
+
+    w, _, _ = window
+    asked = []
+    monkeypatch.setattr(prep_actions, "ask_languages",
+                        lambda p, langs, chosen: asked.append((langs, chosen)) or "eng+spa")
+    w.open_path(src)
+    w.book_prep.ocr_document()
+    wait(qapp, lambda: not w.book_prep.busy)
+    assert asked == [(["eng", "spa"], ["eng"])]               # osd is not a language
+    out, report = book_prep.ocr_files(src)
+    assert report.is_file() and fake_tesseract == [(1, "eng+spa")]   # p. 2 has text
+    tab = w.current_tab()
+    assert tab.path == out.resolve() and tab.ocr_check is not None
+    assert tab.sidebar.currentWidget() is tab.ocr_check
+    assert tab.ocr_check.pages_in_order() == [1]
+    assert "1 has text" in tab.ocr_check.summary.text()
+    assert tab.ocr_check.text.toPlainText() == "fake1"
+
+    # again: the outputs exist, the last languages are offered, replacing is asked
+    replaced = []
+    monkeypatch.setattr(prep_actions, "ask_replace",
+                        lambda p, paths: replaced.append(paths) or False)
+    w.tabs.setCurrentIndex(0)
+    w.book_prep.ocr_document()
+    assert asked[-1] == (["eng", "spa"], ["eng", "spa"])
+    assert [p.name for p in replaced[0]] == ["book_ocr.pdf", "book_ocr.report.json"]
+    assert not w.book_prep.busy
+
+
+def test_ocr_document_without_tesseract_shows_the_install_hint(qapp, window, src, monkeypatch):
+    from gpdf.core.ocr import INSTALL_HINT
+    from gpdf.pipeline import tesseract
+    from gpdf.ui import prep_actions
+
+    def missing(explicit=None):
+        raise tesseract.TesseractError("Tesseract not found")
+    monkeypatch.setattr(tesseract, "find", missing)
+    shown = []
+    monkeypatch.setattr(prep_actions, "show_error", lambda p, t: shown.append(t))
+    w, _, _ = window
+    w.open_path(src)
+    w.book_prep.ocr_document()
+    assert shown == [INSTALL_HINT] and not w.book_prep.busy
+
+
+def test_cancelled_ocr_leaves_no_output(qapp, src, fake_tesseract):
+    from gpdf.pipeline import tesseract
+
+    out, report = book_prep.ocr_files(src)
+    tess = tesseract.probe("tesseract")
+
+    def cancel_after_first(tick):
+        def t(label, d, n):
+            if d >= 1:
+                raise book_prep.Cancelled
+            tick(label, d, n)
+        return book_prep.run_ocr(src, out, report, "eng", tess, t)
+    assert run_job(qapp, cancel_after_first)[0][0] == "cancelled"
+    assert not out.exists() and not report.exists()
+    assert not list(out.parent.glob(".gpdf-*"))

@@ -186,6 +186,30 @@ def run_split(src, files: SplitFiles, decisions, accept_flagged, tick):
         split_progress=lambda d, t: tick("Splitting", d, t))
 
 
+def run_ocr(src, out: Path, report_path: Path, langs: str, tess, tick):
+    """OCR into ``out`` and write the report (worker thread). The caller has confirmed
+    replacing existing outputs. A cancel waits for the pages Tesseract is reading, then
+    leaves no output."""
+    from gpdf.pipeline import ocr
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    report = ocr.ocr_document(src, out, langs, tess=tess, force=True,
+                              progress=lambda d, t: tick("Reading pages", d, t))
+    report.save(report_path)
+    return report
+
+
+def pipeline_missing() -> str | None:
+    """Why book prep cannot run (the optional numpy/Pillow extra is missing), or None."""
+    try:
+        import numpy  # noqa: F401
+        import PIL  # noqa: F401
+    except ImportError:
+        from gpdf.pipeline import PREP_HINT
+        return f"Book prep {PREP_HINT}"
+    return None
+
+
 # -- dialogs (module-level so tests can replace them) --------------------------------
 
 def ask_save_first(parent: QWidget, name: str) -> bool:

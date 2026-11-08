@@ -10,8 +10,8 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QDialog, QFileDialog, QHBoxLayout, QLabel, QMessageBox, QProgressDialog, QPushButton,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QLabel,
+    QListWidget, QMessageBox, QProgressDialog, QPushButton, QVBoxLayout, QWidget,
 )
 
 from gpdf import APP_NAME
@@ -47,6 +47,29 @@ def choose_decisions_file(parent: QWidget, start: Path) -> Path | None:
     return Path(path) if path else None
 
 
+def ask_languages(parent: QWidget, langs: list[str], chosen: list[str]) -> str | None:
+    """Pick one or more installed Tesseract languages; "eng+spa" or None."""
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("OCR Document")
+    label = QLabel("Languages of the text (pick one or more):")
+    box = QListWidget(dlg)
+    box.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+    for lang in langs:
+        box.addItem(lang)
+        box.item(box.count() - 1).setSelected(lang in chosen)
+    buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                               | QDialogButtonBox.StandardButton.Cancel)
+    buttons.accepted.connect(dlg.accept)
+    buttons.rejected.connect(dlg.reject)
+    layout = QVBoxLayout(dlg)
+    for w in (label, box, buttons):
+        layout.addWidget(w)
+    if dlg.exec() != QDialog.DialogCode.Accepted:
+        return None
+    picked = [box.item(i).text() for i in range(box.count()) if box.item(i).isSelected()]
+    return "+".join(picked) or None
+
+
 def open_in_browser(path: Path) -> None:
     QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
@@ -63,6 +86,7 @@ class BookPrep:
         self.job: book_prep.Job | None = None
         self._progress: QProgressDialog | None = None
         self.panels: dict[Path, SplitPanel] = {}
+        self.langs: list[str] = []                  # last OCR languages picked
 
     @property
     def busy(self) -> bool:
@@ -140,6 +164,71 @@ class BookPrep:
                     return window.open_path(resolved)
         return self.window.open_path(resolved)
 
+    # -- OCR Document ------------------------------------------------------------------
+
+    def ocr_document(self) -> None:
+        from gpdf.core.ocr import INSTALL_HINT
+
+        tab = self.window.current_tab()
+        if tab is None or self.busy:
+            return
+        missing = book_prep.pipeline_missing()
+        if missing:
+            show_error(self.window, missing)
+            return
+        from gpdf.pipeline import tesseract
+
+        try:
+            exe = tesseract.find()
+        except tesseract.TesseractError:
+            show_error(self.window, INSTALL_HINT)
+            return
+        try:
+            tess = tesseract.probe(exe)
+        except tesseract.TesseractError as e:
+            show_error(self.window, str(e))
+            return
+        langs = [s for s in tess.langs if s != "osd" and not s.startswith("script")]
+        if not langs:
+            show_error(self.window, INSTALL_HINT)
+            return
+        default = [s for s in self.langs if s in langs] or (["eng"] if "eng" in langs
+                                                            else langs[:1])
+        chosen = ask_languages(self.window, langs, default)
+        if not chosen:
+            return
+        try:
+            tesseract.check(tess, chosen)
+        except tesseract.TesseractError as e:
+            show_error(self.window, str(e))
+            return
+        self.langs = chosen.split("+")
+        src = book_prep.ensure_saved(tab)
+        if src is None:
+            return
+        out, report = book_prep.ocr_files(src)
+        existing = [p for p in (out, report) if p.exists()]
+        if existing and not ask_replace(self.window, existing):
+            return
+        self.start(f"OCR: {src.name} ({chosen})",
+                   lambda tick: book_prep.run_ocr(src, out, report, chosen, tess, tick),
+                   lambda rep: self._after_ocr(out, report, rep))
+
+    def _after_ocr(self, out: Path, report_path: Path, rep) -> None:
+        read = [p for p in rep.pages if p.status == "ocr"]
+        failed = [p.page for p in rep.pages if p.status == "failed"]
+        mean = f", mean confidence {rep.mean_conf:.1f}" if rep.mean_conf is not None else ""
+        self.window.statusBar().showMessage(
+            f"OCR {Path(rep.source).name}: {len(read)} of {rep.pages_total} pages read{mean}",
+            15000)
+        tab = self.open_result(out)
+        if tab is not None:
+            tab.show_ocr_check(report_path)
+        if failed:
+            show_message(self.window, f"Tesseract failed on {len(failed)} page(s): "
+                                      f"p. {_pages(failed)}. They are listed first in the "
+                                      "OCR check panel.")
+
     # -- Check OCR ---------------------------------------------------------------------
 
     def check_ocr(self) -> None:
@@ -163,6 +252,10 @@ class BookPrep:
             return
         src = book_prep.ensure_saved(tab)
         if src is None:
+            return
+        missing = book_prep.pipeline_missing()
+        if missing:
+            show_error(self.window, missing)
             return
         self.dry_run(src)
 
