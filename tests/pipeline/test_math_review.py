@@ -278,6 +278,15 @@ def test_a_flag_after_a_replace_on_the_same_display_is_not_stale(root, tmp_path)
     assert review.apply(root, dec).already == ["p001-d01", "p001-d01"]
 
 
+def test_an_empty_tag_removes_the_displays_tag(root, tmp_path):
+    # math-decide --tag "": the page prints no number; the apply kept the misread \tag
+    dec = decide(tmp_path, {"id": "p001-d01", "action": "accept", "tag": ""})
+    rep = review.apply(root, dec)
+    assert rep.refused == []
+    md = (root / "pages" / "p001.md").read_text("utf-8")
+    assert "$$\nx^2 = 1\n$$" in md and "\\tag{3.1}" not in md
+
+
 def test_a_flag_after_a_replace_quotes_the_replaced_latex(root, tmp_path):
     # Gilchrist p029 / Nelsen p055: the flag record kept the engine's LaTeX, so the
     # re-check and the quality table saw a formula the page no longer has

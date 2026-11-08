@@ -257,8 +257,8 @@ def _apply_one(d: dict, it: dict, md: str) -> tuple[str, str | None]:
     if d["action"] == "replace":
         new = d["latex"].strip()
         md, b = md[:a] + new + md[b:], a + len(new)
-    if d.get("tag") and not is_inline:          # set the display's \tag (add or change it)
-        line = f"\n\\tag{{{d['tag']}}}"
+    if d.get("tag") is not None and not is_inline:  # set the display's \tag; "" removes it
+        line = f"\n\\tag{{{d['tag']}}}" if d["tag"] else ""
         old = TAG_LINE.match(md, b)
         md = md[:b] + line + md[old.end() if old else b:]
     return md, None
