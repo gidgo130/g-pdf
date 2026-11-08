@@ -140,6 +140,21 @@ class BookPrep:
                     return window.open_path(resolved)
         return self.window.open_path(resolved)
 
+    # -- Check OCR ---------------------------------------------------------------------
+
+    def check_ocr(self) -> None:
+        tab = self.window.current_tab()
+        if tab is None:
+            return
+        report = book_prep.find_ocr_report(tab.path)
+        if report is None:
+            name = f"{tab.path.stem.removesuffix('_ocr')}_ocr.report.json"
+            show_message(self.window, f"No OCR report found for {tab.path.name}: looked for "
+                                      f"{name} next to it and in "
+                                      f"{book_prep.prep_folder(tab.path).name}.")
+            return
+        tab.show_ocr_check(report)
+
     # -- Split Spreads ---------------------------------------------------------------
 
     def split_spreads(self) -> None:

@@ -15,6 +15,7 @@ from gpdf.core import ocr, textedit
 from gpdf.core.document import FileChangedError, PdfDocument, PdfEditError
 from gpdf.ui.bookmarks import BookmarksTree
 from gpdf.ui.find_bar import FindBar
+from gpdf.ui.ocr_check import OcrCheckPanel, ReportError, load_report
 from gpdf.ui.page_panel import PagePanel
 from gpdf.ui.pdf_view import (
     TOOL_ADD_IMAGE, TOOL_ADD_TEXT, TOOL_BROWSE, TOOL_EDIT_TEXT, PdfView,
@@ -81,6 +82,7 @@ class DocumentTab(QWidget):
         self.reader_bar = ReadAloudBar(
             self.reader, lambda: self.view.current_page, self.view.go_to_page, self)
         self.reader_bar.hide()
+        self.ocr_check: OcrCheckPanel | None = None
 
         self.sidebar = QTabWidget(self)
         self.sidebar.addTab(self.panel, "Pages")
@@ -142,6 +144,37 @@ class DocumentTab(QWidget):
 
     def open_find(self) -> None:
         self.find_bar.open_bar()
+
+    def show_ocr_check(self, report_path) -> bool:
+        """Load an OCR report into the "OCR check" sidebar tab (replacing an older one)
+        and show it. False if the report cannot be read (the reason is shown)."""
+        try:
+            check = load_report(report_path)
+        except ReportError as exc:
+            self.show_error(str(exc))
+            return False
+        self._drop_ocr_check()
+        panel = OcrCheckPanel(check, self.document, self)
+        panel.page_requested.connect(self.view.go_to_page)
+        panel.overlay_toggled.connect(self.view.set_text_overlay)
+        self.view.current_page_changed.connect(panel.set_page)
+        self.ocr_check = panel
+        self.sidebar.setCurrentIndex(self.sidebar.addTab(panel, "OCR check"))
+        self.sidebar.show()
+        panel.set_page(self.view.current_page)
+        return True
+
+    def _drop_ocr_check(self) -> None:
+        panel, self.ocr_check = self.ocr_check, None
+        if panel is None:
+            return
+        try:
+            self.view.current_page_changed.disconnect(panel.set_page)
+        except (RuntimeError, TypeError):
+            pass
+        self.view.set_text_overlay(False)
+        self.sidebar.removeTab(self.sidebar.indexOf(panel))
+        panel.deleteLater()
 
     def toggle_reader(self) -> None:
         visible = not self.reader_bar.isVisible()
@@ -331,6 +364,7 @@ class DocumentTab(QWidget):
     def dispose(self) -> None:
         """Release the file and schedule this widget for deletion."""
         self.reader.stop()
+        self._drop_ocr_check()
         self.view.set_document(None)
         self.panel.set_document(None)
         self.bookmarks.set_document(None)

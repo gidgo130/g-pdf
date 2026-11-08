@@ -12,9 +12,11 @@ from __future__ import annotations
 import bisect
 from collections import OrderedDict
 
+import pymupdf
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import (
-    QColor, QCursor, QImage, QKeyEvent, QMouseEvent, QPainter, QPalette, QPen, QWheelEvent,
+    QColor, QCursor, QFont, QFontMetricsF, QImage, QKeyEvent, QMouseEvent, QPainter, QPalette,
+    QPen, QWheelEvent,
 )
 from PySide6.QtWidgets import QAbstractScrollArea
 
@@ -61,6 +63,8 @@ class PdfView(QAbstractScrollArea):
         self._drag_now: QPoint | None = None
         self._hits: list = []
         self._hit_current = -1
+        self._text_overlay = False  # draw the text layer visibly (OCR check), render only
+        self._words: dict[int, tuple] = {}  # page -> (page_token, words in view space)
 
         # Always show the vertical bar so fit-to-width doesn't oscillate when
         # the bar appears and steals viewport width.
@@ -101,6 +105,7 @@ class PdfView(QAbstractScrollArea):
         self._doc = doc
         self._hits = []
         self._hit_current = -1
+        self._words = {}
         if doc is not None:
             doc.structure_changed.connect(self._on_structure_changed)
             doc.page_changed.connect(self._on_page_changed)
@@ -193,6 +198,57 @@ class PdfView(QAbstractScrollArea):
         self._hits = list(hits)
         self._hit_current = current if 0 <= current < len(self._hits) else -1
         self.viewport().update()
+
+    @property
+    def text_overlay(self) -> bool:
+        return self._text_overlay
+
+    def set_text_overlay(self, on: bool) -> None:
+        """Draw each page's text layer (word boxes and text) over the page. Only
+        painted: the document is not changed."""
+        self._text_overlay = bool(on)
+        self.viewport().update()
+
+    def overlay_words(self, i: int) -> list[tuple[float, float, float, float, str]]:
+        """Words of page ``i`` as (x0, y0, x1, y1, text) in view-space points (the page
+        as displayed, rotation applied), cached until the page changes."""
+        token = self._doc.page_token(i)
+        cached = self._words.get(i)
+        if cached is None or cached[0] != token:
+            page = self._doc.raw[i]
+            m = page.rotation_matrix
+            words = []
+            for w in page.get_text("words"):
+                r = pymupdf.Rect(w[:4]) * m
+                words.append((r.x0, r.y0, r.x1, r.y1, w[4]))
+            cached = self._words[i] = (token, words)
+        return cached[1]
+
+    def _paint_text_layer(self, painter: QPainter, vy: int, vp_h: int) -> None:
+        scale = self._zoom * POINTS_TO_PX
+        painter.save()
+        font = QFont(painter.font())
+        i = max(0, bisect.bisect_right(self._tops, vy) - 1)
+        while i < len(self._tops) and self._tops[i] - vy < vp_h:
+            page = self._page_rect(i)
+            for x0, y0, x1, y1, text in self.overlay_words(i):
+                r = QRectF(page.x() + x0 * scale, page.y() + y0 * scale,
+                           (x1 - x0) * scale, (y1 - y0) * scale)
+                if r.width() < 1 or r.height() < 1:
+                    continue
+                painter.fillRect(r, QColor(255, 255, 255, 215))
+                size = max(1.0, r.height() * 0.8)
+                font.setPixelSize(round(size))
+                adv = QFontMetricsF(font).horizontalAdvance(text)
+                if adv > r.width():
+                    font.setPixelSize(max(1, round(size * r.width() / adv)))
+                painter.setFont(font)
+                painter.setPen(QColor(200, 0, 60))
+                painter.drawText(r, Qt.AlignmentFlag.AlignCenter, text)
+                painter.setPen(QPen(QColor(30, 110, 230, 170), 1))
+                painter.drawRect(r)
+            i += 1
+        painter.restore()
 
     def show_hit(self, i: int) -> None:
         """Make hit ``i`` the current one and scroll it into view."""
@@ -367,6 +423,8 @@ class PdfView(QAbstractScrollArea):
         self._evict_cache()
 
     def _paint_overlays(self, painter: QPainter, vy: int, vp_h: int) -> None:
+        if self._text_overlay:
+            self._paint_text_layer(painter, vy, vp_h)
         scale = self._zoom * POINTS_TO_PX
         for n, hit in enumerate(self._hits):
             if hit.page >= len(self._tops):

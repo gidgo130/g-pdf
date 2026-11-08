@@ -160,6 +160,7 @@ class MainWindow(QMainWindow):
         self._a_read = self._action("&Read Aloud", on_tab("toggle_reader"), "Ctrl+Shift+R")
         self._a_ocr = self._action("&OCR This Page…", on_tab("ocr_current_page"))
         self._a_prep_split = self._action("&Split Spreads…", self.book_prep.split_spreads)
+        self._a_prep_check = self._action("&Check OCR…", self.book_prep.check_ocr)
 
         self._tool_group = QActionGroup(self)
         self._tool_actions: dict[str, QAction] = {}
@@ -205,6 +206,7 @@ class MainWindow(QMainWindow):
 
         prep_menu = self.menuBar().addMenu("Book &Prep")
         prep_menu.addAction(self._a_prep_split)
+        prep_menu.addAction(self._a_prep_check)
 
         view_menu = self.menuBar().addMenu("&View")
         for a in (self._a_zoom_in, self._a_zoom_out, self._a_fit, self._a_actual):
@@ -234,7 +236,7 @@ class MainWindow(QMainWindow):
             self._a_select_all, self._a_rot_l, self._a_rot_r, self._a_delete,
             self._a_dup, self._a_blank, self._a_insert, self._a_extract,
             self._a_sidebar, self._a_read, self._a_ocr, *self._tool_actions.values(),
-            self._a_prep_split,
+            self._a_prep_split, self._a_prep_check,
         ]
 
     def _undo(self) -> None:
