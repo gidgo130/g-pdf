@@ -494,6 +494,15 @@ def test_a_greek_parameter_before_a_bracket_binds_as_a_product_not_a_power_base(
     assert r.status == "passed"
 
 
+def test_pi_before_a_bracket_is_a_product_not_a_function_call():
+    # Gilchrist's Cauchy quantile: tan[pi (p - 0.5)]; parse_latex read pi(...) as an unknown call
+    e = I._parse(I._clean(I._pre(r"\lambda + \eta \tan(\pi (p - 0.5))")))
+    assert e is not None
+    s = {x.name: x for x in e.free_symbols}
+    v = e.subs({s["lambda"]: 1, s["eta"]: 2, s["p"]: 0.75})
+    assert abs(float(v) - 3.0) < 1e-12                  # 1 + 2 tan(pi/4)
+
+
 def test_a_derivative_in_q_is_skipped_not_raised():
     # Ross 11e: q is replaced by 1 - p, which sympy cannot do inside d/dq (ValueError)
     r = I.check_display(r"M(t) = \frac{d}{dq} \left( q^{t} \right)")

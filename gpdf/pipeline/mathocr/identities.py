@@ -69,7 +69,9 @@ GREEK_LOWER = {"alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta
                "theta", "vartheta", "iota", "kappa", "lambda", "mu", "nu", "xi", "rho", "varrho",
                "sigma", "varsigma", "tau", "upsilon", "phi", "varphi", "chi", "psi", "omega"}
 FUNCTION_GREEK = {"phi", "varphi", "psi"}             # written before a bracket, a function
-GREEK_BRACKET = re.compile(r"(\\(?:" + "|".join(sorted(GREEK_LOWER - FUNCTION_GREEK, key=len, reverse=True))
+# pi is a constant, never a function: \pi (p - 0.5) is a product too
+GREEK_BRACKET = re.compile(r"(\\(?:" + "|".join(sorted((GREEK_LOWER - FUNCTION_GREEK) | {"pi"}, key=len,
+                                                       reverse=True))
                            + r")(?![A-Za-z])(?:_\{[^{}]*\}|_[A-Za-z0-9])?)\s*\(")
 UNKNOWN_CONSTANTS = {"c", "C", "K", "const"}           # a normalizing constant left unnamed
 HINTS = [("density", "density"), ("distribution function", "cdf"), ("survival", "survival"),
