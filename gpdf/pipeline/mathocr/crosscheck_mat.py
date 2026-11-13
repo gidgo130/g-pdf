@@ -107,6 +107,23 @@ def _sub(text: str | None) -> str:
     return I._canon(text.strip("{}")) if text else ""
 
 
+def _bessel_call(s: str, i: int, names) -> bool:
+    """I_sub followed by a bracket that holds no matrix or vector: the modified Bessel function I_sub(x)."""
+    j = i
+    while j < len(s) and s[j] == " ":
+        j += 1
+    if s.startswith("\\left", j):
+        j += 5
+    if j >= len(s) or s[j] != "(":
+        return False
+    e = _match(s, j)
+    inside = s[j:e] if e else s[j:]
+    if OPEN in inside:
+        return False
+    return not any(re.search(r"(?<![A-Za-z\\])\\?" + re.escape(n) + r"(?![A-Za-z])", inside)
+                   for n in names if n != "I")
+
+
 def mark(s: str, dist: dict, values: dict) -> str:
     """Matrix and vector atoms written as OPEN name CLOSE (subscript in the name)."""
     def atom(name, sub):
@@ -138,6 +155,8 @@ def mark(s: str, dist: dict, values: dict) -> str:
             # x_1 beside a vector x is its component (a scalar) unless the point gives x_1 a matrix
             if sub and name != "I" and not isinstance(values.get(f"{name}_{sub}"), (list, tuple)):
                 return m.group(0)
+            if name == "I" and sub and _bessel_call(m.string, m.end(), names):
+                return m.group(0)                  # I_{p/2-1}(kappa): the Bessel function, for the scalar reader
             return atom(name, sub)
         s = rx.sub(plain, s)
     return s
@@ -362,6 +381,9 @@ class Evaluator:
         if has_atom(text):
             raise MatrixError("a matrix inside a scalar function")
         expr = C.book_expr(text, (), self.defs)
+        if expr is None:                       # scalar factors side by side: "n (n + 1)" is a product, not a call
+            from gpdf.pipeline.mathocr import crosscheck_mv as MV
+            expr = C.book_expr(MV.for_parser(text), (), self.defs)
         if expr is None:
             raise MatrixError(f"scalar part does not parse: {text.strip()[:40]}")
         v, why = C.evaluate(expr, self.scalars)

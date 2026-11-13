@@ -527,7 +527,13 @@ and `multivariate_normal` for pdf and entropy; closed forms for mean and mode (`
 element variances and covariances (`index` [[i, j], [k, l]]: Wishart n(s_ik s_jl + s_il s_jk), the
 inverted Wishart's, U_ik V_jl), marginals (Dirichlet beta, multivariate t, a Wishart diagonal
 element s_ii chi-square, a matrix normal element), the Dirichlet `mixed_moment` (`r`), and the
-Wishart and matrix normal mgf / cf.
+Wishart and matrix normal mgf / cf. Second moments in closed form (whole matrix, or an element
+by `index` [i, j]), with Gupta–Nagar's conventions and checked against SciPy Monte Carlo in the
+tests: `mean_square` E(W W) = n(n + 1) S S + n tr(S) S and `mean_inverse` E(W^{-1}) = S^{-1} / (n - p - 1)
+for the Wishart (df n, scale S); `mean_quadratic` E(X A X') = M A M' + tr(A V') U for the matrix
+normal, with the row's `args` naming `A` (an n x n matrix of the point). In a matrix row,
+`I_{order}(...)` whose bracket holds no matrix or vector is the modified Bessel function (the scalar
+reader), not an identity; scalar factors side by side (`n (n + 1) \Sigma^2`) are a product.
 
 **Closed forms from a book's own definitions.** A family no library has (Topp–Leone, Marshall–Olkin,
 a bivariate gamma) takes `"scipy": "closed_form"` and an `expr` of Python expressions in the row's

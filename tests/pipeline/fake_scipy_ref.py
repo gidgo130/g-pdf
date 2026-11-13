@@ -51,7 +51,31 @@ def matrix_variate(q):
         else:
             return {"error": f"no {qty}"}
         return out
+    if q["dist"] == "matrix_normal" and qty == "mean_quadratic":    # E(X A X') = M A M' + tr(A V') U, 2 x 2
+        M, U, V, A = a["mean"], a["rowcov"], a["colcov"], a["A"]
+        mm = lambda P, Q: [[sum(P[i][k] * Q[k][j] for k in range(2)) for j in range(2)] for i in range(2)]  # noqa: E731
+        Mt = [[M[j][i] for j in range(2)] for i in range(2)]
+        tr = sum(A[i][k] * V[i][k] for i in range(2) for k in range(2))
+        m = [[mm(mm(M, A), Mt)[i][j] + tr * U[i][j] for j in range(2)] for i in range(2)]
+        if q.get("whole"):
+            out["matrix"] = m
+        else:
+            out["value"] = m[idx[0]][idx[1]]
+        return out
     n, S = a["df"], a["scale"]                    # wishart, p = 2
+    if qty in ("mean_square", "mean_inverse"):
+        dS = _det2(S)
+        if qty == "mean_square":
+            SS = [[sum(S[i][k] * S[k][j] for k in range(2)) for j in range(2)] for i in range(2)]
+            tr = S[0][0] + S[1][1]
+            m = [[n * (n + 1) * SS[i][j] + n * tr * S[i][j] for j in range(2)] for i in range(2)]
+        else:
+            m = [[v / (dS * (n - 3)) for v in row] for row in [[S[1][1], -S[0][1]], [-S[1][0], S[0][0]]]]
+        if q.get("whole"):
+            out["matrix"] = m
+        else:
+            out["value"] = m[idx[0]][idx[1]]
+        return out
     if qty == "mean" and q.get("whole"):
         out["matrix"] = [[n * v for v in row] for row in S]
     elif qty == "pdf":

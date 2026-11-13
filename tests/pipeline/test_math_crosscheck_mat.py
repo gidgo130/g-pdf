@@ -169,6 +169,90 @@ def test_etr_tr_det_written_upright_are_read(tmp_path):
         assert r["status"] == want, (r["id"], r["status"], r.get("reason"), r.get("reduced"))
 
 
+MNQ = {"scipy": "matrix_normal", "matrix": True, "matrices": ["X", "M", "Sigma", "Psi", "A"], "var": "X",
+       "args": {"mean": "M", "rowcov": "Sigma", "colcov": "Psi", "A": "A"},
+       "points": [{"M": [[1.0, 0.0], [0.5, 2.0]], "Sigma": SIG, "Psi": [[1.0, 0.2], [0.2, 0.5]],
+                   "A": [[0.3, -0.4], [1.2, 0.7]], "X": [[1.4, -0.3], [0.2, 2.5]]},
+                  {"M": [[0.0, 1.0], [1.0, 0.0]], "Sigma": [[1.0, -0.4], [-0.4, 0.8]], "Psi": [[0.7, 0.0], [0.0, 1.1]],
+                   "A": [[1.0, 0.5], [0.0, -2.0]], "X": [[0.5, 0.5], [0.8, -0.2]]},
+                  {"M": [[2.0, 1.0], [0.0, 1.0]], "Sigma": [[0.5, 0.1], [0.1, 0.3]], "Psi": [[2.0, 0.5], [0.5, 1.0]],
+                   "A": [[-0.6, 0.2], [0.9, 0.4]], "X": [[1.0, 1.5], [0.3, 0.6]]}]}
+# Gupta-Nagar's conventions: W ~ W_p(n, Sigma) (Def. 3.2.1) has E(W^2) = n(n + 1) Sigma^2 + n tr(Sigma) Sigma and
+# E(W^{-1}) = Sigma^{-1} / (n - p - 1); X ~ N_{p,n}(M, Sigma (x) Psi) (Def. 2.2.1) has E(X A X') = M A M' + tr(A Psi') Sigma
+SECOND = [
+    ("wishart E(W^2)", "wis", "mean_square",
+     r"n (n + 1) \boldsymbol{\Sigma}^{2} + n \operatorname{tr}(\boldsymbol{\Sigma}) \boldsymbol{\Sigma}",
+     r"n (n + 1) \boldsymbol{\Sigma}^{2} + \operatorname{tr}(\boldsymbol{\Sigma}) \boldsymbol{\Sigma}", {}),
+    ("wishart E(W^-1)", "wis", "mean_inverse", r"\frac{\boldsymbol{\Sigma}^{-1}}{n - p - 1}",
+     r"\frac{\boldsymbol{\Sigma}^{-1}}{n - p}", {}),
+    ("wishart E(W^-1) element", "wis", "mean_inverse", r"\frac{\tau_{12}}{n - p - 1}", r"\frac{\tau_{12}}{n - p + 1}",
+     {"index": [1, 2]}),
+    ("matrix normal E(XAX')", "mnq", "mean_quadratic",
+     r"\mathbf{M} \mathbf{A} \mathbf{M}' + \operatorname{tr}(\mathbf{A} \boldsymbol{\Psi}) \boldsymbol{\Sigma}",
+     r"\mathbf{M} \mathbf{A} \mathbf{M}' + 2 \operatorname{tr}(\mathbf{A} \boldsymbol{\Psi}) \boldsymbol{\Sigma}", {}),
+]
+
+
+def test_second_moment_references_and_one_planted_error_each(tmp_path):
+    dists = json.loads(json.dumps({**DISTS, "mnq": MNQ}))
+    inv = lambda s: [[s[1][1] / (s[0][0] * s[1][1] - s[0][1] ** 2), -s[0][1] / (s[0][0] * s[1][1] - s[0][1] ** 2)],  # noqa: E731
+                     [-s[0][1] / (s[0][0] * s[1][1] - s[0][1] ** 2), s[0][0] / (s[0][0] * s[1][1] - s[0][1] ** 2)]]
+    dists["wis"]["derived"] = {**dists["wis"]["derived"], "tau_12": "SigInv[0][1]"}
+    for pt in dists["wis"]["points"]:
+        pt["SigInv"] = inv(pt["Sigma"])
+    res = run(tmp_path, SECOND, dists, script=FAKE)
+    for r in res.values():
+        want = "failed" if r["id"].endswith("bad") else "passed"
+        assert r["status"] == want, (r["id"], r["status"], r.get("reason"), r.get("reduced"))
+
+
+def test_bessel_i_inside_a_matrix_row_is_the_bessel_function():
+    import mpmath
+    vals = {**VALS, "kappa": 2.0}                       # p = 2: I_{p/2 - 1} = I_0
+    assert value(r"I_{p/2 - 1}(\kappa) |\boldsymbol{\Sigma}|", vals) == pytest.approx(
+        float(mpmath.besseli(0, 2.0)) * DET_S)
+    assert value(r"\frac{\kappa}{I_{1}(\kappa)} \operatorname{tr}(\Sigma)", vals) == pytest.approx(
+        2.0 / float(mpmath.besseli(1, 2.0)) * 3.0)
+    assert value(r"|\mathbf{I}_p + \Sigma|", vals) == pytest.approx(3 * 2 - 0.09)      # the identity still is one
+
+
+MC = r"""
+import json, sys
+import numpy as np
+from scipy import stats
+q = json.loads(sys.argv[1]); rng = np.random.default_rng(20261113); N = 200000
+S = np.array(q["S"]); n = q["n"]; M = np.array(q["M"]); U = np.array(q["U"]); V = np.array(q["V"]); A = np.array(q["A"])
+W = stats.wishart(df=n, scale=S).rvs(size=N, random_state=rng)
+X = stats.matrix_normal(mean=M, rowcov=U, colcov=V).rvs(size=N, random_state=rng)
+print(json.dumps({"mean_square": (W @ W).mean(0).tolist(), "mean_inverse": np.linalg.inv(W).mean(0).tolist(),
+                  "mean_quadratic": (X @ A @ X.transpose(0, 2, 1)).mean(0).tolist()}))
+"""
+
+
+def test_second_moment_references_agree_with_scipy_monte_carlo():
+    py = os.environ.get(C.ENV_VAR)
+    if not py:
+        pytest.skip("set GPDF_SCIPY_PYTHON to a Python with SciPy")
+    import subprocess
+    S, n = [[2.0, 0.3], [0.3, 1.0]], 9.0
+    M, U, V, A = [[1.0, 0.0], [0.5, 2.0]], SIG, [[1.0, 0.2], [0.2, 0.5]], [[0.3, -0.4], [1.2, 0.7]]
+    out = subprocess.run([py, "-c", MC, json.dumps({"S": S, "n": n, "M": M, "U": U, "V": V, "A": A})],
+                         capture_output=True, text=True, check=True)
+    mc = json.loads(out.stdout)
+    ref = C.RefWorker(py)
+    try:
+        for qty, name, args in (("mean_square", "wishart", {"df": n, "scale": S}),
+                                ("mean_inverse", "wishart", {"df": n, "scale": S}),
+                                ("mean_quadratic", "matrix_normal", {"mean": M, "rowcov": U, "colcov": V, "A": A})):
+            a = ref.ask({"dist": name, "multivariate": True, "args": args, "qty": qty, "whole": True, "index": []})
+            assert "matrix" in a, a
+            for row_r, row_m in zip(a["matrix"], mc[qty]):
+                for r, m in zip(row_r, row_m):
+                    assert r == pytest.approx(m, rel=0.02, abs=0.02), (qty, a["matrix"], mc[qty])
+    finally:
+        ref.close()
+
+
 def test_an_unread_matrix_expression_is_inconclusive(tmp_path):
     cases = [("odd", "mvn", "pdf", r"\boldsymbol{\Sigma} / 2", r"\boldsymbol{\Sigma} / 3", {})]
     res = run(tmp_path, cases, DISTS, script=FAKE)
@@ -228,11 +312,12 @@ def test_real_scipy_matrix_families_when_configured(tmp_path):
     for r in res.values():
         want = "failed" if r["id"].endswith("bad") else "passed"
         assert r["status"] == want, (r["id"], r["status"], r.get("reason"), r.get("reduced"))
-    # the von Mises-Fisher density needs the Bessel I: not in the scalar parser, so inconclusive
+    # the von Mises-Fisher density with its Bessel I_{p/2-1}(kappa) inside the matrix row
     vmf = run(tmp_path / "v" if (tmp_path / "v").mkdir() is None else None,
               [("vmf pdf", "vmf", "pdf", VMF, VMF.replace("\\kappa \\boldsymbol", "2 \\kappa \\boldsymbol"), {})],
               dists, python=py)
-    assert vmf["vmf pdf ok"]["status"] in ("passed", "inconclusive")
+    assert vmf["vmf pdf ok"]["status"] == "passed", vmf["vmf pdf ok"].get("reason")
+    assert vmf["vmf pdf bad"]["status"] == "failed"
 
 
 # ---------------------------------------------------------------- closed forms from a book's definitions

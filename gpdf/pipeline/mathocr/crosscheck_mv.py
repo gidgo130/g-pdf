@@ -41,7 +41,8 @@ from gpdf.pipeline.mathocr import watch
 
 QUANTITIES = ("pmf", "pdf", "marginal_pmf", "marginal_pdf", "mean", "var", "cov", "corr",
               "fact_moment", "pgf", "mgf", "cf", "cond_pmf", "cond_mean", "cond_var",
-              "mode", "entropy", "mixed_moment", "cond_pdf", "cond_moment", "sf", "cdf")
+              "mode", "entropy", "mixed_moment", "cond_pdf", "cond_moment", "sf", "cdf",
+              "mean_square", "mean_inverse", "mean_quadratic")
 SUMPROD = re.compile(r"\\(sum|prod)_\{\s*([a-z])\s*=\s*(-?\d+)\s*\}\^")
 DOTS = re.compile(r"\\(?:ldots|cdots|dotsc|dotsb|dots)(?![A-Za-z])")
 BOLD_SUB = re.compile(r"\\(?:mathbf|boldsymbol|bm|pmb)\{(\\?[A-Za-z]+)\}(?=_)")
@@ -267,7 +268,12 @@ def for_parser(s: str, values: dict | None = None) -> str:
     def num(m):
         key = f"{m.group(1).lstrip(chr(92))}_{m.group(2)}"
         return f"({values[key]!r})" if values and key in values else m.group(0)
-    return LEAD_ZERO.sub(num, CALL_LIKE.sub(r"\1 \\cdot (", s))
+
+    def call(m):                          # I_{p/2-1}(kappa) stays a call: the modified Bessel function
+        if re.fullmatch(r"I_(?:\{" + I.BESSEL_ORDER + r"\}|[0-9a-z])", m.group(1)):
+            return m.group(0)
+        return m.group(1) + " \\cdot ("
+    return LEAD_ZERO.sub(num, CALL_LIKE.sub(call, s))
 
 
 # ---------------------------------------------------------------- one entry

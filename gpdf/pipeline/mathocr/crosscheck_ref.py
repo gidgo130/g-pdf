@@ -233,6 +233,25 @@ def _family(name, a):
     raise ValueError(f"no matrix-variate {name}")
 
 
+SECOND_MOMENTS = ("mean_square", "mean_inverse", "mean_quadratic")
+
+
+def _second_moment(name, a, qty):
+    """Matrix second moments in closed form (Gupta-Nagar's conventions, Monte Carlo-checked in the tests):
+    W ~ wishart(n, S): E(W W) = n(n + 1) S S + n tr(S) S and E(W^{-1}) = S^{-1} / (n - p - 1);
+    X ~ matrix_normal(M, U, V): E(X A X') = M A M' + tr(A V') U (A from the args)."""
+    if name == "wishart" and qty in ("mean_square", "mean_inverse"):
+        n, S = a["df"], a["scale"]
+        p = S.shape[0]
+        if qty == "mean_square":
+            return n * (n + 1) * S @ S + n * np.trace(S) * S
+        return np.linalg.inv(S) / (n - p - 1)
+    if name == "matrix_normal" and qty == "mean_quadratic" and "A" in a:
+        M, U, V, A = a["mean"], a["rowcov"], a["colcov"], a["A"]
+        return M @ A @ M.T + np.trace(A @ V.T) * U
+    return None
+
+
 def _el(arr, i):
     return float(arr[tuple(i)] if isinstance(i, (list, tuple)) else arr[i])
 
@@ -244,6 +263,15 @@ def _mat(q):
     d, mean, mode, cov = _family(name, a)
     out = {"value": None, "imag": None, "tol_floor": 0.0, "how": f"{name} {qty} (scipy / closed form)"}
     vec = name in VECTOR_FAMILIES
+    if qty in SECOND_MOMENTS:
+        m = _second_moment(name, a, qty)
+        if m is None:
+            return {"error": f"no {qty} for {name}"}
+        if q.get("whole"):
+            out["matrix"] = m.tolist()
+        else:
+            out["value"] = _el(m, idx)
+        return out
     if q.get("whole"):                       # the book's side is a whole vector or matrix
         if qty in ("mean", "mode"):
             m = np.atleast_1d(mean if qty == "mean" else mode)
