@@ -179,7 +179,9 @@ either edge of a running head), else from the PDF's own text in the top and
 bottom bands, else from Tesseract on those bands when one is available.
 Readings are fitted as runs of a constant offset (printed minus file page)
 within each contiguous page range; a reading needs a second page within four
-that agrees, so a misread lone number is rejected and listed. A change of
+that agrees, so a misread lone number is rejected and listed (on a run of one page the
+page's own reading stands, except a four-digit number from 1000 to 2099, which always
+needs a second page: a year in a running head such as "THE SITUATION IN 1827"). A change of
 offset between adjacent pages is a **step** (a chapter start whose blank verso
 was not scanned); runs, steps and rejected readings are printed and kept in
 `meta.json`. A page without an accepted number gets `printed=""` and a

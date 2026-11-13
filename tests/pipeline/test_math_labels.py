@@ -127,6 +127,28 @@ def test_a_lone_page_keeps_its_number_but_two_disagreeing_pages_keep_none():
     assert len(fit.rejected) == 2 and fit.runs == []
 
 
+def test_a_year_in_a_running_head_is_not_a_page_label():
+    # Stigler / Hald pilots: an isolated page whose running head ends in a year ("THE SITUATION IN 1827")
+    year = labels.candidates(labels.band_texts([header("THE SITUATION IN 1827"), text_block("x")]))
+    assert year == [("a", 1827, None)]
+    fit = labels.fit({180: year})
+    assert fit.labels[180].printed is None and fit.runs == []
+    assert fit.rejected == [{"page": 180, "value": "1827", "reason": "does not fit the run"}]
+    # beside the page's own number the year loses, on a lone page too
+    fit = labels.fit({180: [("a", 158, None)] + year})
+    assert fit.labels[180].printed == "158" and fit.runs[0]["offset"] == -22
+    # in a full run every page keeps its number and the years are rejected
+    pages = book(160, 167, -22)
+    for p in (161, 163, 165):
+        pages[p].insert(1, header("THE SITUATION IN 1827"))
+    fit = labels.fit({p: labels.candidates(labels.band_texts(b)) for p, b in pages.items()})
+    assert {p: v.printed for p, v in fit.labels.items()} == {p: str(p - 22) for p in range(160, 168)}
+    assert fit.rejected == []       # a page whose own number is accepted drops its other readings
+    # four-digit page numbers that agree with each other are page numbers
+    fit = labels.fit({p: [("a", p + 950, None)] for p in range(100, 104)})
+    assert fit.labels[101].printed == "1051" and fit.rejected == []
+
+
 def test_a_page_with_nothing_to_go_on_gets_no_label():
     fit = labels.fit({1: [], 2: []})
     assert fit.labels[1].printed is None and fit.labels[1].inferred is None

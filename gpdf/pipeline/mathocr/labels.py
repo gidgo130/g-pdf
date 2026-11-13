@@ -27,6 +27,7 @@ from gpdf.pipeline.manuals import _format_label, int_to_roman, label_candidates
 BAND = 0.10               # top / bottom share of the page height
 MIN_SUPPORT = 2           # pages that must agree on an offset
 WINDOW = 4                # pages either side that vote
+YEARS = (1000, 2099)      # an arabic reading in this range needs a second page that agrees
 BAND_TYPES = ("page_number", "header", "footer")
 OCR_DPI = 300
 OCR_LANG = "eng"
@@ -196,21 +197,26 @@ def fit(cands: dict[int, list[tuple]]) -> Fit:
         for p in rng:
             glob.update(votes[p])
         need = min(MIN_SUPPORT, sum(1 for p in rng if votes[p]))   # a lone page: itself
+
+        def need_of(k, p):
+            """A four-digit year (a running head's "... IN 1827") never stands on its own: it needs
+            another page to agree, as genuine four-digit page numbers do."""
+            return MIN_SUPPORT if k[0] == "a" and YEARS[0] <= p + k[2] <= YEARS[1] else need
         accepted, key = {}, {}
         for p in rng:
-            own = [(support[p][k], k) for k in votes[p] if support[p][k] >= need]
+            own = [(support[p][k], k) for k in votes[p] if support[p][k] >= need_of(k, p)]
             if own:
                 accepted[p] = key[p] = max(own)[1]
         for p in rng:
             if p in accepted:
                 continue
             near = [(n, -min(abs(q - p) for q in rng if accepted.get(q) == k), k)
-                    for k, n in support[p].items() if n >= need and any(
+                    for k, n in support[p].items() if n >= need_of(k, p) and any(
                         accepted.get(q) == k for q in rng)]
             if near:
                 key[p] = max(near)[2]
             else:
-                best = [(n, k) for k, n in glob.items() if n >= need]
+                best = [(n, k) for k, n in glob.items() if n >= need_of(k, p)]
                 key[p] = max(best)[1] if best else None
             if votes[p]:
                 for k in sorted(votes[p]):
