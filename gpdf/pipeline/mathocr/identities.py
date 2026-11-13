@@ -266,10 +266,16 @@ _CLEAN = [
     (re.compile(r"\\prime"), "'"),
     (re.compile(r"\^\{'\}"), "'"),
 ]
+# the order of a modified Bessel function I_order(x): a number, a letter or Greek letter, or a sum, difference or
+# quotient of those (not a set, an interval or a condition: those are an indicator's subscript)
+_ORDER_ATOM = r"(?:\d+(?:\.\d+)?|[a-z]|\\(?!infty\b)[a-z]+)"
+BESSEL_ORDER = r"\s*" + _ORDER_ATOM + r"(?:\s*[-+/]\s*" + _ORDER_ATOM + r")*\s*"
+BESSEL_NAME = re.compile(r"I_\{(\s*(?:\d+(?:\.\d+)?|[a-z]+)(?:\s*[-+/]\s*(?:\d+(?:\.\d+)?|[a-z]+))*\s*)\}")
 _INDICATOR = [
     re.compile(r"\\(mathbf|mathbb|boldsymbol|pmb|bm)\{1\}(?:_\{[^{}]*\}|\([^()]*\))?"),
     re.compile(r"(?<![A-Za-z\\])I\s*[\[(][^\[\]()]*(?:<|>|\\le|\\ge|\\leq|\\geq)[^\[\]()]*[\])]"),
-    re.compile(r"(?<![A-Za-z\\])I_\{[^{}]*\}\s*\([^()]*\)"),
+    # I_{A}(x) with a set as the subscript; I_{0}(\kappa), I_{\nu}(x), I_{p/2-1}(\kappa) are the modified Bessel I
+    re.compile(r"(?<![A-Za-z\\])I_\{(?!" + BESSEL_ORDER + r"\})[^{}]*\}\s*\([^()]*\)"),
 ]
 FOOTNOTE = re.compile(r"([)\]])\s*\^\s*(?:\{\s*\*\s*\}|\*)")
 ERF_NAME = re.compile(r"\\(?:operatorname\*?|mathrm|text|rm)\s*\{\s*(erfc|erf|digamma)\s*\}")
@@ -517,6 +523,7 @@ def _parse(s: str, defs: dict | None = None, depth: int = 0):
             (a.func.__name__ == "Gamma" and len(a.args) == 1)
             or (a.func.__name__ == "B" and len(a.args) == 2)
             or (a.func.__name__ in ("Phi", "phi", "erf", "erfc", "Phiinv", "digamma") and len(a.args) == 1)
+            or (BESSEL_NAME.fullmatch(a.func.__name__) is not None and len(a.args) == 1)
             # N(p): the standard normal quantile (Gilchrist), only of a probability variable
             or (a.func.__name__ == "N" and len(a.args) == 1 and isinstance(a.args[0], sympy.Symbol)
                 and a.args[0].name in ("p", "u")))
@@ -537,6 +544,13 @@ def _parse(s: str, defs: dict | None = None, depth: int = 0):
             return sympy.digamma(a.args[0])
         if n in ("Phiinv", "N"):                         # sqrt(2) erfinv(2p - 1)
             return sympy.sqrt(2) * sympy.erfinv(2 * a.args[0] - 1)
+        m = BESSEL_NAME.fullmatch(n)
+        if m:                                            # I_nu(x): the modified Bessel function of the first kind
+            from sympy.parsing.sympy_parser import parse_expr
+            inner = m.group(1)
+            order = parse_expr(
+                inner, local_dict={w: sympy.Symbol(w) for w in re.findall(r"[a-z]+", inner)})
+            return sympy.besseli(order, a.args[0])
         return (1 + sympy.erf(a.args[0] / sympy.sqrt(2))) / 2
 
     expr = expr.replace(known, mapped)

@@ -255,7 +255,10 @@ table does not know ("density", "distribution function", "survival",
 generating"). Tags, sizes and spacing are stripped, aligned rows and `=`
 chains split, side conditions dropped; `\Gamma`, `B(·,·)`, `\Phi`, `e`, `i`,
 `\pi`, `\operatorname{erfc}` / `erf`, the normal quantile `\Phi^{-1}(p)` (and `N(p)` of a
-probability variable, as sqrt(2) erfinv(2p - 1)) and indicator notation are mapped.
+probability variable, as sqrt(2) erfinv(2p - 1)), the modified Bessel function `I_{\nu}(x)` (also
+`I_0(x)`, `I_{p/2 - 1}(x)`: an order that is a number, a letter or a sum or quotient of those; a set
+or interval as the subscript is an indicator) and indicator notation are mapped. `\mathrm{etr}`,
+`\mathrm{tr}` and `\mathrm{det}` are read as the functions, not as words between equations.
 `--identity-letters S=quantile,Q=quantile` (or `G=cdf`, `M=skip`, ...) declares the book's own
 letters, which then decide the quantity before the table above; a declared `quantile` is checked as
 increasing on (0, 1). Undeclared, a density or distribution function whose only variable is `p` (a

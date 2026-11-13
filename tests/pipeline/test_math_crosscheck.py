@@ -310,3 +310,25 @@ def test_piecewise_branches_and_row_conditions(tmp_path):
                 entries=[{"id": "m", "where": {"tag": "3.5"}, "eq": "rhs", "qty": "mean",
                           "dist": "expon", "row": None, "notation": [[r",\s*\\quad.*", ""]]}])
     assert len(by_id(plain)["m"]["points"]) == 3
+
+
+def _val(tex, **vals):
+    expr = C.book_expr(tex)
+    assert expr is not None, tex
+    v, why = C.evaluate(expr, vals)
+    assert v is not None, (tex, why)
+    return v.real
+
+
+def test_modified_bessel_i_is_read_and_an_indicator_still_is_one():
+    # I_0(1), I_1(1), I_{2.5}(1.5) (mpmath besseli); the von Mises density and A(kappa) = I_1/I_0
+    assert _val(r"I_{0}(\kappa)", kappa=1.0) == pytest.approx(1.2660658777520082)
+    assert _val(r"I_1(\kappa)", kappa=1.0) == pytest.approx(0.5651591039924851)
+    assert _val(r"I_{\nu}(x)", nu=2.5, x=1.5) == pytest.approx(0.171662022188296)
+    assert _val(r"I_{p/2 - 1}(\kappa)", p=3, kappa=2.0) == pytest.approx(2.04623686308905)
+    vm = _val(r"\frac{1}{2 \pi I_{0}(\kappa)} e^{\kappa \cos (\theta - \mu)}", kappa=2.0, theta=0.3, mu=0.0)
+    assert vm == pytest.approx(0.471801171182427)
+    assert _val(r"\frac{I_{1}(\kappa)}{I_{0}(\kappa)}", kappa=2.0) == pytest.approx(0.6977746579640081)
+    # an indicator keeps its meaning: a set as the subscript
+    assert _val(r"I_{(0, \infty)}(x) e^{-x}", x=1.0) == pytest.approx(0.36787944)
+    assert _val(r"I_{[0,1]}(x) x", x=0.5) == pytest.approx(0.5)
