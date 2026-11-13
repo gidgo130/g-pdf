@@ -780,7 +780,7 @@ def _compare(branches, e, q, dist, spec, ref, res):
             return res
         args = _args(dist, point)
         a = ref.ask({"dist": dist["scipy"], "args": args, "qty": "skew" if q == "skew2" else q,
-                     "x": arg, "r": r})
+                     "x": arg, "r": r, **({"expr": dist["expr"]} if dist.get("expr") else {})})
         if "error" in a:
             res["points"].append({"values": values, "book": [b.real, b.imag]})
             res["reason"] = "reference: " + a["error"]

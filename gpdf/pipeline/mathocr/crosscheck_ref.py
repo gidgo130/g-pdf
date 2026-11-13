@@ -363,7 +363,256 @@ def answer_mv(q):
     return out
 
 
+# ---------------------------------------------------------------- closed forms (a book's own definitions)
+
+CLOSED_ENV = {}
+
+
+def _cenv():
+    import mpmath as mp
+    if not CLOSED_ENV:
+        mp.mp.dps = 30
+        CLOSED_ENV.update({n: getattr(mp, n) for n in (
+            "exp", "log", "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
+            "asinh", "acosh", "atanh", "gamma", "loggamma", "beta", "erf", "erfc", "besseli", "besselk",
+            "besselj", "hyp1f1", "hyp2f1", "hyper", "e1", "ei", "expint", "binomial", "factorial",
+            "zeta", "polylog", "pi", "e", "inf", "psi", "betainc", "gammainc")})
+        CLOSED_ENV.update(mp=mp, max=max, min=min, abs=abs, Gamma=mp.gamma, ln=mp.log)
+    return CLOSED_ENV
+
+
+FLOAT_ENV = {"exp": np.exp, "log": np.log, "ln": np.log, "sqrt": np.sqrt, "sin": np.sin, "cos": np.cos,
+             "tan": np.tan, "asin": np.arcsin, "acos": np.arccos, "atan": np.arctan, "sinh": np.sinh,
+             "cosh": np.cosh, "tanh": np.tanh, "asinh": np.arcsinh, "acosh": np.arccosh, "atanh": np.arctanh,
+             "gamma": special.gamma, "Gamma": special.gamma, "loggamma": special.gammaln, "beta": special.beta,
+             "erf": special.erf, "erfc": special.erfc, "besseli": special.iv, "besselk": special.kv,
+             "besselj": special.jv, "hyp1f1": special.hyp1f1, "hyp2f1": special.hyp2f1, "e1": special.exp1,
+             "ei": special.expi, "binomial": special.binom, "factorial": lambda v: special.gamma(v + 1),
+             "psi": special.digamma, "pi": math.pi, "e": math.e, "inf": math.inf, "max": max, "min": min,
+             "abs": abs}
+
+
+def _cfun(src, names, args, fast=False):
+    """A function of the named variables from a Python expression in them and the args (mpmath,
+    or floats with SciPy's special functions when ``fast``: for quadrature)."""
+    code = compile(src, "<closed form>", "eval")
+    env = {**(FLOAT_ENV if fast else _cenv()), **args}
+    return lambda *v: eval(code, {"__builtins__": {}}, {**env, **dict(zip(names, v))})  # noqa: S307
+
+
+def _closed_uni(q):
+    """A univariate family from its pdf (or pmf) and support, Python expressions in x and the args;
+    every quantity by quadrature (or an exact sum) of that density. A quantity given as its own
+    expression is evaluated as it stands."""
+    ex, a = q["expr"], q.get("args", {})
+    qty, x, r = q["qty"], q.get("x"), q.get("r")
+    out = {"value": None, "imag": None, "tol_floor": 0.0,
+           "how": f"closed form from the book's definition (internal consistency): {qty}"}
+    if qty in ex and qty not in ("pdf", "pmf", "support"):
+        v = complex(_cfun(ex[qty], ["x", "r"], a)(x, r))
+        out["value"], out["imag"] = v.real, v.imag or None
+        return out
+    lo, hi = (float(eval(str(b), {"__builtins__": {}}, {**FLOAT_ENV, **a})) for b in ex["support"])  # noqa: S307
+    discrete = "pmf" in ex
+    f = _cfun(ex["pmf" if discrete else "pdf"], ["x"], a, fast=True)
+    err = [0.0]
+    brk = [float(eval(str(b), {"__builtins__": {}}, {**FLOAT_ENV, **a})) for b in ex.get("breaks", [])]  # noqa: S307
+
+    def integral(g, u=lo, w=hi):
+        if discrete:
+            top = w if math.isfinite(w) else u + 10 ** 5
+            return float(sum(g(k) * f(k) for k in range(int(math.ceil(u)), int(math.floor(top)) + 1)))
+        pts = [b for b in brk if u < b < w] or None
+        if pts and (math.isinf(u) or math.isinf(w)):
+            pts = None
+        v, e = integrate.quad(lambda y: g(y) * f(y), u, w, points=pts, epsabs=1e-14, epsrel=1e-12, limit=500)
+        err[0] = max(err[0], abs(e) / max(abs(v), 1e-300))
+        return v
+    one = lambda y: 1.0                                                                # noqa: E731
+    raw = lambda k: integral(lambda y: y ** k)                                         # noqa: E731
+    cdf = lambda v: integral(one, lo, v)                                               # noqa: E731
+    if qty in ("pdf", "pmf"):
+        v = float(f(x)) if lo <= x <= hi else 0.0
+    elif qty == "cdf":
+        v = cdf(x)
+    elif qty == "sf":
+        v = integral(one, x + 1 if discrete else x, hi) if not discrete else 1 - cdf(x)
+    elif qty == "hazard":
+        v = float(f(x)) / (1 - cdf(x - 1 if discrete else x))
+    elif qty == "cum_hazard":
+        v = -math.log(1 - cdf(x))
+    elif qty in ("quantile", "median", "isf"):
+        pr = 0.5 if qty == "median" else (1 - x if qty == "isf" else x)
+        a_, b_ = (lo if math.isfinite(lo) else -1e6), (hi if math.isfinite(hi) else 1e6)
+        v = optimize.brentq(lambda y: cdf(y) - pr, a_, b_, xtol=1e-14, rtol=1e-13)
+    elif qty == "mode":
+        a_, b_ = (lo if math.isfinite(lo) else -1e3), (hi if math.isfinite(hi) else 1e3)
+        grid = np.linspace(a_, b_, 4001)[1:-1]
+        k = int(np.argmax([f(g) for g in grid]))
+        res = optimize.minimize_scalar(lambda y: -f(y), bounds=(grid[max(k - 1, 0)], grid[min(k + 1, len(grid) - 1)]),
+                                       method="bounded", options={"xatol": 1e-12})
+        v, out["tol_floor"] = float(res.x), 1e-8
+    elif qty in ("mean", "var", "sd", "cv", "skew", "kurt", "excess_kurt", "raw_moment", "central_moment",
+                 "cumulant"):
+        n = int(r) if r is not None else 4
+        m = [1.0] + [raw(k) for k in range(1, max(n, 4) + 1)]
+        mu, var = m[1], m[2] - m[1] ** 2
+        cen = lambda k: sum(math.comb(k, j) * (-mu) ** (k - j) * m[j] for j in range(k + 1))  # noqa: E731
+        if qty == "raw_moment":
+            v = m[n]
+        elif qty == "central_moment":
+            v = cen(n)
+        elif qty == "cumulant":
+            kap = [0.0] * (n + 1)
+            for t in range(1, n + 1):
+                kap[t] = m[t] - sum(math.comb(t - 1, u - 1) * kap[u] * m[t - u] for u in range(1, t))
+            v = kap[n]
+        else:
+            v = {"mean": mu, "var": var, "sd": math.sqrt(var), "cv": math.sqrt(var) / mu,
+                 "skew": cen(3) / var ** 1.5, "kurt": cen(4) / var ** 2,
+                 "excess_kurt": cen(4) / var ** 2 - 3}[qty]
+    elif qty in ("mgf", "cgf", "laplace", "pgf"):
+        g = {"mgf": lambda y: math.exp(x * y), "cgf": lambda y: math.exp(x * y),
+             "laplace": lambda y: math.exp(-x * y), "pgf": lambda y: x ** y}[qty]
+        v = integral(g)
+        v = math.log(v) if qty == "cgf" else v
+    elif qty in ("cf", "log_cf"):
+        z = complex(integral(lambda y: math.cos(x * y)), integral(lambda y: math.sin(x * y)))
+        z = complex(math.log(abs(z)), math.atan2(z.imag, z.real)) if qty == "log_cf" else z
+        out["value"], out["imag"], out["tol_floor"] = z.real, z.imag, err[0]
+        return out
+    elif qty == "entropy":
+        v = -integral(lambda y: math.log(f(y)) if f(y) > 0 else 0.0)
+    else:
+        return {"error": f"no closed-form {qty}"}
+    out["value"], out["tol_floor"] = float(v), max(out["tol_floor"], err[0])
+    return out
+
+
+def _closed_mv(q):
+    """A bivariate family from its joint survival function on [0, inf)^2 (``sf``: singular parts
+    allowed) or its joint pdf on a box (``pdf`` and ``support`` [[lo1, hi1], [lo2, hi2]]); a
+    quantity given as its own expression is evaluated as it stands. mpmath quadrature and
+    differentiation at 30 digits; the quadrature error estimate is the tolerance floor."""
+    import mpmath as mp
+    ex, a, qty = q["expr"], q.get("args", {}), q["qty"]
+    x, t, idx, r = q.get("x") or [0, 0], q.get("t") or [0, 0], q.get("index") or [], q.get("r")
+    out = {"value": None, "imag": None, "tol_floor": 0.0,
+           "how": f"closed form from the book's definition (internal consistency): {qty}"}
+    if qty in ex:
+        f = _cfun(ex[qty], ["x_1", "x_2", "t_1", "t_2", "i", "j", "r_1", "r_2"], a)
+        rr = list(r or [0, 0]) + [0, 0]
+        v = complex(f(x[0], x[1], t[0], t[1], *(list(idx) + [0, 0])[:2], rr[0], rr[1]))
+        out["value"], out["imag"] = v.real, v.imag or None
+        return out
+    err = [mp.mpf(0)]
+
+    def quad(g, *ranges):      # SciPy quadrature (fast); the integrand in mpmath
+        f = lambda *v: complex(g(*v)).real                                           # noqa: E731
+        rg = [[float(lo), float(hi)] for lo, hi in ranges]
+        if len(rg) == 1:
+            v, e = integrate.quad(f, *rg[0], epsabs=1e-14, epsrel=1e-12, limit=200)
+        else:
+            v, e = integrate.nquad(f, rg, opts={"epsabs": 1e-14, "epsrel": 1e-11, "limit": 100})
+        err[0] = max(err[0], abs(e) / max(abs(v), 1e-300))
+        return mp.mpf(v)
+    if "sf" in ex:
+        S = _cfun(ex["sf"], ["x_1", "x_2"], a)
+        Sf = _cfun(ex["sf"], ["x_1", "x_2"], a, fast=True)
+        box = [[mp.mpmathify(eval(str(s), {"__builtins__": {}}, {**_cenv(), **a})) for s in rg]  # noqa: S307
+               for rg in ex.get("support", [[0, "inf"], [0, "inf"]])]
+        dens = lambda u, v: mp.diff(S, (u, v), (1, 1))                           # noqa: E731
+        m1 = lambda u: -mp.diff(lambda w: S(w, 0), u)                              # noqa: E731
+        m2 = lambda v: -mp.diff(lambda w: S(0, w), v)                              # noqa: E731
+
+    else:
+        P = _cfun(ex["pdf"], ["x_1", "x_2"], a, fast=True)
+        box = [[mp.mpmathify(eval(str(s), {"__builtins__": {}}, {**_cenv(), **a})) for s in rg]  # noqa: S307
+               for rg in ex["support"]]
+        dens = lambda u, v: P(float(u), float(v))                                  # noqa: E731
+        m1 = lambda u: quad(lambda v: P(u, v), box[1])                             # noqa: E731
+        m2 = lambda v: quad(lambda u: P(u, v), box[0])                             # noqa: E731
+        S = lambda u, v: quad(lambda s, w: P(s, w), [max(u, box[0][0]), box[0][1]],   # noqa: E731
+                              [max(v, box[1][0]), box[1][1]])
+
+    def moment(r1, r2):    # E[X1^r1 X2^r2]
+        if "sf" in ex and box[0][0] == 0 and box[1][0] == 0:
+            # nonnegative: through the survival function (singular parts included)
+            if r1 and r2:
+                return r1 * r2 * quad(lambda u, v: u ** (r1 - 1) * v ** (r2 - 1) * Sf(u, v), *box)
+            if r1:
+                return r1 * quad(lambda u: u ** (r1 - 1) * Sf(u, 0), box[0])
+            if r2:
+                return r2 * quad(lambda v: v ** (r2 - 1) * Sf(0, v), box[1])
+            return mp.mpf(1)
+        return quad(lambda u, v: u ** r1 * v ** r2 * dens(u, v), *box)
+    X1, X2 = mp.mpmathify(x[0]), mp.mpmathify(x[1])
+    if qty == "sf":
+        v = S(X1, X2)
+    elif qty == "cdf":
+        v = 1 - S(X1, box[1][0]) - S(box[0][0], X2) + S(X1, X2)
+    elif qty == "pdf":
+        v = dens(X1, X2)
+    elif qty == "marginal_pdf":
+        v = m1(X1) if idx[0] == 0 else m2(X2)
+    elif qty in ("mean", "var", "cov", "corr", "mixed_moment"):
+        if qty == "mixed_moment":
+            v = moment(*r)
+        else:
+            i = idx[0]
+            j = idx[1] if len(idx) > 1 else i
+            e1 = [moment(1, 0), moment(0, 1)]
+            e2 = [moment(2, 0), moment(0, 2)]
+            c = moment(1, 1) - e1[0] * e1[1] if i != j else e2[i] - e1[i] ** 2
+            if qty == "mean":
+                v = e1[i]
+            elif qty == "var":
+                v = e2[i] - e1[i] ** 2
+            elif qty == "cov":
+                v = c
+            else:
+                v = c / mp.sqrt((e2[0] - e1[0] ** 2) * (e2[1] - e1[1] ** 2))
+    elif qty in ("cond_pdf", "cond_mean", "cond_var", "cond_moment"):
+        i = idx[0]                         # the variable (0 or 1); the other component is given
+        if i == 1:
+            f, at = (lambda w: dens(X1, w)), X2
+        else:
+            f, at = (lambda w: dens(w, X2)), X1
+        rng = box[i]
+        if qty == "cond_pdf":              # f(x1, x2) / f1(x1): the marginal (a singular part counts)
+            v = f(at) / (m1(X1) if i == 1 else m2(X2))
+        else:
+            norm = quad(f, rng)
+        if qty != "cond_pdf":
+            mom = lambda s: quad(lambda w: w ** s * f(w), rng) / norm               # noqa: E731
+            if qty == "cond_mean":
+                v = mom(1)
+            elif qty == "cond_var":
+                v = mom(2) - mom(1) ** 2
+            else:
+                v = mom(int(r[0] if isinstance(r, list) else r))
+    elif qty == "mgf":
+        T1, T2 = mp.mpmathify(t[0]), mp.mpmathify(t[1])
+        if "sf" in ex and box[0][0] == 0 and box[1][0] == 0:   # 1 + t1 I1 + t2 I2 + t1 t2 I12
+            t1, t2 = float(T1), float(T2)
+            es = lambda e, sv: 0.0 if sv <= 0 else math.exp(e + math.log(sv))   # noqa: E731 - no overflow
+            v = (1 + T1 * quad(lambda u: es(t1 * u, Sf(u, 0)), box[0])
+                 + T2 * quad(lambda w: es(t2 * w, Sf(0, w)), box[1])
+                 + T1 * T2 * quad(lambda u, w: es(t1 * u + t2 * w, Sf(u, w)), *box))
+        else:
+            t1, t2 = float(T1), float(T2)
+            v = quad(lambda u, w: math.exp(t1 * u + t2 * w) * dens(u, w), *box)
+    else:
+        return {"error": f"no closed-form {qty}"}
+    z = complex(v)
+    out["value"], out["imag"] = z.real, z.imag or None
+    out["tol_floor"] = float(err[0])
+    return out
+
+
 def answer(q):
+    if q["dist"] == "closed_form":
+        return _closed_mv(q) if q.get("multivariate") else _closed_uni(q)
     if q.get("multivariate"):
         return answer_mv(q)
     d = _dist(q["dist"], q.get("args", {}))

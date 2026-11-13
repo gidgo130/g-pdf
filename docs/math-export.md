@@ -489,8 +489,20 @@ and `multivariate_normal` for pdf and entropy; closed forms for mean and mode (`
 element variances and covariances (`index` [[i, j], [k, l]]: Wishart n(s_ik s_jl + s_il s_jk), the
 inverted Wishart's, U_ik V_jl), marginals (Dirichlet beta, multivariate t, a Wishart diagonal
 element s_ii chi-square, a matrix normal element), the Dirichlet `mixed_moment` (`r`), and the
-Wishart and matrix normal mgf / cf. A reference written from the book's own definitions (no
-library has it) tests internal consistency only; mark such entries in the spec.
+Wishart and matrix normal mgf / cf.
+
+**Closed forms from a book's own definitions.** A family no library has (Topp–Leone, Marshall–Olkin,
+a bivariate gamma) takes `"scipy": "closed_form"` and an `expr` of Python expressions in the row's
+`args` (mpmath / SciPy special functions by name: `exp`, `gamma`, `besseli`, `e1`, ...). Univariate:
+`pdf` (or `pmf`) in `x` with `support` [lo, hi] (and `breaks`, points where the density has a kink);
+every quantity comes by quadrature or an exact sum of that density. Bivariate (`k` 2): the joint
+`sf` in `x_1, x_2` on [0, inf)^2 (singular parts allowed: moments and the mgf come from the survival
+function, the density by differentiation) or the joint `pdf` with `support` [[lo1, hi1], [lo2, hi2]];
+quantities pdf, sf, cdf, marginal_pdf, mean, var, cov, corr, mixed_moment (`r`), cond_pdf (divided
+by the marginal), cond_mean, cond_var, cond_moment (`index` [i, other]), mgf. A quantity given as its
+own expression in `expr` is evaluated as it stands. The quadrature's error estimate is the tolerance
+floor. Such a reference tests the book against itself (internal consistency), not an independent
+library: mark the row `"internal_consistency": true`.
 
 Quantities: pdf, pmf, cdf, sf, hazard, quantile, raw and central moments, cumulants, mean,
 var, sd, skewness (`skew`, `skew2` = β₁), kurtosis (`kurt` = β₂, `excess_kurt`), mgf, cgf,

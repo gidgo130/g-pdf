@@ -132,7 +132,21 @@ def multivariate(q):
     return {"value": table[qty](), "imag": None, "tol_floor": 0.0, "how": "fake multinomial"}
 
 
+def closed_form(q):
+    """A quantity the spec gives as its own expression (the real worker also builds the
+    others from a pdf or survival function)."""
+    ex, a = q["expr"], q.get("args", {})
+    if q["qty"] not in ex:
+        return {"error": "the fake evaluates given expressions only"}
+    x = q.get("x")
+    env = {**a, "exp": math.exp, "x": x, **({"x_1": x[0], "x_2": x[1]} if isinstance(x, list) else {})}
+    return {"value": eval(ex[q["qty"]], {"__builtins__": {}}, env), "imag": None, "tol_floor": 0.0,  # noqa: S307
+            "how": "fake closed form"}
+
+
 def answer(q):
+    if q["dist"] == "closed_form":
+        return closed_form(q)
     if q.get("multivariate"):
         return multivariate(q)
     d, a, qty, x, r = q["dist"], q.get("args", {}), q["qty"], q.get("x"), q.get("r")

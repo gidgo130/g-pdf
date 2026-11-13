@@ -221,3 +221,44 @@ def test_real_scipy_matrix_families_when_configured(tmp_path):
               [("vmf pdf", "vmf", "pdf", VMF, VMF.replace("\\kappa \\boldsymbol", "2 \\kappa \\boldsymbol"), {})],
               dists, python=py)
     assert vmf["vmf pdf ok"]["status"] in ("passed", "inconclusive")
+
+
+# ---------------------------------------------------------------- closed forms from a book's definitions
+
+TRI = {"scipy": "closed_form", "internal_consistency": True, "args": {"c": "c"},
+       "expr": {"pdf": "2 * x / c if x < c else 2 * (1 - x) / (1 - c)", "support": [0, 1], "breaks": ["c"]},
+       "points": [{"c": 0.3, "@x": 0.2}, {"c": 0.6, "@x": 0.7}, {"c": 0.5, "@x": 0.45}]}
+FGM = {"scipy": "closed_form", "k": 2, "internal_consistency": True, "args": {"al": "alpha"},
+       "expr": {"sf": "exp(-x_1) + exp(-x_2) - 1 + (1 - exp(-x_1)) * (1 - exp(-x_2)) * (1 + al * exp(-x_1 - x_2))",
+                "cdf": "(1 - exp(-x_1)) * (1 - exp(-x_2)) * (1 + al * exp(-x_1 - x_2))"},
+       "points": [{"alpha": 0.5, "@x": [0.7, 1.3]}, {"alpha": -0.6, "@x": [2.0, 0.4]},
+                  {"alpha": 0.9, "@x": [0.25, 0.9]}]}
+CLOSED = [("fgm cdf (given)", "fgm", "cdf", r"(1 - e^{-x_1})(1 - e^{-x_2})(1 + \alpha e^{-x_1 - x_2})",
+           r"(1 - e^{-x_1})(1 - e^{-x_2})(1 - \alpha e^{-x_1 - x_2})", {})]
+CLOSED_REAL = CLOSED + [
+    ("tri cdf", "tri", "cdf", r"\frac{x^2}{c}", r"\frac{x^3}{c}", {}),
+    ("tri mean", "tri", "mean", r"\frac{1 + c}{3}", r"\frac{1 + c}{2}", {}),
+    ("fgm pdf", "fgm", "pdf", r"e^{-x_1 - x_2}\{1 + \alpha(2 e^{-x_1} - 1)(2 e^{-x_2} - 1)\}",
+     r"e^{-x_1 - x_2}\{1 + \alpha(2 e^{-x_1} + 1)(2 e^{-x_2} - 1)\}", {}),
+    ("fgm corr", "fgm", "corr", r"\frac{\alpha}{4}", r"\frac{\alpha}{2}", {"index": [1, 2]}),
+    ("fgm cond mean", "fgm", "cond_mean", r"1 + \frac{1}{2} \alpha - \alpha e^{-x_1}",
+     r"1 + \frac{1}{2} \alpha + \alpha e^{-x_1}", {"index": [2], "given": [1]}),
+]
+
+
+def test_closed_form_quantity_given_as_an_expression(tmp_path):
+    res = run(tmp_path, CLOSED, {"fgm": FGM}, script=FAKE)
+    assert res["fgm cdf (given) ok"]["status"] == "passed"
+    assert res["fgm cdf (given) bad"]["status"] == "failed"
+
+
+def test_real_closed_forms_from_a_pdf_or_survival_function(tmp_path):
+    py = os.environ.get(C.ENV_VAR)
+    if not py:
+        pytest.skip("set GPDF_SCIPY_PYTHON to a Python with SciPy")
+    tri = {**TRI, "points": [{"c": 0.3, "@x": 0.2}, {"c": 0.6, "@x": 0.5}, {"c": 0.5, "@x": 0.45}]}
+    res = run(tmp_path, CLOSED_REAL, {"fgm": FGM, "tri": tri}, python=py)
+    for r in res.values():
+        want = "failed" if r["id"].endswith("bad") else "passed"
+        assert r["status"] == want, (r["id"], r["status"], r.get("reason"))
+    assert "internal consistency" in res["fgm pdf ok"]["points"][0].get("how", "internal consistency")

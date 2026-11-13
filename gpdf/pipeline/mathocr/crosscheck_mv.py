@@ -41,7 +41,7 @@ from gpdf.pipeline.mathocr import watch
 
 QUANTITIES = ("pmf", "pdf", "marginal_pmf", "marginal_pdf", "mean", "var", "cov", "corr",
               "fact_moment", "pgf", "mgf", "cf", "cond_pmf", "cond_mean", "cond_var",
-              "mode", "entropy", "mixed_moment")
+              "mode", "entropy", "mixed_moment", "cond_pdf", "cond_moment", "sf", "cdf")
 SUMPROD = re.compile(r"\\(sum|prod)_\{\s*([a-z])\s*=\s*(-?\d+)\s*\}\^")
 DOTS = re.compile(r"\\(?:ldots|cdots|dotsc|dotsb|dots)(?![A-Za-z])")
 BOLD_SUB = re.compile(r"\\(?:mathbf|boldsymbol|bm|pmb)\{(\\?[A-Za-z]+)\}(?=_)")
@@ -410,7 +410,8 @@ def check(e: dict, pages: dict, spec: dict, ref) -> dict:
                 a = ref.ask({"dist": dist["scipy"], "multivariate": True, "args": args, "qty": q,
                              "x": x, "t": tv, "index": pos(e.get("index") or []),
                              "given": pos(e.get("given") or []), "r": e.get("r"),
-                             **({"whole": True} if bmat is not None else {})})
+                             **({"whole": True} if bmat is not None else {}),
+                             **({"expr": dist["expr"]} if dist.get("expr") else {})})
                 if "error" in a:
                     res["points"].append({"values": vals, "book": None if b is None else [b.real, b.imag]})
                     res["reason"] = "reference: " + a["error"]
