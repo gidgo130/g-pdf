@@ -332,3 +332,48 @@ def test_modified_bessel_i_is_read_and_an_indicator_still_is_one():
     # an indicator keeps its meaning: a set as the subscript
     assert _val(r"I_{(0, \infty)}(x) e^{-x}", x=1.0) == pytest.approx(0.36787944)
     assert _val(r"I_{[0,1]}(x) x", x=0.5) == pytest.approx(0.5)
+
+
+TABLE_PAGE = ('<!-- page printed="20" file="3" -->\n\nTABLE 4.1 Entropies\n\n'
+              '<table><tr><td colspan="2">Distribution</td><td rowspan="2">Entropy (nats)</td></tr>'
+              '<tr><td>Name</td><td>Density</td></tr>'
+              '<tr><td>Exponential</td><td><eq>f(x) = \\frac{1}{\\theta} e^{-x/\\theta}, \\quad x \\ge 0,\\ \\theta &gt; 0</eq></td>'
+              '<td><eq>1 + \\ln \\theta</eq></td></tr>'
+              '<tr><td>Normal</td><td><eq>f(x) = \\frac{1}{\\sqrt{2 \\pi \\sigma^2}} e^{-x^2/(2\\sigma^2)}</eq></td>'
+              '<td><eq>\\frac{1}{2} \\ln (2 \\pi \\sigma^{2})</eq></td></tr></table>\n\n'
+              '| Distribution | Mean | Variance |\n|---|---|---|\n'
+              '| Exponential | \\(\\theta\\) | \\(\\theta^{2}\\) |\n| Normal | \\(0\\) | \\(2 \\sigma^{2}\\) |\n')
+TABLE_DISTS = {"expon": DISTS["expon"],
+               "norm": {"scipy": "norm", "args": {"scale": "sigma"},
+                        "points": [{"sigma": 1.5, "@x": 0.3}, {"sigma": 0.7, "@x": -0.2}, {"sigma": 2.0, "@x": 1.1}]}}
+
+
+def test_table_cells_are_entries_with_their_column_headings(tmp_path):
+    (tmp_path / "text.md").write_text(TABLE_PAGE, "utf-8")
+    s = {"pages": "text.md", "dists": TABLE_DISTS,
+         "entries": [{"id": "expon density cell", "where": {"page": 3, "table": 1, "row": "Exponential",
+                                                             "col": "Density"}, "eq": "rhs", "qty": "pdf",
+                      "dist": "expon"}],
+         "tables": [{"page": 3, "table": 1, "col": "Entropy", "qty": "entropy",
+                     "rows": {"Exponential": "expon", "Normal": "norm"}},
+                    {"page": 3, "table": 2, "col": "Variance", "qty": "var",
+                     "rows": {"Exponential": "expon", "Normal": "norm"}},
+                    {"page": 3, "table": 2, "col": "Mean", "qty": "mean", "rows": {"Exponential": "expon"}}]}
+    (tmp_path / "spec.json").write_text(json.dumps(s), "utf-8")
+    ref = C.RefWorker(sys.executable, FAKE)
+    try:
+        r = by_id(C.run(tmp_path / "spec.json", tmp_path / "out", ref=ref))
+    finally:
+        ref.close()
+    assert r["expon density cell"]["status"] == "passed"
+    assert r["expon density cell"]["formula"] == "p003-t1r1c02"
+    assert r["table p3.1 Exponential: Entropy"]["status"] == "passed"
+    assert r["table p3.1 Normal: Entropy"]["status"] == "failed"          # the planted error: no e
+    assert r["table p3.2 Exponential: Variance"]["status"] == "passed"    # a Markdown table
+    assert r["table p3.2 Normal: Variance"]["status"] == "failed"         # planted: 2 sigma^2
+    assert r["table p3.2 Exponential: Mean"]["status"] == "passed"
+    # a missing row or column is reported, not guessed
+    with pytest.raises(C.CrosscheckError):
+        C.locate({3: TABLE_PAGE}, {"page": 3, "table": 1, "row": "Gamma", "col": "Entropy"})
+    with pytest.raises(C.CrosscheckError):
+        C.locate({3: TABLE_PAGE}, {"page": 3, "table": 1, "row": "Normal", "col": "Kurtosis"})

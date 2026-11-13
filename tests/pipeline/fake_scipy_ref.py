@@ -159,7 +159,8 @@ def answer(q):
                  "cdf": lambda: 0.0 if neg else 1 - math.exp(-x / s),
                  "sf": lambda: 1.0 if neg else math.exp(-x / s), "mean": lambda: s, "var": lambda: s * s,
                  "mgf": lambda: 1 / (1 - s * x), "raw_moment": lambda: math.factorial(r) * s ** r,
-                 "kurt": lambda: 9.0, "skew": lambda: 2.0, "cv": lambda: 1.0}
+                 "kurt": lambda: 9.0, "skew": lambda: 2.0, "cv": lambda: 1.0,
+                 "entropy": lambda: 1 + math.log(s)}
     elif d == "branch":         # a log cf answered on another branch of the complex log
         if qty != "log_cf":
             return {"error": "only log_cf"}
@@ -167,7 +168,8 @@ def answer(q):
     elif d == "norm":
         m, s = a.get("loc", 0.0), a["scale"]
         table = {"pdf": lambda: math.exp(-((x - m) / s) ** 2 / 2) / (s * math.sqrt(2 * math.pi)),
-                 "mean": lambda: m, "var": lambda: s * s}
+                 "mean": lambda: m, "var": lambda: s * s,
+                 "entropy": lambda: 0.5 * math.log(2 * math.pi * math.e * s * s)}
     else:
         return {"error": f"no {d}"}
     if qty not in table:

@@ -448,6 +448,19 @@ moments, cumulants; α, p: inverse survival, quantile) and passes under the firs
 matches; one that matches none is `unidentified` (inconclusive, with the closest quantity)
 and goes to the page image.
 
+**Table cells.** A formula in a table is located by `"where": {"page": F, "table": T, "row": R,
+"col": C}`: the T-th table of the page (HTML or Markdown, in page order), the body row whose first
+cell reads R (exactly, else as a prefix; or a 1-based number), and the column whose heading
+contains C (or a number). An HTML table's rowspan and colspan fill every cell they cover, its
+heading rows are the leading rows without math, and a column's heading is their texts joined
+by " / " ("Distribution / Density"). The cell's first `<eq>` or `\( \)` is the formula
+(`eq` "full" by default; "rhs" takes the side after "="). A spec's `tables` list is the
+shortcut for a column of a parametrisation, moment or entropy table: `{"page": F, "table": T,
+"col": "Entropy", "qty": "entropy", "rows": {"Beta": "beta", "Normal": "norm"}}` gives one
+entry per named row (id `table pF.T Beta: Entropy`; other fields such as `notation` go to
+each). The formula id in the results is `pFFF-tTrRcCC`; table cells have no formulas.jsonl
+record.
+
 **Piecewise formulas and side conditions.** A display `lhs = \begin{cases} value & condition
 \\ ... \end{cases}` (or a left brace with an `array` or `aligned`) is one entry checked branch
 by branch: at each point only the branch whose condition holds is evaluated (the first that

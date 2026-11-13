@@ -149,8 +149,144 @@ def _displays(md: str) -> list[tuple[str, str | None]]:
     return [L.split_tag(body, trailing) for body, trailing in L.extract(md)[0]]
 
 
+TABLE_HTML = re.compile(r"<table\b.*?</table>", re.S | re.I)
+TABLE_MD = re.compile(r"(?:^[ \t]*\|.*\|[ \t]*(?:\n|$)){2,}", re.M)
+CELL_MATH = re.compile(r"<eq>(.*?)</eq>|\\\((.*?)\\\)", re.S)
+TAGS = re.compile(r"<[^>]+>")
+
+
+def _html_rows(text: str) -> list[list[tuple[int, int, str]]]:
+    """[(rowspan, colspan, inner text with <eq> kept)] per <tr>; entities unescaped."""
+    from html.parser import HTMLParser
+
+    class P(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.rows, self.cell = [], None
+
+        def handle_starttag(self, tag, attrs):
+            a = dict(attrs)
+            if tag == "tr":
+                self.rows.append([])
+            elif tag in ("td", "th"):
+                self.cell = [int(a.get("rowspan") or 1), int(a.get("colspan") or 1), ""]
+            elif self.cell is not None:
+                self.cell[2] += f"<{tag}>"
+
+        def handle_endtag(self, tag):
+            if tag in ("td", "th") and self.cell is not None and self.rows:
+                self.rows[-1].append(tuple(self.cell))
+                self.cell = None
+            elif self.cell is not None:
+                self.cell[2] += f"</{tag}>"
+
+        def handle_data(self, d):
+            if self.cell is not None:
+                self.cell[2] += d
+    p = P()
+    p.feed(text)
+    return p.rows
+
+
+def tables(md: str) -> list[tuple[list[str], list[list[str]]]]:
+    """The page's tables in order: (column headings, body rows of cell texts). An HTML table's
+    rowspan / colspan fill every cell they cover; its heading rows are the leading rows without
+    math, a column's heading their texts joined by " / ". A Markdown table's heading is its
+    first row."""
+    found = [(m.start(), "h", m.group(0)) for m in TABLE_HTML.finditer(md)]
+    found += [(m.start(), "m", m.group(0)) for m in TABLE_MD.finditer(md)]
+    out = []
+    for _, kind, text in sorted(found):
+        if kind == "h":
+            grid, pending = [], {}
+            for r, row in enumerate(_html_rows(text)):
+                cells, c, it = [], 0, iter(row)
+                while True:
+                    while (r, c) in pending:
+                        cells.append(pending.pop((r, c)))
+                        c += 1
+                    cell = next(it, None)
+                    if cell is None:
+                        break
+                    rs, cs, txt = cell
+                    for _ in range(cs):
+                        for dr in range(1, rs):
+                            pending[(r + dr, c)] = txt
+                        cells.append(txt)
+                        c += 1
+                grid.append(cells)
+            nh = 0
+            while nh < len(grid) and not any(CELL_MATH.search(x) for x in grid[nh]):
+                nh += 1
+            heads, body = grid[:nh], grid[nh:]
+        else:
+            lines = [ln.strip().strip("|") for ln in text.strip().splitlines()]
+            grid = [[x.strip() for x in ln.split("|")] for ln in lines
+                    if not re.fullmatch(r"[\s|:\-]*", ln)]
+            heads, body = grid[:1], grid[1:]
+        ncol = max((len(r) for r in grid), default=0)
+        names = []
+        for c in range(ncol):
+            parts = []
+            for h in heads:
+                t = " ".join(TAGS.sub(" ", h[c]).split()) if c < len(h) else ""
+                if t and t not in parts:
+                    parts.append(t)
+            names.append(" / ".join(parts))
+        out.append((names, body))
+    return out
+
+
+def _table_cell(pages, where):
+    f = int(where["page"])
+    ts = tables(pages.get(f, ""))
+    ti = int(where["table"])
+    if not 1 <= ti <= len(ts):
+        raise CrosscheckError(f"page {f} has {len(ts)} tables, not {ti}")
+    heads, body = ts[ti - 1]
+    want = where.get("row")
+    if isinstance(want, int):
+        ri = want - 1 if 1 <= want <= len(body) else None
+    else:
+        def first(r):
+            return " ".join(TAGS.sub(" ", r[0]).split()).lower() if r else ""
+        w = str(want).strip().lower()
+        ri = next((i for i, r in enumerate(body) if first(r) == w), None)
+        if ri is None:
+            ri = next((i for i, r in enumerate(body) if first(r).startswith(w)), None)
+    if ri is None:
+        raise CrosscheckError(f"table {ti} on page {f} has no row {want!r}")
+    col = where.get("col")
+    if isinstance(col, int):
+        ci = col - 1 if 1 <= col <= len(heads) else None
+    else:
+        ci = next((i for i, h in enumerate(heads) if str(col).lower() in h.lower()), None)
+    if ci is None or ci >= len(body[ri]):
+        raise CrosscheckError(f"table {ti} on page {f} has no column {col!r} (headings: {heads})")
+    cell = body[ri][ci]
+    m = CELL_MATH.search(cell)
+    latex = (m.group(1) if m.group(1) is not None else m.group(2)) if m else TAGS.sub(" ", cell).strip()
+    return f, f"t{ti}r{ri + 1}c", ci + 1, latex
+
+
+def table_entries(specs: list[dict]) -> list[dict]:
+    """A spec's ``tables``: one entry per named row of a table column, the row's cell under the
+    heading ``col`` checked as ``qty`` of the row's distribution."""
+    out = []
+    for t in specs:
+        rest = {k: v for k, v in t.items() if k not in ("page", "table", "col", "qty", "rows")}
+        for row, dist in t["rows"].items():
+            out.append({"id": f"table p{t['page']}.{t['table']} {row}: {t['col']}",
+                        "where": {"page": t["page"], "table": t["table"], "row": row, "col": t["col"]},
+                        "qty": t["qty"], "dist": dist, **rest})
+    return out
+
+
 def locate(pages: dict[int, str], where: dict) -> tuple[int, str, int, str | None]:
-    """(file, kind 'd' or 'i', 1-based position, LaTeX) of a spec's ``where``."""
+    """(file, kind 'd' or 'i' (or 'tTrRc' for a table cell), 1-based position, LaTeX) of a
+    spec's ``where``."""
+    if "table" in where:
+        return _table_cell(pages, where)
     if "tag" in where:
         want = re.sub(r"\s", "", str(where["tag"]))
         files = [int(where["page"])] if "page" in where else sorted(pages)
@@ -869,7 +1005,7 @@ def run(spec_path, out, python: str | None = None, only=None, ref=None) -> dict:
     if not src.is_absolute():
         src = spec_path.parent / src
     pages = load_pages(src)
-    entries = list(spec.get("entries", []))
+    entries = list(spec.get("entries", [])) + table_entries(spec.get("tables", []))
     seen = set()                 # (file, kind, position, quantity) of the hand entries
     for e in entries:
         try:
