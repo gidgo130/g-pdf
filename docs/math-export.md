@@ -266,8 +266,10 @@ a chain of two (or rows that continue with "=") only the first equation is check
 
 Checks, at four stratified positive draws of every parameter:
 
-- density: non-negative, integrates to 1 over (0, ∞), (−∞, ∞) or (0, 1) (the
-  support that worked is reported; 2-D with a bounded cubature);
+- density: non-negative, integrates to 1 over the support its own condition gives
+  (0 < x < θ: integrated over (0, θ); x = 0, 1, ..., n: summed), else over (0, ∞), (−∞, ∞) or
+  (0, 1) (the support that worked is reported; 2-D with a bounded cubature); with no condition and
+  no standard support that integrates to 1 the check is inconclusive ("no support"), not failed;
 - cdf and survival: within [0, 1], monotone, the right limits;
 - mgf, cf, pgf: 1 at 0 (pgf at 1), and a non-negative variance, M″(0) − M′(0)²
   in 1-D and the Hessian minus the outer product of the gradient PSD in 2-D

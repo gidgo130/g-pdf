@@ -102,7 +102,8 @@ def test_correct_exponential_and_gamma_densities_pass():
 
 
 def test_a_density_with_a_wrong_normalizing_constant_fails():
-    r = check(r"f(x) = \frac{1}{\Gamma(\alpha)} \beta^{\alpha - 1} x^{\alpha - 1} e^{-\beta x}")
+    # (the condition x > 0 is printed: without one the support is unknown and the check inconclusive)
+    r = check(r"f(x) = \frac{1}{\Gamma(\alpha)} \beta^{\alpha - 1} x^{\alpha - 1} e^{-\beta x}, \quad x > 0")
     assert (r.kind, r.status) == ("density", "failed")
     bad = [c for c in r.checks if c.status == "failed"]
     assert bad[0].identity == "integrates to 1"
@@ -154,7 +155,7 @@ def test_cdf_and_survival_shape_and_limits():
 def test_an_f_over_f_pair_with_a_wrong_exponent_fails_the_derivative_check():
     ctx = I.Context()
     r1 = check(r"F(x) = 1 - e^{-\lambda x}", ctx=ctx)
-    r2 = check(r"f(x) = \lambda^2 e^{-\lambda x}", ctx=ctx)
+    r2 = check(r"f(x) = \lambda^2 e^{-\lambda x}, \quad x > 0", ctx=ctx)
     assert r1.status == "passed"
     assert r2.status == "failed"
     ids = [c.identity for c in r2.checks if c.status == "failed"]
@@ -552,3 +553,17 @@ def test_identity_letters_parse():
     assert I.parse_letters("S=quantile, Q=quantile,G=cdf") == {"S": "quantile", "Q": "quantile", "G": "cdf"}
     with pytest.raises(ValueError):
         I.parse_letters("S=quantity")
+
+
+def test_the_support_comes_from_the_displays_own_condition():
+    r = check(r"f(x) = \frac{2 x}{\theta^2}, \quad 0 < x < \theta")
+    assert r.status == "passed", (r.status, [(c.identity, c.status, c.details) for c in r.checks])
+    r = check(r"f(x) = \frac{1}{n}, \quad x = 1, 2, \ldots, n")
+    assert r.status == "passed", (r.status, [(c.identity, c.status, c.details) for c in r.checks])
+    # no condition and no standard support integrates to 1: inconclusive (no support), not failed
+    r = check(r"f(x) = 3 x")
+    integ = next(c for c in r.checks if c.identity == "integrates to 1")
+    assert integ.status == "inconclusive" and integ.details.get("support") == "no support", integ
+    # with a condition, a wrong constant still fails
+    r = check(r"f(x) = \frac{3 x}{\theta^2}, \quad 0 < x < \theta")
+    assert r.status == "failed"

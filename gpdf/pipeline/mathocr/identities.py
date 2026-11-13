@@ -25,6 +25,7 @@ Classification, by the left-hand side (or the text just before it):
 
 from __future__ import annotations
 
+import math
 import random
 import re
 import time
@@ -146,6 +147,47 @@ class _Expr:
     params: list[str]
     lhs: str
     terms: list = field(default_factory=list)     # recurrence: (symbol, shift | None, const)
+    support: tuple | None = None                  # from the display's condition (_support_of)
+
+
+SUPPORT_LIST_RX = r"(?<![A-Za-z\\]){v}\s*=\s*(-?\d+)\s*,\s*(?:-?\d+\s*,\s*)*\\[lc]?dots(?:\s*,\s*([^,;]+?))?\s*(?:[,;.]|$)"
+
+
+def _support_of(latex: str, var: str, cond: str, defs: dict | None):
+    """The variable's support from the display's own condition: ("list", lo, hi expression or None)
+    for x = 0, 1, ..., n; ("interval", lo, hi) (sympy expressions, None for unbounded) for chained
+    relations such as 0 < x < theta or x > 0; None when the display gives none."""
+    from gpdf.pipeline.mathocr import crosscheck as C
+    body = _clean(_pre(ALIGN_ENV.sub(" ", L.split_tag(latex)[0]).replace("&", " ")))
+    m = re.search(SUPPORT_LIST_RX.format(v=re.escape(var)), body)
+    if m:
+        hi = C.book_expr(m.group(2), (), defs) if m.group(2) else None
+        if m.group(2) and hi is None:
+            return None
+        return ("list", int(m.group(1)), hi)
+    tests = C.condition(cond, defs) if cond else None
+    if not isinstance(tests, list):
+        return None
+    for t in tests:
+        if t[0] != "chain":
+            continue
+        exprs, rels = t[1], t[2]
+        k = next((i for i, x in enumerate(exprs) if not isinstance(x, float)
+                  and getattr(x, "is_Symbol", False) and _canon(x.name) == var), None)
+        if k is None:
+            continue
+        lo = hi = None
+        if k > 0 and rels[k - 1] in ("<", "\\le", "\\leq", "\\leqslant", "\\lt"):
+            lo = exprs[k - 1]
+        if k + 1 < len(exprs) and rels[k] in ("<", "\\le", "\\leq", "\\leqslant", "\\lt"):
+            hi = exprs[k + 1]
+        if k > 0 and rels[k - 1] in (">", "\\ge", "\\geq", "\\geqslant", "\\gt"):
+            hi = exprs[k - 1]
+        if k + 1 < len(exprs) and rels[k] in (">", "\\ge", "\\geq", "\\geqslant", "\\gt"):
+            lo = exprs[k + 1]
+        if lo is not None or hi is not None:
+            return ("interval", lo, hi)
+    return None
 
 
 class Context:
@@ -795,8 +837,64 @@ class _Checker:
         return st
 
     # ---- densities
+    def bound(self, ex, p: dict):
+        """A support bound (a sympy expression in the parameters) at a draw, or None (unbounded)."""
+        if ex is None or (isinstance(ex, float) and math.isinf(ex)):
+            return None
+        if isinstance(ex, float):
+            return mpmath.mpf(ex)
+        from gpdf.pipeline.mathocr import crosscheck as C
+        v, _ = C.evaluate(ex, p)
+        if v is None or abs(v.imag) > 1e-12:
+            raise ValueError("bound")
+        return mpmath.mpf(v.real)
+
+    def density_on_support(self):
+        """The density over the support its own condition gives: an interval (integrated) or an
+        integer list (summed)."""
+        e = self.e
+        kind, lo, hi = e.support
+        nonneg, integ, det_n, det_i = [], [], [], []
+        for k in range(DRAWS):
+            p = self.params(k, discrete=kind == "list" or None)
+            try:
+                if kind == "list":
+                    top = self.bound(hi, p)
+                    xs = list(range(lo, int(top) + 1)) if top is not None else None
+                    vals = [self.call(e, p, x) for x in (xs or range(lo, lo + 4))]
+                    total = _real(mpmath.fsum(vals) if xs is not None else
+                                  mpmath.nsum(lambda x: self.call(e, p, x), [lo, mpmath.inf]))
+                    name = f"{{{lo}..{'n' if top is not None else 'inf'}}} (condition)"
+                else:
+                    a, b = self.bound(lo, p), self.bound(hi, p)
+                    a = -mpmath.inf if a is None else a
+                    b = mpmath.inf if b is None else b
+                    if not a < b:
+                        raise ValueError("empty support")
+                    inner = [a + (b - a) * t for t in (0.1, 0.3, 0.5, 0.7, 0.9)] if mpmath.isfinite(a) and \
+                        mpmath.isfinite(b) else [x for x in SUPPORTS["(-inf,inf)"][0] if a < x < b] or [a + 1]
+                    vals = [self.call(e, p, x) for x in inner]
+                    total = _real(mpmath.quad(lambda x: self.call(e, p, x), [a, b], maxdegree=6))
+                    name = "({},{})".format("-inf" if lo is None else str(lo).replace(" ", ""),
+                                            "inf" if hi is None else str(hi).replace(" ", ""))
+            except (ValueError, ZeroDivisionError, OverflowError, TypeError, ArithmeticError):
+                nonneg.append(None)
+                integ.append(None)
+                det_n.append({"params": p})
+                det_i.append({"params": p})
+                continue
+            self.supports[name] += 1
+            nonneg.append(all(v >= -TOL for v in vals))
+            integ.append(abs(total - 1) <= TOL_INT)
+            det_n.append({"params": p, "support": name})
+            det_i.append({"params": p, "support": name, "integral": float(total)})
+        self.record("non-negative", nonneg, det_n)
+        self.record("integrates to 1", integ, det_i)
+
     def density(self):
         e = self.e
+        if e.support and len(e.variables) == 1:
+            return self.density_on_support()
         nonneg, integ, det_n, det_i = [], [], [], []
         for k in range(DRAWS):
             p = self.params(k)
@@ -833,13 +931,24 @@ class _Checker:
                 det_i.append({"params": p})
                 continue
             _, name, nn, total = best
+            ok = abs(total - 1) <= (TOL_INT if len(e.variables) == 1 else TOL_INT_2D)
+            if not ok:                  # no condition printed and no standard support fits: unknown
+                nonneg.append(None if not nn else nn)
+                integ.append(None)
+                det_n.append({"params": p, "support": "no support"})
+                det_i.append({"params": p, "support": "no support", "integral": float(total)})
+                continue
             self.supports[name] += 1
             nonneg.append(nn)
-            integ.append(abs(total - 1) <= (TOL_INT if len(e.variables) == 1 else TOL_INT_2D))
+            integ.append(ok)
             det_n.append({"params": p, "support": name})
             det_i.append({"params": p, "support": name, "integral": float(total)})
         self.record("non-negative", nonneg, det_n)
-        self.record("integrates to 1", integ, det_i)
+        if all(o is None for o in integ) and any(d.get("support") == "no support" for d in det_i):
+            self.checks.append(Check("integrates to 1", "inconclusive",
+                                     next(d for d in det_i if d.get("support") == "no support")))
+        else:
+            self.record("integrates to 1", integ, det_i)
 
     # ---- cdf and survival
     def cdf_like(self, survival: bool):
@@ -1113,32 +1222,34 @@ def _first_steps(eqs: list[tuple]) -> list[tuple]:
     """Steps of a derivation are not definitions: three or more equalities with one left side
     are a derivation (left out); of a chain of two, or rows that continue with "=", only the
     first equation is the definition."""
-    n = Counter(_canon(_clean(l)) for l, _ in eqs)
+    n = Counter(_canon(_clean(t[0])) for t in eqs)
     out, seen = [], set()
-    for l, r in eqs:
-        k = _canon(_clean(l))
+    for t in eqs:
+        k = _canon(_clean(t[0]))
         if n[k] >= 3 or k in seen:
             continue
         seen.add(k)
-        out.append((l, r))
+        out.append(t)
     return out
 
 
 def _check_display(latex: str, before: str, ctx: Context) -> Result:
-    eqs = equations(latex)
+    eqs = equations(latex, conditions=True)
     if not eqs:
         return Result(None, "skipped", reason="no identity")
     eqs = _first_steps(eqs)
     if not eqs:
         return Result(None, "skipped", reason="derivation steps")
     kind, exprs, first = None, [], True
-    for lhs, rhs in eqs:
+    for lhs, rhs, cond in eqs:
         k, e = _expression(lhs, rhs, before if first else "", ctx)
         first = False
         if k is None:
             continue
         kind = kind or k
         if e is not None:
+            if k == "density" and len(e.variables) == 1:
+                e.support = _support_of(latex, e.variables[0], cond, ctx.defs)
             exprs.append(e)
     if kind is None:
         return Result(None, "skipped", reason="unclassified")
