@@ -95,6 +95,8 @@ UNSUPPORTED = re.compile(r"\\text\b|\\mathrm\{(?!e\}|d\})|\\partial\b"
 VECTOR = re.compile(r"boldsymbol|mathbf|pmb|^bm|dots")
 # words between the equations of a row ("and", "for", "if") separate them like \quad
 TEXT_WORD = re.compile(r"\\(?:text|mathrm|textrm|mbox)\s*\{\s*(?![ed]\s*\})[^{}]*\}")
+# function names an engine sets upright (Gupta-Nagar's \mathrm{etr}) are names, not words between equations
+UPRIGHT_FUNC = re.compile(r"\\(?:text|mathrm|textrm|mbox|rm)\s*\{\s*(etr|tr|det)\s*\}")
 VAR_NAME = re.compile(r"\\(?:operatorname\*?|mathrm|text|textrm|mbox)\s*\{\s*[Vv]\s*a\s*r\s*\}")
 E_NAME = re.compile(r"\\(?:operatorname\*?|mathrm|mathbb|text|mathsf)\s*\{\s*E\s*\}")
 CHOOSE = re.compile(r"\{\s*([^{}]*?)\s*\\choose\s*([^{}]*?)\s*\}")
@@ -322,6 +324,7 @@ def _pre(body: str) -> str:
     body = VAR_NAME.sub(r"\\Var ", body)
     body = E_NAME.sub("E", body)
     body = CHOOSE.sub(r"\\binom{\1}{\2}", body)
+    body = UPRIGHT_FUNC.sub(r"\\operatorname{\1}", body)
     body = TEXT_WORD.sub(" ; ", body)
     body = FOOTNOTE.sub(r"\1", body)                 # (...)^{*}: a footnote mark, not a power
     return re.sub(r"\\q?quad\b", " ; ", body)       # _clean would make spaces of them

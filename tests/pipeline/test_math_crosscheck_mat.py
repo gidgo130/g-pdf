@@ -157,6 +157,18 @@ def test_one_planted_error_per_matrix_quantity(tmp_path):
     assert len(res["wishart pdf ok"]["points"]) == 3
 
 
+def test_etr_tr_det_written_upright_are_read(tmp_path):
+    # OCR writes \mathrm{etr} (Gupta-Nagar); the parser's "a word between equations" rule must not eat it
+    wis = WIS.replace(r"\operatorname{etr}", r"\mathrm{etr}")
+    cases = [("wishart pdf rm", "wis", "pdf", wis.replace("{S}", "-"), wis.replace("{S}", "+"), {}),
+             ("wishart mgf rm det", "wis", "mgf", r"\mathrm{det}(\mathbf{I}_p - 2 \boldsymbol{\Theta} \boldsymbol{\Sigma})^{-n/2}",
+              r"\mathrm{det}(\mathbf{I}_p + 2 \boldsymbol{\Theta} \boldsymbol{\Sigma})^{-n/2}", {})]
+    res = run(tmp_path, cases, DISTS, script=FAKE)
+    for r in res.values():
+        want = "failed" if r["id"].endswith("bad") else "passed"
+        assert r["status"] == want, (r["id"], r["status"], r.get("reason"), r.get("reduced"))
+
+
 def test_an_unread_matrix_expression_is_inconclusive(tmp_path):
     cases = [("odd", "mvn", "pdf", r"\boldsymbol{\Sigma} / 2", r"\boldsymbol{\Sigma} / 3", {})]
     res = run(tmp_path, cases, DISTS, script=FAKE)
