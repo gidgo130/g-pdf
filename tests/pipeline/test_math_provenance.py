@@ -160,3 +160,28 @@ def test_flag_latex_quotes_the_final_formula_of_each_flag(export, tmp_path):
     assert lines(export / "formulas.jsonl")[0]["flags"][0]["latex"] == "x^2 = 2"
     provenance.write(export, reviewer="sonnet")
     assert all("latex" not in f for r in lines(export / "formulas.jsonl") for f in r["flags"])
+
+
+def test_prose_only_marks_every_formula_unreviewed(export, tmp_path):
+    for n in (1, 2):                                    # an export nobody reviewed: no decisions, no flags
+        (export / "pages" / f"p{n:03d}.flags.json").write_text(json.dumps([{"type": "dropped", "kind": "running_head",
+                                                                             "text": "RUNNING HEAD"}]), "utf-8")
+    out = tmp_path / "deliver"
+    out.mkdir()
+    (out / "meta.json").write_text(json.dumps({"title": "A History"}), "utf-8")
+    res = provenance.write(export, out, meta=out / "meta.json", prose_only=True)
+    recs = lines(out / "formulas.jsonl")
+    assert len(recs) == 9
+    assert {r["status"] for r in recs} == {"unreviewed"}
+    assert all(r["notes"] == ["prose_only"] and r["reviewer"] is None and r["flags"] == [] for r in recs)
+    assert all("review_item" not in r for r in recs)
+    m = json.loads((out / "meta.json").read_text("utf-8"))["method"]
+    assert m["prose_only"] is True and m["reviewer_model"] is None and "not reviewed" in m["review"]
+    assert m["coverage"]["displays_reviewed"] == 0 and m["coverage"]["inline_reviewed"] == 0
+    assert m["coverage"]["displays"] == 5 and m["coverage"]["inline"] == 4
+    assert m["formulas_by_status"]["unreviewed"] == 9 and res["by_status"]["engines_agree"] == 0
+    # the CLI flag; an export that carries review decisions is refused in prose-only mode
+    assert cli.main(["math-provenance", "--export", str(export), "--prose-only"]) == 0
+    (export / "pages" / "p001.flags.json").write_text(json.dumps(F1), "utf-8")
+    with pytest.raises(provenance.ProvenanceError):
+        provenance.write(export, prose_only=True)

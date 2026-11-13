@@ -487,6 +487,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="each flag entry also quotes the formula as the final page has it "
                          "(the flag's LaTeX when part of the display, else the display; an "
                          "inline flag's span). Off by default: formulas.jsonl stays formula-free")
+    mv.add_argument("--prose-only", action="store_true",
+                    help="prose-only mode: no review; every display and inline span is marked "
+                         "unreviewed (note prose_only) and the method block says so. Refused for an "
+                         "export whose pages carry review decisions or flags")
     mv.add_argument("--review-dir", metavar="DIR", type=Path, action="append", default=[],
                     help="a math-review-pack folder (repeatable): an inline accept that names no "
                          "spans counts for the spans sampled on its page")
@@ -1085,7 +1089,8 @@ def _math_provenance_main(args) -> int:
 
     try:
         res = provenance.write(args.export, args.out, args.reviewer, args.meta,
-                               args.review_dir, flag_latex=args.flag_latex)
+                               args.review_dir, flag_latex=args.flag_latex,
+                               prose_only=args.prose_only)
     except (provenance.ProvenanceError, OSError, ValueError) as e:
         print(f"gpdf-cli: error: {e}", file=sys.stderr)
         return EXIT_ERROR

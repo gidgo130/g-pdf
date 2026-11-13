@@ -388,6 +388,14 @@ has it, `latex`: the flag's own LaTeX when it is part of the display (a flag on 
 fragment), else the display without its `\tag`; for an inline flag, its span. Without it,
 formulas.jsonl holds no formulas.
 
+**Prose-only mode** (`--prose-only`): for a book delivered for its prose (a history), the
+engines' output becomes the deliverable without any review. Page markers, headings, footnotes
+and prose come from math-export as usual; every display and inline span is kept as the engines
+wrote it and gets status `unreviewed` with the note `prose_only` (whatever the review queue or
+the identity pass said), and the method block carries `"prose_only": true` and a `review` line
+saying that no formula was reviewed. An export whose pages carry review decisions or review
+flags is refused. `math-check-pages` still applies to the result.
+
 `id` gives the formula's position in the final page (`d` for displays, `i` for inline).
 `status` is the first of these that applies:
 

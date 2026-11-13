@@ -217,8 +217,22 @@ def _page_records(file: int, md: str, flags: list, items: list[dict], idents: li
     return out
 
 
+PROSE_ONLY_NOTE = ("none (prose-only mode): every display and inline span is the engines' output, "
+                   "not reviewed")
+
+
+def _prose_only(recs: list[dict]) -> list[dict]:
+    """Prose-only mode: every formula is unreviewed engine output, whatever the queue or the
+    identity pass said about it."""
+    for r in recs:
+        r.update(status="unreviewed", reviewer=None, notes=["prose_only"])
+        r.pop("review_item", None)
+        r.pop("replaced", None)
+    return recs
+
+
 def write(export, out=None, reviewer: str | None = None, meta=None, review_dirs=None,
-          flag_latex: bool = False) -> dict:
+          flag_latex: bool = False, prose_only: bool = False) -> dict:
     root = Path(export)
     pages_dir = root / "pages"
     if not pages_dir.is_dir():
@@ -232,10 +246,15 @@ def write(export, out=None, reviewer: str | None = None, meta=None, review_dirs=
         file = int(p.stem[1:])
         fp = p.with_suffix(".flags.json")
         flags = json.loads(fp.read_text("utf-8")) if fp.is_file() else []
+        if prose_only and any(f.get("type") in ("reviewed",) + tuple(FLAG_TYPES) for f in flags):
+            raise ProvenanceError(f"{p.name} carries review decisions or flags: not a prose-only export")
         recs += _page_records(file, p.read_text("utf-8"), flags,
                               [it for it in items if int(it["file"]) == file],
                               [r for r in idents if int(r["file"]) == file], reviewer,
                               extra.get(file), flag_latex)
+    if prose_only:
+        recs = _prose_only(recs)
+        reviewer = None
     write_atomic(out / "formulas.jsonl",
                  "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs))
     by_status = {s: sum(1 for r in recs if r["status"] == s) for s in STATUSES}
@@ -276,6 +295,9 @@ def write(export, out=None, reviewer: str | None = None, meta=None, review_dirs=
                      "numeric_checks_failed": ident.get("failed", 0)},
         "formulas_by_status": by_status,
     }
+    if prose_only:
+        method["prose_only"] = True
+        method["review"] = PROSE_ONLY_NOTE
     meta_path = Path(meta) if meta else out / "meta.json"
     m = json.loads(meta_path.read_text("utf-8")) if meta_path.is_file() else {}
     m["method"] = method
