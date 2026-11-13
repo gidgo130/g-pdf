@@ -366,7 +366,7 @@ def test_counts_over_a_page():
                check(r"x = y", ctx=ctx),
                check(r"M(t) = \exp\{\mu t - \frac{1}{2}\sigma^2 t^2\}", ctx=ctx)]
     assert I.counts(results) == {"checked": 2, "passed": 1, "failed": 1, "inconclusive": 0,
-                                 "skipped": 1}
+                                 "unsure": 0, "skipped": 1}
 
 
 # ---------------------------------------------------------------- discrete distributions
@@ -567,3 +567,14 @@ def test_the_support_comes_from_the_displays_own_condition():
     # with a condition, a wrong constant still fails
     r = check(r"f(x) = \frac{3 x}{\theta^2}, \quad 0 < x < \theta")
     assert r.status == "failed"
+
+
+def test_a_failed_check_on_a_guessed_quantity_is_unsure():
+    # a pgf letter with a density-like variable, or a quantity guessed from the prose before it
+    r = check(r"G(x) = x^2 + 1")
+    assert r.status == "unsure", (r.kind, r.status)
+    r = check(r"q(x) = 3 x^{2} + 1, \quad 0 < x < 1", before="whose density is")
+    assert r.status == "unsure", (r.kind, r.status)
+    r = check(r"f(x) = 3 x^{2} + 1, \quad 0 < x < 1")       # typed by its own left side: failed
+    assert r.status == "failed"
+    assert I.counts([r, check(r"G(x) = x^2 + 1")])["unsure"] == 1

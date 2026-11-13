@@ -392,7 +392,7 @@ def _engine_view(blocks: list[dict]) -> dict:
 
 
 def _sum_counts(per_page: dict) -> dict:
-    out = {"checked": 0, "passed": 0, "failed": 0, "inconclusive": 0, "skipped": 0}
+    out = {"checked": 0, "passed": 0, "failed": 0, "inconclusive": 0, "unsure": 0, "skipped": 0}
     for c in per_page.values():
         for k in out:
             out[k] += c.get(k, 0)
@@ -439,17 +439,18 @@ def _identities(assembled, items_of, ranges, say, records: list | None = None,
                 d = it.display
                 res = identities.check_display(d.latex, before, ctx)
                 results.append(res)
-                if records is not None and res.status in ("passed", "failed", "inconclusive"):
+                if records is not None and res.status in ("passed", "failed", "inconclusive", "unsure"):
                     records.append({"file": pg.file, "display": n, "latex": d.latex,
                                     "kind": res.kind, "status": res.status,
                                     "checks": [[c.identity, c.status] for c in res.checks]})
-                if res.status != "failed":
+                if res.status not in ("failed", "unsure"):
                     continue
                 failed = [c for c in res.checks if c.status == "failed"]
                 extra = {"identity": [c.identity for c in failed],
                          "identity_kind": res.kind,
                          "identity_details": [c.details for c in failed]}
-                reason = "identity failed: " + "; ".join(c.identity for c in failed)
+                head = "identity unsure: " if res.status == "unsure" else "identity failed: "
+                reason = head + "; ".join(c.identity for c in failed)
                 pid = f"p{pg.file:03d}-d{n:02d}"
                 existing = next((x for x in items_of[pg.file] if x.id == pid), None)
                 if existing:
@@ -463,7 +464,7 @@ def _identities(assembled, items_of, ranges, say, records: list | None = None,
             counts[pg.file] = identities.counts(results)
     tot = _sum_counts(counts)
     say(f"identities: {tot['checked']} checked, {tot['passed']} passed, {tot['failed']} failed, "
-        f"{tot['inconclusive']} inconclusive, {tot['skipped']} skipped")
+        f"{tot['inconclusive']} inconclusive, {tot['unsure']} unsure, {tot['skipped']} skipped")
     return counts
 
 

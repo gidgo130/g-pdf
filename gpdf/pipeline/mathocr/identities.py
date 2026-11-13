@@ -148,6 +148,31 @@ class _Expr:
     lhs: str
     terms: list = field(default_factory=list)     # recurrence: (symbol, shift | None, const)
     support: tuple | None = None                  # from the display's condition (_support_of)
+    sure: bool = True                             # the quantity is typed by the display itself
+
+
+CONVENTIONAL = {"density": "xyzwtuv", "cdf": "xyzwtuv", "survival": "xyzwtuv", "hazard": "xyzwtuv",
+                "mgf": "ts", "cf": "tsu", "pgf": "zst"}
+
+
+def _sure(lhs: str, kind: str, variables: list[str], letters: dict | None) -> bool:
+    """Whether the left side types the quantity by itself: an explicit form (Pr[...], E[...], a
+    mean or variance), a declared letter, or the table's letter with the usual variable (f(x),
+    M(t), G(z)). A quantity taken from the prose before the display, or a letter with an unusual
+    variable (G(x) as a pgf), is a guess: a failed check on it is reported as unsure."""
+    s = _clean(lhs).strip()
+    if MEAN_LHS.match(s) or VARIANCE_LHS.match(s) or PR_RE.match(s) or E_RE.match(s):
+        return True
+    m = LHS_FN.match(s)
+    if not m:
+        return False
+    name = m.group("name")
+    if (letters or {}).get(name.lstrip("\\")) or (letters or {}).get(name):
+        return True
+    if KINDS.get(name) != kind:
+        return False
+    ok = CONVENTIONAL.get(kind)
+    return ok is None or all(v.split("_")[0] in ok for v in variables)
 
 
 SUPPORT_LIST_RX = r"(?<![A-Za-z\\]){v}\s*=\s*(-?\d+)\s*,\s*(?:-?\d+\s*,\s*)*\\[lc]?dots(?:\s*,\s*([^,;]+?))?\s*(?:[,;.]|$)"
@@ -1145,6 +1170,10 @@ class _Checker:
         self.pairs()
 
 
+UNSURE_NOTE = ("identity unsure: a check failed on a quantity guessed from the letter or the text before it "
+               "(not typed by the display itself); the checker may be checking the wrong quantity")
+
+
 def _slow_start() -> None:          # a hook for the timeout test
     pass
 
@@ -1202,7 +1231,10 @@ def _expression(lhs: str, rhs: str, before: str, ctx: Context):
     if kind is None:
         return None, None
     parsed = _to_sympy(rhs, variables, ctx.defs)
-    return kind, (_Expr(kind, sub, variables, parsed[0], parsed[1], lhs) if parsed else None)
+    if not parsed:
+        return kind, None
+    return kind, _Expr(kind, sub, variables, parsed[0], parsed[1], lhs,
+                       sure=_sure(lhs, kind, variables, ctx.letters))
 
 
 def check_display(latex: str, before: str = "", ctx: Context | None = None) -> Result:
@@ -1257,7 +1289,7 @@ def _check_display(latex: str, before: str, ctx: Context) -> Result:
         return Result(kind, "skipped", reason="does not parse")
     mpmath.mp.dps = 15
     deadline = _clock() + TIME_LIMIT
-    checks, supports = [], Counter()
+    checks, supports, failed_sure = [], Counter(), []
     try:
         _slow_start()
         for e in exprs:
@@ -1265,17 +1297,22 @@ def _check_display(latex: str, before: str, ctx: Context) -> Result:
             c.run()
             checks += c.checks
             supports += c.supports
+            if any(ch.status == "failed" for ch in c.checks):
+                failed_sure.append(e.sure)
     except _Timeout:
         return Result(kind, "skipped", reason="timeout")
     for e in exprs:
         ctx.exprs.append(e)
     status = _overall(checks) if checks else "skipped"
+    if status == "failed" and not any(failed_sure):     # only guessed quantities failed
+        status = "unsure"
     support = supports.most_common(1)[0][0] if supports else None
     return Result(kind, status, checks, support, None if checks else "nothing to check",
-                  NOTE if status == "failed" else None)
+                  NOTE if status == "failed" else UNSURE_NOTE if status == "unsure" else None)
 
 
 def counts(results: list[Result]) -> dict:
     c = Counter(r.status for r in results)
-    return {"checked": c["passed"] + c["failed"] + c["inconclusive"], "passed": c["passed"],
-            "failed": c["failed"], "inconclusive": c["inconclusive"], "skipped": c["skipped"]}
+    return {"checked": c["passed"] + c["failed"] + c["inconclusive"] + c["unsure"], "passed": c["passed"],
+            "failed": c["failed"], "inconclusive": c["inconclusive"], "unsure": c["unsure"],
+            "skipped": c["skipped"]}

@@ -298,7 +298,9 @@ dots (`x = 0, 1, \ldots`) are dropped, and an equation with a sum, an integral o
 it is left out.
 
 Parameter constraints are unknown, so a check that fails for some draws and
-passes for others is **inconclusive**: counted, not flagged. Each display gets
+passes for others is **inconclusive**: counted, not flagged. A failed check on a quantity the display does
+not type by itself (taken from the prose before it, or a letter with an unusual variable such as G(x)
+as a pgf) is **unsure**: it still becomes a review item, with the reason "identity unsure". Each display gets
 about 5 s; on timeout it is skipped. A failure becomes an `identity` review
 item (or joins the display's existing item) with the identity, the parameter
 values and the numbers, and a note that it may be a printed error rather than
