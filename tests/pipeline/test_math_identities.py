@@ -522,6 +522,16 @@ def test_erfc_and_the_inverse_normal_parse():
         assert abs(v.real - (1 + 2 * 1.959963984540054)) < 1e-9, (tex, v)
 
 
+def test_the_digamma_function_parses_by_name():
+    # \operatorname{digamma}(z) (a spec writes a book's psi this way when psi is the digamma function) is sympy's
+    # digamma; a bare \psi stays a letter (a potential, a density)
+    for tex in (r"\operatorname{digamma}(n/2) + n", r"\mathrm{digamma}\left(\frac{n}{2}\right) + n"):
+        e = I._parse(I._clean(tex))
+        assert e is not None, tex
+        n = {s.name: s for s in e.free_symbols}["n"]
+        assert abs(complex(e.subs({n: 3}).evalf()).real - (0.0364899739785765 + 3)) < 1e-12, tex  # 2 - gamma - 2 ln 2
+
+
 def test_derivation_steps_are_not_checked():
     # three or more equalities: a derivation, skipped; a row that starts with "=" continues the first
     r = check(r"f(x) = 2 x e^{-x^2} = 3 x^2 = x")

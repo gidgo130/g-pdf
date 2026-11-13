@@ -270,7 +270,7 @@ _INDICATOR = [
     re.compile(r"(?<![A-Za-z\\])I_\{[^{}]*\}\s*\([^()]*\)"),
 ]
 FOOTNOTE = re.compile(r"([)\]])\s*\^\s*(?:\{\s*\*\s*\}|\*)")
-ERF_NAME = re.compile(r"\\(?:operatorname\*?|mathrm|text|rm)\s*\{\s*(erfc|erf)\s*\}")
+ERF_NAME = re.compile(r"\\(?:operatorname\*?|mathrm|text|rm)\s*\{\s*(erfc|erf|digamma)\s*\}")
 PHI_INV = re.compile(r"\\Phi\s*\^\s*\{\s*-\s*1\s*\}")
 ALIGN_ENV = re.compile(r"\\(begin|end)\s*\{(aligned|align\*?|array|eqnarray\*?|gathered|gather\*?"
                        r"|split|multline\*?|equation\*?|alignedat)\}(\{[^{}]*\})?")
@@ -513,7 +513,7 @@ def _parse(s: str, defs: dict | None = None, depth: int = 0):
         return isinstance(a, AppliedUndef) and (
             (a.func.__name__ == "Gamma" and len(a.args) == 1)
             or (a.func.__name__ == "B" and len(a.args) == 2)
-            or (a.func.__name__ in ("Phi", "phi", "erf", "erfc", "Phiinv") and len(a.args) == 1)
+            or (a.func.__name__ in ("Phi", "phi", "erf", "erfc", "Phiinv", "digamma") and len(a.args) == 1)
             # N(p): the standard normal quantile (Gilchrist), only of a probability variable
             or (a.func.__name__ == "N" and len(a.args) == 1 and isinstance(a.args[0], sympy.Symbol)
                 and a.args[0].name in ("p", "u")))
@@ -530,6 +530,8 @@ def _parse(s: str, defs: dict | None = None, depth: int = 0):
             return sympy.erf(a.args[0])
         if n == "erfc":
             return sympy.erfc(a.args[0])
+        if n == "digamma":                               # \operatorname{digamma}: a spec's name for a book's psi
+            return sympy.digamma(a.args[0])
         if n in ("Phiinv", "N"):                         # sqrt(2) erfinv(2p - 1)
             return sympy.sqrt(2) * sympy.erfinv(2 * a.args[0] - 1)
         return (1 + sympy.erf(a.args[0] / sympy.sqrt(2))) / 2
