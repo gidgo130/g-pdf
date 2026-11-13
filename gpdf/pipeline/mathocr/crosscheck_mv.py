@@ -35,11 +35,13 @@ from __future__ import annotations
 import re
 
 from gpdf.pipeline.mathocr import crosscheck as C
+from gpdf.pipeline.mathocr import crosscheck_mat as MX
 from gpdf.pipeline.mathocr import identities as I
 from gpdf.pipeline.mathocr import watch
 
 QUANTITIES = ("pmf", "pdf", "marginal_pmf", "marginal_pdf", "mean", "var", "cov", "corr",
-              "fact_moment", "pgf", "mgf", "cf", "cond_pmf", "cond_mean", "cond_var")
+              "fact_moment", "pgf", "mgf", "cf", "cond_pmf", "cond_mean", "cond_var",
+              "mode", "entropy", "mixed_moment")
 SUMPROD = re.compile(r"\\(sum|prod)_\{\s*([a-z])\s*=\s*(-?\d+)\s*\}\^")
 DOTS = re.compile(r"\\(?:ldots|cdots|dotsc|dotsb|dots)(?![A-Za-z])")
 BOLD_SUB = re.compile(r"\\(?:mathbf|boldsymbol|bm|pmb)\{(\\?[A-Za-z]+)\}(?=_)")
@@ -272,7 +274,8 @@ def for_parser(s: str, values: dict | None = None) -> str:
 
 def _values(point: dict, dist: dict, e: dict, K: int) -> dict:
     vals = {k: v for k, v in point.items() if not k.startswith("@")}
-    vals.setdefault("k", K)
+    if K is not None:
+        vals.setdefault("k", K)
     first = int(e.get("first", dist.get("first", 1)))
     x = point.get("@x") or []
     var = e.get("var", dist.get("var", "x"))
@@ -309,6 +312,26 @@ def _sum_out(expr, vals: dict, so: dict):
     return complex(tot), None
 
 
+def _listed(m) -> list:
+    return [[float(complex(m[i, j]).real) for j in range(m.cols)] for i in range(m.rows)]
+
+
+def _close_matrix(m, ref, tol: float):
+    """(ok, worst error) of a matrix against the reference's nested list; (None, why) when
+    the reference has no matrix of that size."""
+    if not ref:
+        return None, "no matrix value for this quantity"
+    rows = ref if isinstance(ref[0], list) else [[v] for v in ref]
+    if (len(rows), len(rows[0])) != (m.rows, m.cols):
+        return None, f"sizes differ: book {m.rows}x{m.cols}, reference {len(rows)}x{len(rows[0])}"
+    worst, ok = 0.0, True
+    for i in range(m.rows):
+        for j in range(m.cols):
+            o, err = C._close(complex(m[i, j]), complex(rows[i][j]), tol)
+            ok, worst = ok and o, max(worst, err)
+    return ok, worst
+
+
 def check(e: dict, pages: dict, spec: dict, ref) -> dict:
     res = {"id": e.get("id"), "qty": e.get("qty"), "dist": e["dist"], "multivariate": True,
            "harvested": bool(e.get("harvested")), "status": "inconclusive", "points": []}
@@ -334,10 +357,16 @@ def check(e: dict, pages: dict, spec: dict, ref) -> dict:
         return res
     res["piece"] = text
     defs = {**spec.get("defs", {}), **e.get("defs", {})}
-    K, tol = int(dist["k"]), float(e.get("tol", spec.get("tol", C.TOL)))
+    mat = MX.is_matrix(dist)
+    K = int(dist["k"]) if dist.get("k") is not None else None
+    tol = float(e.get("tol", spec.get("tol", C.TOL)))
     first = int(e.get("first", dist.get("first", 1)))
     offset = int(e.get("ref_offset", dist.get("ref_offset", 0)))
-    pos = lambda js: [int(j) - first + offset for j in js]  # noqa: E731 - book index -> reference
+
+    def pos(js):                          # book index -> reference ([[i, j], [k, l]] for elements)
+        return [pos(j) if isinstance(j, list) else int(j) - first + offset for j in js]
+    if mat:
+        text = MX.gamma_p(text)
     worst, failed = 0.0, False
     try:
         with watch.hard_timeout(C.ITEM_TIMEOUT):
@@ -349,33 +378,57 @@ def check(e: dict, pages: dict, spec: dict, ref) -> dict:
                 res["expanded"] = txt
                 # q, Q (and c, C, K) the table gives are the table's, not the books' q = 1 - p
                 d = {**defs, **{n: repr(vals[n]) for n in I.DEF_NAMES if n in vals and n not in defs}}
-                expr = C.book_expr(for_parser(txt, vals), (), d)
-                if expr is None:
-                    res["reason"] = "the formula does not parse (after expansion)"
-                    return res
-                if e.get("sum_out"):
-                    b, why = _sum_out(expr, vals, e["sum_out"])
-                else:
-                    b, why = C.evaluate(expr, vals)
-                if b is None:
-                    res["points"].append({"values": vals, "book": None})
-                    res["reason"] = why
-                    return res
+                bmat = b = None
+                if mat:
+                    try:
+                        txt, bmat = MX.reduce(txt, dist, vals, d)
+                    except MX.MatrixError as ex:
+                        res["reason"] = f"matrix expression not read: {ex}"
+                        return res
+                    res["reduced"] = txt
+                if bmat is None:
+                    expr = C.book_expr(for_parser(txt, vals), (), d)
+                    if expr is None:
+                        res["reason"] = "the formula does not parse (after expansion)"
+                        return res
+                    scal = {k2: v for k2, v in vals.items() if not isinstance(v, (list, tuple))}
+                    if e.get("sum_out"):
+                        b, why = _sum_out(expr, scal, e["sum_out"])
+                    else:
+                        b, why = C.evaluate(expr, scal)
+                    if b is None:
+                        res["points"].append({"values": vals, "book": None})
+                        res["reason"] = why
+                        return res
                 args = C._eval_all(dist.get("args", {}), vals)
                 rx = e.get("ref_x", dist.get("ref_x"))
+                if rx is None and mat and "@x" not in point:
+                    rx = dist.get("var", "X")
                 x = C._eval_all({"x": rx}, vals)["x"] if rx else point.get("@x")
+                tv = point.get("@t")
+                tv = vals[tv] if isinstance(tv, str) else tv
                 a = ref.ask({"dist": dist["scipy"], "multivariate": True, "args": args, "qty": q,
-                             "x": x, "t": point.get("@t"), "index": pos(e.get("index") or []),
-                             "given": pos(e.get("given") or []), "r": e.get("r")})
+                             "x": x, "t": tv, "index": pos(e.get("index") or []),
+                             "given": pos(e.get("given") or []), "r": e.get("r"),
+                             **({"whole": True} if bmat is not None else {})})
                 if "error" in a:
-                    res["points"].append({"values": vals, "book": [b.real, b.imag]})
+                    res["points"].append({"values": vals, "book": None if b is None else [b.real, b.imag]})
                     res["reason"] = "reference: " + a["error"]
                     return res
-                s = complex(a["value"], a.get("imag") or 0.0)
                 t = tol
                 if a.get("tol_floor", 0) * 10 > t:
                     t = a["tol_floor"] * 10
                     res["tol_reason"] = f"loosened to {t:.1e}: {a['how']} error estimate"
+                if bmat is not None:          # a matrix: element by element
+                    ok, err = _close_matrix(bmat, a.get("matrix"), t)
+                    if ok is None:
+                        res["reason"] = "reference: " + err
+                        return res
+                    worst, failed = max(worst, err), failed or not ok
+                    res["points"].append({"values": vals, "args": args, "book": _listed(bmat),
+                                          "ref": a["matrix"], "err": err, "ok": ok, "tol": t})
+                    continue
+                s = complex(a["value"], a.get("imag") or 0.0)
                 ok, err = C._close(b, s, t)
                 worst, failed = max(worst, err), failed or not ok
                 res["points"].append({"values": vals, "args": args, "book": [b.real, b.imag],

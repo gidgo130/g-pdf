@@ -577,7 +577,8 @@ def check_entry(e: dict, pages: dict[int, str], spec: dict, ref) -> dict:
     """One entry; an ``identify`` entry (no quantity named) is tried against every quantity
     its free variable allows, and passes under the first that matches. A multivariate table
     row (one with ``k``) goes to crosscheck_mv."""
-    if (spec.get("dists", {}).get(e.get("dist")) or {}).get("k"):
+    row = spec.get("dists", {}).get(e.get("dist")) or {}
+    if row.get("k") or row.get("matrix") or row.get("matrices") or row.get("vectors"):
         from gpdf.pipeline.mathocr import crosscheck_mv
         return crosscheck_mv.check(e, pages, spec, ref)
     res = {"id": e.get("id"), "qty": e.get("qty"), "dist": e["dist"],

@@ -17,9 +17,66 @@ def _comps(n, k):
             yield (a,) + rest
 
 
+def _det2(m):
+    return m[0][0] * m[1][1] - m[0][1] * m[1][0]
+
+
+def matrix_variate(q):
+    """Step 2 in closed form: the Dirichlet (math.gamma), the 2-D normal's whole mean and
+    covariance, and the p = 2 Wishart (density, mean, element covariance, mgf)."""
+    a, qty, x, idx = q["args"], q["qty"], q.get("x"), q.get("index") or []
+    out = {"value": None, "imag": None, "tol_floor": 0.0, "how": "fake " + q["dist"]}
+    if q["dist"] == "multivariate_normal":
+        m = [[v] for v in a["mean"]] if qty == "mean" else a["cov"] if qty == "cov" else None
+        if m is None:
+            return {"error": f"no whole {qty}"}
+        out["matrix"] = m
+        return out
+    if q["dist"] == "dirichlet":
+        al = a["alpha"]
+        a0 = sum(al)
+        if qty == "pdf":
+            xs = list(x) + ([1 - sum(x)] if len(x) < len(al) else [])
+            out["value"] = math.gamma(a0) / math.prod(math.gamma(v) for v in al) * math.prod(
+                xi ** (v - 1) for xi, v in zip(xs, al))
+        elif qty == "mean":
+            out["value"] = al[idx[0]] / a0
+        elif qty == "cov":
+            i, j = idx
+            out["value"] = ((i == j) * al[i] * a0 - al[i] * al[j]) / (a0 * a0 * (a0 + 1))
+        elif qty == "mixed_moment":
+            r = q["r"]
+            out["value"] = math.gamma(a0) / math.gamma(a0 + sum(r)) * math.prod(
+                math.gamma(v + ri) / math.gamma(v) for v, ri in zip(al, r))
+        else:
+            return {"error": f"no {qty}"}
+        return out
+    n, S = a["df"], a["scale"]                    # wishart, p = 2
+    if qty == "mean" and q.get("whole"):
+        out["matrix"] = [[n * v for v in row] for row in S]
+    elif qty == "pdf":
+        dS, dW = _det2(S), _det2(x)
+        inv = [[S[1][1] / dS, -S[0][1] / dS], [-S[1][0] / dS, S[0][0] / dS]]
+        tr = sum(inv[i][k] * x[k][i] for i in range(2) for k in range(2))
+        g2 = math.sqrt(math.pi) * math.gamma(n / 2) * math.gamma(n / 2 - 0.5)
+        out["value"] = dW ** ((n - 3) / 2) * math.exp(-tr / 2) / (2 ** n * g2 * dS ** (n / 2))
+    elif qty == "cov":
+        (i, j), (k, m) = idx
+        out["value"] = n * (S[i][k] * S[j][m] + S[i][m] * S[j][k])
+    elif qty == "mgf":
+        T = q["t"]
+        TS = [[sum(T[i][k] * S[k][j] for k in range(2)) for j in range(2)] for i in range(2)]
+        out["value"] = _det2([[1 - 2 * TS[0][0], -2 * TS[0][1]], [-2 * TS[1][0], 1 - 2 * TS[1][1]]]) ** (-n / 2)
+    else:
+        return {"error": f"no {qty}"}
+    return out
+
+
 def multivariate(q):
     """The multinomial (n, p) by sums over its support, and the bivariate normal."""
     a, qty, x, idx, given = q["args"], q["qty"], q.get("x"), q.get("index") or [], q.get("given") or []
+    if q["dist"] in ("dirichlet", "wishart") or q.get("whole"):
+        return matrix_variate(q)
     if q["dist"] == "multivariate_normal":
         (m1, m2), ((s11, s12), (_, s22)) = a["mean"], a["cov"]
         if qty == "pdf":

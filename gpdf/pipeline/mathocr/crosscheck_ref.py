@@ -184,8 +184,146 @@ def _mvn(q):
     return out
 
 
+# ---------------------------------------------------------------- matrix variate (step 2)
+
+MATRIX_FAMILIES = ("dirichlet", "multivariate_t", "wishart", "invwishart", "matrix_normal",
+                   "vonmises_fisher")
+VECTOR_FAMILIES = ("dirichlet", "multivariate_t", "vonmises_fisher", "multivariate_normal")
+
+
+def _np(a):
+    return {k: (np.asarray(v, float) if isinstance(v, list) else v) for k, v in a.items()}
+
+
+def _family(name, a):
+    """(frozen SciPy object or None, mean, mode, cov(i, j)) with i, j element indices (an int
+    for a vector family, a pair for a matrix family)."""
+    if name == "dirichlet":
+        al = a["alpha"]
+        a0, k = al.sum(), len(al)
+        cov = lambda i, j: ((i == j) * al[i] * a0 - al[i] * al[j]) / (a0 ** 2 * (a0 + 1))  # noqa: E731
+        return stats.dirichlet(al), al / a0, (al - 1) / (a0 - k), cov
+    if name == "multivariate_t":
+        loc, sh, df = a["loc"], a["shape"], a["df"]
+        return (stats.multivariate_t(loc, sh, df), loc, loc,
+                lambda i, j: df / (df - 2) * sh[i, j])
+    if name == "multivariate_normal":
+        mu, S = a["mean"], a["cov"]
+        return stats.multivariate_normal(mu, S), mu, mu, lambda i, j: S[i, j]
+    if name == "wishart":
+        n, S = a["df"], a["scale"]
+        p = S.shape[0]
+        return (stats.wishart(n, S), n * S, (n - p - 1) * S,
+                lambda u, v: n * (S[u[0], v[0]] * S[u[1], v[1]] + S[u[0], v[1]] * S[u[1], v[0]]))
+    if name == "invwishart":
+        n, P = a["df"], a["scale"]
+        p = P.shape[0]
+        den = (n - p) * (n - p - 1) ** 2 * (n - p - 3)
+        cov = lambda u, v: (2 * P[u[0], u[1]] * P[v[0], v[1]] + (n - p - 1) * (  # noqa: E731
+            P[u[0], v[0]] * P[u[1], v[1]] + P[u[0], v[1]] * P[v[0], u[1]])) / den
+        return stats.invwishart(n, P), P / (n - p - 1), P / (n + p + 1), cov
+    if name == "matrix_normal":
+        M, U, V = a["mean"], a["rowcov"], a["colcov"]
+        return (stats.matrix_normal(M, U, V), M, M, lambda u, v: U[u[0], v[0]] * V[u[1], v[1]])
+    if name == "vonmises_fisher":
+        mu, kap = a["mu"], a["kappa"]
+        p = len(mu)
+        A = special.ive(p / 2, kap) / special.ive(p / 2 - 1, kap)
+        return stats.vonmises_fisher(mu, kap), A * mu, mu, None
+    raise ValueError(f"no matrix-variate {name}")
+
+
+def _el(arr, i):
+    return float(arr[tuple(i)] if isinstance(i, (list, tuple)) else arr[i])
+
+
+def _mat(q):
+    name, qty = q["dist"], q["qty"]
+    a = _np(q.get("args", {}))
+    x, idx = q.get("x"), q.get("index") or []
+    d, mean, mode, cov = _family(name, a)
+    out = {"value": None, "imag": None, "tol_floor": 0.0, "how": f"{name} {qty} (scipy / closed form)"}
+    vec = name in VECTOR_FAMILIES
+    if q.get("whole"):                       # the book's side is a whole vector or matrix
+        if qty in ("mean", "mode"):
+            m = np.atleast_1d(mean if qty == "mean" else mode)
+        elif qty == "cov" and cov is not None:
+            if vec:
+                k = len(mean)
+                m = np.array([[cov(i, j) for j in range(k)] for i in range(k)])
+            else:                            # cov of vec(X), columns stacked
+                r, c = np.shape(mean)
+                els = [(i, j) for j in range(c) for i in range(r)]
+                m = np.array([[cov(u, v) for v in els] for u in els])
+        else:
+            return {"error": f"no whole {qty} for {name}"}
+        out["matrix"] = (m.reshape(-1, 1) if m.ndim == 1 else m).tolist()
+        return out
+    if qty == "pdf":
+        out["value"] = float(d.pdf(np.asarray(x, float)))
+    elif qty == "entropy":
+        out["value"] = float(d.entropy())
+    elif qty in ("mean", "mode"):
+        if not idx:
+            return {"error": f"{qty} needs an index (or a whole-vector formula)"}
+        out["value"] = _el(mean if qty == "mean" else mode, idx[0] if vec else idx)
+    elif qty in ("var", "cov", "corr"):
+        if cov is None:
+            return {"error": f"no {qty} for {name}"}
+        if vec:
+            i, j = idx[0], idx[1] if len(idx) > 1 else idx[0]
+        else:
+            i, j = (idx[0], idx[1]) if qty != "var" else (idx, idx)
+        v = cov(i, j)
+        if qty == "corr":
+            v = v / math.sqrt(cov(i, i) * cov(j, j))
+        out["value"] = float(v)
+    elif qty == "marginal_pdf":
+        X = np.asarray(x, float)
+        if name == "dirichlet":
+            al = a["alpha"]
+            out["value"] = float(stats.beta.pdf(X[idx[0]], al[idx[0]], al.sum() - al[idx[0]]))
+        elif name in ("multivariate_t", "multivariate_normal"):
+            i = idx[0]
+            loc = a["loc"] if name == "multivariate_t" else a["mean"]
+            sh = a["shape"] if name == "multivariate_t" else a["cov"]
+            m1 = (stats.t(a["df"], loc[i], math.sqrt(sh[i, i])) if name == "multivariate_t"
+                  else stats.norm(loc[i], math.sqrt(sh[i, i])))
+            out["value"] = float(m1.pdf(X[i]))
+        elif name == "wishart" and idx[0] == idx[1]:
+            s = a["scale"][idx[0], idx[0]]
+            out["value"] = float(stats.chi2.pdf(X[tuple(idx)] / s, a["df"]) / s)
+        elif name == "matrix_normal":
+            i, j = idx
+            out["value"] = float(stats.norm.pdf(X[i, j], a["mean"][i, j],
+                                                math.sqrt(a["rowcov"][i, i] * a["colcov"][j, j])))
+        else:
+            return {"error": f"no marginal of {name} at {idx}"}
+    elif qty == "mixed_moment" and name == "dirichlet":
+        al, r = a["alpha"], np.asarray(q["r"], float)
+        out["value"] = float(np.exp(special.gammaln(al.sum()) - special.gammaln(al.sum() + r.sum())
+                                    + (special.gammaln(al + r) - special.gammaln(al)).sum()))
+    elif qty in ("mgf", "cf") and name in ("wishart", "matrix_normal"):
+        T = np.asarray(q["t"], float)
+        z = 1j if qty == "cf" else 1.0
+        if name == "wishart":
+            p = T.shape[0]
+            v = np.linalg.det(np.eye(p) - 2 * z * T @ a["scale"]) ** (-a["df"] / 2)
+        else:                                # vec(X) ~ N(vec M, V kron U), columns stacked
+            t = T.reshape(-1, order="F")
+            m = a["mean"].reshape(-1, order="F")
+            v = np.exp(z * t @ m + z * z * (t @ np.kron(a["colcov"], a["rowcov"]) @ t) / 2)
+        out["value"], out["imag"] = float(np.real(v)), float(np.imag(v))
+    else:
+        return {"error": f"no {qty} for {name}"}
+    return out
+
+
 def answer_mv(q):
     name, a, qty = q["dist"], q.get("args", {}), q["qty"]
+    if name in MATRIX_FAMILIES or (name == "multivariate_normal" and (
+            q.get("whole") or qty in ("mode", "entropy"))):
+        return _mat(q)
     if name == "multivariate_normal":
         return _mvn(q)
     x, idx, given = q.get("x"), q.get("index") or [], q.get("given") or []

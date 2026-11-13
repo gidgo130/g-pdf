@@ -469,6 +469,29 @@ support (a cut where each marginal's tail is below 1e-18 for an infinite one, th
 recorded as the tolerance floor) and uses closed forms for the normal; `ref_x` gives the
 reference's vector when the book leaves a cell out (`[n - x_1 - x_2, x_1, x_2]`).
 
+**Matrix variate (step 2).** A table row with `"matrix": true` (or a `matrices` / `vectors` list)
+gives matrices and vectors in its points as nested lists (`"Sigma": [[1, 0.3], [0.3, 2]]`; a flat
+list is a column vector), and `var` names the variable the reference reads (`"W"`; a point's `"@t"`
+may name a matrix too: `"Theta"`). In its formulas a bold symbol or a name in `matrices` / `vectors`
+is a matrix or vector (a subscript is part of the name; `x_1` beside a vector `x` stays a scalar
+unless the point gives `x_1` a matrix) and `I`, `I_p` is the identity. Before the scalar parser
+(`crosscheck_mat.py`, mpmath): `|A|`, `\det`, `\operatorname{tr}`, `\operatorname{etr}` (exp of the
+trace) and `\|v\|` over a matrix are evaluated and put in as numbers (bars around a scalar stay an
+absolute value); every other maximal product holding a matrix (a quadratic form) must come out
+1 x 1 and is put in; `\Gamma_p(a)` and `B_p(a, b)` are written as products over j = 1..p. The
+grammar: sums, products, scalar factors, `\frac` with a scalar denominator, `\otimes`, transposes
+(`'`, `^T`, `^\top`), `^{-1}`, the symmetric `^{1/2}` and `^{-1/2}`, integer powers, exp / log / sqrt
+of a 1 x 1 result; anything else leaves the entry inconclusive ("matrix expression not read").
+A piece that is a whole matrix or vector (`n \Sigma`, `\boldsymbol{\mu}`) is compared element by
+element with the reference's whole mean, mode or covariance (of vec(X), columns stacked). References:
+SciPy's `dirichlet`, `multivariate_t`, `wishart`, `invwishart`, `matrix_normal`, `vonmises_fisher`
+and `multivariate_normal` for pdf and entropy; closed forms for mean and mode (`index` [i] or [i, j]),
+element variances and covariances (`index` [[i, j], [k, l]]: Wishart n(s_ik s_jl + s_il s_jk), the
+inverted Wishart's, U_ik V_jl), marginals (Dirichlet beta, multivariate t, a Wishart diagonal
+element s_ii chi-square, a matrix normal element), the Dirichlet `mixed_moment` (`r`), and the
+Wishart and matrix normal mgf / cf. A reference written from the book's own definitions (no
+library has it) tests internal consistency only; mark such entries in the spec.
+
 Quantities: pdf, pmf, cdf, sf, hazard, quantile, raw and central moments, cumulants, mean,
 var, sd, skewness (`skew`, `skew2` = β₁), kurtosis (`kurt` = β₂, `excess_kurt`), mgf, cgf,
 cf, pgf, entropy, mode, median. Each entry is evaluated at the three points, the book's side
