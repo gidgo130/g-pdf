@@ -348,6 +348,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "text layer (txt, for born-digital PDFs); cached apart")
     me.add_argument("--check-identities", dest="identities", action="store_true", default=None,
                     help="require the identity checks (error without the mathcheck extra)")
+    me.add_argument("--identity-letters", metavar="L=KIND,...",
+                    help="the book's own letters for the identity checks, e.g. S=quantile,Q=quantile or "
+                         "G=cdf (kinds: density, cdf, survival, hazard, quantile, mgf, cf, pgf, skip)")
     me.add_argument("--no-check-identities", dest="identities", action="store_false",
                     help="skip the identity checks")
     me.add_argument("--inline", choices=("per-page", "per-span"), default="per-page",
@@ -1032,6 +1035,12 @@ def _math_export_main(args, parser) -> int:
                        inline_with=args.inline_with, style_page=args.style_page_consistency,
                        keep_awake=not args.allow_sleep, ocr_mode=args.ocr_mode,
                        ddjvu=args.ddjvu)
+    if args.identity_letters:
+        from gpdf.pipeline.mathocr import identities
+        try:
+            opts.identity_letters = identities.parse_letters(args.identity_letters)
+        except ValueError as e:
+            parser.error(str(e))
     try:
         summary = run.run(opts, progress=print)
     except (run.MathExportError, engine.EngineError, OSError) as e:

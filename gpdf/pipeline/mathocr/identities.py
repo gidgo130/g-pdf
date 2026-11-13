@@ -60,6 +60,7 @@ SUPPORTS = {"(0,inf)": ([0.1, 0.5, 1.0, 2.0, 5.0], 1e-9, BIG),
             "(0,1)": ([0.1, 0.3, 0.5, 0.7, 0.9], 1e-9, 1 - 1e-9)}
 QUAD_RANGES = {"(0,inf)": [0, 1, "inf"], "(-inf,inf)": ["-inf", 0, "inf"], "(0,1)": [0, 1]}
 PAIR_POINTS = [0.5, 1.0, 2.0]
+QUANTILE_POINTS = [0.02, 0.1, 0.25, 0.5, 0.75, 0.9, 0.98]
 NOTE = ("an identity failed: this may be a printed error rather than a misread. Compare the "
         "crop; if the LaTeX matches the page, mark possible_source_typo instead of changing it")
 KINDS = {"f": "density", "p": "density", "g": "density", "F": "cdf", r"\bar{F}": "survival",
@@ -151,10 +152,12 @@ class Context:
     """The classified expressions of the current section, for the pair checks, and the
     constants the section defines (``C = ...``, ``q = 1 - p``), as LaTeX."""
 
-    def __init__(self):
+    def __init__(self, letters: dict | None = None):
         self.exprs: list[_Expr] = []
         self.section = ""
         self.defs: dict[str, str] = {}
+        # the book's own letters (S: quantile, G: cdf, ...; "skip": not checked), over KINDS
+        self.letters: dict[str, str] = dict(letters or {})
 
     def new_section(self, heading: str, defs: dict | None = None) -> None:
         self.section = heading
@@ -321,8 +324,28 @@ def _canon(name: str) -> str:
     return name.replace("{", "").replace("}", "").replace(" ", "").replace("\\", "")
 
 
-def classify(lhs: str, before: str = "") -> tuple[str | None, list[str], str]:
-    """(kind, variables, subscript) of a left-hand side."""
+LETTER_KINDS = ("density", "cdf", "survival", "hazard", "quantile", "mgf", "cf", "pgf", "skip")
+
+
+def parse_letters(text: str) -> dict[str, str]:
+    """"S=quantile,G=cdf" -> {"S": "quantile", "G": "cdf"}; an unknown kind is a ValueError."""
+    out = {}
+    for part in (text or "").split(","):
+        if not part.strip():
+            continue
+        name, _, kind = part.partition("=")
+        name, kind = name.strip().lstrip("\\"), kind.strip()
+        if not name or kind not in LETTER_KINDS:
+            raise ValueError(f"--identity-letters: {part.strip()!r} is not LETTER=KIND (kinds: {', '.join(LETTER_KINDS)})")
+        out[name] = kind
+    return out
+
+
+def classify(lhs: str, before: str = "", letters: dict | None = None) -> tuple[str | None, list[str], str]:
+    """(kind, variables, subscript) of a left-hand side. ``letters`` (the book's own: S ->
+    quantile, G -> cdf, "skip") decide a letter's quantity before KINDS; a distribution function
+    or density guessed from its letter whose only variable is p (a probability) cannot be
+    confirmed and is not classified."""
     s = _clean(lhs).strip()
     if MEAN_LHS.match(s):
         return "mean", [], ""
@@ -369,7 +392,12 @@ def classify(lhs: str, before: str = "") -> tuple[str | None, list[str], str]:
         return None, [], ""                          # G(e^t), G(1 + t), G(k | m, n)
     if any(VECTOR.search(v) for v in variables) or VECTOR.search(sub):
         return None, [], ""                          # p_X(x) with bold vectors, (t_1, ..., t_k)
-    kind = KINDS.get(name)
+    declared = (letters or {}).get(name.lstrip("\\"), (letters or {}).get(name))
+    if declared == "skip":
+        return None, [], ""
+    kind = declared or KINDS.get(name)
+    if not declared and kind in ("density", "cdf", "survival", "hazard") and variables == ["p"]:
+        return None, [], ""                          # S(p), F(p): a quantity the letter cannot confirm
     if kind is None:
         text = before.lower()
         hits = [(text.rfind(word), k) for word, k in HINTS if word in text]
@@ -851,6 +879,23 @@ class _Checker:
         self.record("monotone", mono, dets)
         self.record("limits 0 and 1", limits, dets)
 
+    def quantile(self):
+        """A quantile function Q(p) (a book's declared letter): increasing on (0, 1)."""
+        e = self.e
+        if len(e.variables) != 1:
+            return
+        outs, dets = [], []
+        for k in range(DRAWS):
+            p = self.params(k)
+            try:
+                vals = [self.call(e, p, u) for u in QUANTILE_POINTS]
+                outs.append(all(b >= a - TOL * max(1.0, abs(a)) for a, b in zip(vals, vals[1:])))
+                dets.append({"params": p, "values": [float(v) for v in vals]})
+            except (ValueError, ZeroDivisionError, OverflowError, TypeError, ArithmeticError):
+                outs.append(None)
+                dets.append({"params": p})
+        self.record("increasing on (0,1)", outs, dets)
+
     def hazard(self):
         e = self.e
         if len(e.variables) != 1:
@@ -984,6 +1029,8 @@ class _Checker:
             self.cdf_like(True)
         elif k == "hazard":
             self.hazard()
+        elif k == "quantile":
+            self.quantile()
         elif k in ("mgf", "cf", "pgf"):
             self.generating(k)
         self.pairs()
@@ -1042,7 +1089,7 @@ def _expression(lhs: str, rhs: str, before: str, ctx: Context):
         fl = lambda *a, _f=fn: _f(*a)[0]                  # noqa: E731
         fr = lambda *a, _f=fn: _f(*a)[1]                  # noqa: E731
         return kind, _Expr(kind, "", variables, (fl, fr), params, lhs, terms)
-    kind, variables, sub = classify(lhs, before)
+    kind, variables, sub = classify(lhs, before, ctx.letters)
     if kind is None:
         return None, None
     parsed = _to_sympy(rhs, variables, ctx.defs)

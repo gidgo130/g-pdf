@@ -64,6 +64,7 @@ class Options:
     keep_awake: bool = True                  # hold a Windows PC awake (--allow-sleep: off)
     ocr_mode: str = "ocr"                    # engine.OCR_MODES: the render, or the text layer
     ddjvu: str | None = None                 # DjVuLibre (a .djvu source): folder or executable
+    identity_letters: dict | None = None     # the book's letters for the identity pass (S: quantile, ...)
 
 
 @dataclass
@@ -280,7 +281,8 @@ def _run(opts: Options, progress=None) -> Summary:
         if want_ident:
             _stage[0] = "identities"
             ident_counts = _identities(assembled, items_of, _ranges(pages), say, ident_records,
-                                       beat=lambda p: hb.beat("identities", page=p))
+                                       beat=lambda p: hb.beat("identities", page=p),
+                                       letters=opts.identity_letters)
         _stage[0] = "outputs"
         hb.beat("outputs")
 
@@ -341,6 +343,7 @@ def _run(opts: Options, progress=None) -> Summary:
                             "style_page": opts.style_page, "keep_awake": opts.keep_awake,
                             "ocr_mode": opts.ocr_mode,
                             "check_identities": want_ident,
+                            "identity_letters": opts.identity_letters,
                             "tesseract": tess.version if tess else None},
                 "labels": {"runs": fit.runs, "steps": fit.steps, "rejected": fit.rejected,
                            "sources": {str(p): sources[p] for p in pages}},
@@ -397,7 +400,7 @@ def _sum_counts(per_page: dict) -> dict:
 
 
 def _identities(assembled, items_of, ranges, say, records: list | None = None,
-                beat=None) -> dict:
+                beat=None, letters: dict | None = None) -> dict:
     """Run the identity pass page by page; failures become (or join) review items."""
     from gpdf.pipeline.mathocr import identities
 
@@ -414,7 +417,7 @@ def _identities(assembled, items_of, ranges, say, records: list | None = None,
                     elif it.kind == "display":
                         for k, v in identities.definitions(it.display.latex).items():
                             defs[-1].setdefault(k, v)
-        ctx = identities.Context()
+        ctx = identities.Context(letters)
         ctx.new_section("", defs[0])
         for pg in assembled:
             if not a <= pg.file <= b:

@@ -529,3 +529,26 @@ def test_derivation_steps_are_not_checked():
     assert r.status == "passed", (r.status, [(c.identity, c.status) for c in r.checks])
     # a footnote mark after a closing bracket and trailing punctuation are not part of the formula
     assert I.equations(r"F(x) = (1 - e^{-x})^{*}.") == [("F(x)", "(1 - e^{-x})")]
+
+
+def test_the_books_letters_decide_the_quantity():
+    # Gilchrist: S(p) and Q(p) are quantile functions (monotone increasing on (0, 1))
+    ctx = I.Context(letters={"S": "quantile", "Q": "quantile"})
+    r = check(r"S(p) = \ln\frac{p}{1 - p}", ctx=ctx)
+    assert (r.kind, r.status) == ("quantile", "passed"), (r.kind, r.status)
+    r = check(r"Q(p) = \lambda + \eta \ln\frac{1 - p}{p}", ctx=I.Context(letters={"Q": "quantile"}))
+    assert (r.kind, r.status) == ("quantile", "failed")
+    # undeclared, a "survival function" of a probability variable cannot be confirmed: skipped
+    r = check(r"S(p) = \ln\frac{p}{1 - p}")
+    assert r.status == "skipped", (r.kind, r.status)
+    # HMC: G is a cdf, not a pgf
+    r = check(r"G(y) = 1 - e^{-y}", ctx=I.Context(letters={"G": "cdf"}))
+    assert (r.kind, r.status) == ("cdf", "passed")
+    r = check(r"G(y) = 1 - e^{-y}", ctx=I.Context(letters={"G": "skip"}))
+    assert r.status == "skipped"
+
+
+def test_identity_letters_parse():
+    assert I.parse_letters("S=quantile, Q=quantile,G=cdf") == {"S": "quantile", "Q": "quantile", "G": "cdf"}
+    with pytest.raises(ValueError):
+        I.parse_letters("S=quantity")

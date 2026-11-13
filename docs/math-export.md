@@ -108,7 +108,7 @@ the engine reads), `--crop-dpi 300` (review crops), `--check-identities` /
 `--mineru-home DIR`, `--allow-unpinned`; Marker: `--marker PATH`,
 `--llama-server PATH`, `--marker-gguf DIR`, `--no-marker`, `--marker-rule
 any|value|small`, `--inline-with basic|marker|either|both`; and
-`--style-page-consistency`; `--allow-sleep`.
+`--style-page-consistency`; `--identity-letters L=KIND,...`; `--allow-sleep`.
 
 `--ocr-mode ocr|txt` chooses what MinerU reads: `ocr` (default) a grayscale render of
 each page at `--dpi`; `txt` the PDF's own text layer (each page goes to the engine as a
@@ -254,7 +254,15 @@ table does not know ("density", "distribution function", "survival",
 "hazard", "moment generating", "characteristic function", "probability
 generating"). Tags, sizes and spacing are stripped, aligned rows and `=`
 chains split, side conditions dropped; `\Gamma`, `B(·,·)`, `\Phi`, `e`, `i`,
-`\pi` and indicator notation are mapped.
+`\pi`, `\operatorname{erfc}` / `erf`, the normal quantile `\Phi^{-1}(p)` (and `N(p)` of a
+probability variable, as sqrt(2) erfinv(2p - 1)) and indicator notation are mapped.
+`--identity-letters S=quantile,Q=quantile` (or `G=cdf`, `M=skip`, ...) declares the book's own
+letters, which then decide the quantity before the table above; a declared `quantile` is checked as
+increasing on (0, 1). Undeclared, a density or distribution function whose only variable is `p` (a
+probability: Gilchrist's S(p)) is not classified, since its letter cannot confirm the quantity. Steps
+of a derivation are not definitions: three or more equalities with one left side are left out, and of
+a chain of two (or rows that continue with "=") only the first equation is checked; a footnote mark
+`(...)^{*}` is dropped.
 
 Checks, at four stratified positive draws of every parameter:
 
