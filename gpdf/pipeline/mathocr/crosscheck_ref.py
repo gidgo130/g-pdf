@@ -419,6 +419,9 @@ def _closed_uni(q):
     brk = [float(eval(str(b), {"__builtins__": {}}, {**FLOAT_ENV, **a})) for b in ex.get("breaks", [])]  # noqa: S307
 
     def integral(g, u=lo, w=hi):
+        u, w = max(u, lo), min(w, hi)          # the density is 0 outside its support
+        if u >= w:
+            return 0.0
         if discrete:
             top = w if math.isfinite(w) else u + 10 ** 5
             return float(sum(g(k) * f(k) for k in range(int(math.ceil(u)), int(math.floor(top)) + 1)))
@@ -444,6 +447,7 @@ def _closed_uni(q):
     elif qty in ("quantile", "median", "isf"):
         pr = 0.5 if qty == "median" else (1 - x if qty == "isf" else x)
         a_, b_ = (lo if math.isfinite(lo) else -1e6), (hi if math.isfinite(hi) else 1e6)
+        a_, b_ = a_ + 1e-13 * (b_ - a_), b_ - 1e-13 * (b_ - a_)   # never evaluate a pole at an end
         v = optimize.brentq(lambda y: cdf(y) - pr, a_, b_, xtol=1e-14, rtol=1e-13)
     elif qty == "mode":
         a_, b_ = (lo if math.isfinite(lo) else -1e3), (hi if math.isfinite(hi) else 1e3)

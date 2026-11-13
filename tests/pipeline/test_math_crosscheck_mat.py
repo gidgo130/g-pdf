@@ -287,3 +287,22 @@ def test_real_survival_closed_forms_on_another_support(tmp_path):
     for r in res.values():
         want = "failed" if r["id"].endswith("bad") else "passed"
         assert r["status"] == want, (r["id"], r["status"], r.get("reason"))
+
+
+def test_real_closed_form_outside_its_support_and_at_a_pole(tmp_path):
+    # a density with a pole at an end (n < 1): the cdf past the support is 1 and before it 0; the quantile and
+    # median are found without evaluating the pole
+    py = os.environ.get(C.ENV_VAR)
+    if not py:
+        pytest.skip("set GPDF_SCIPY_PYTHON to a Python with SciPy")
+    stsp = {"scipy": "closed_form", "internal_consistency": True, "args": {"theta": "theta", "n": "n"},
+            "expr": {"pdf": "n * (x / theta) ** (n - 1) if x <= theta else n * ((1 - x) / (1 - theta)) ** (n - 1)",
+                     "support": [0, 1], "breaks": ["theta"]},
+            "points": [{"theta": 0.3, "n": 0.6, "@x": 1.4, "@p": 0.25}, {"theta": 0.6, "n": 0.7, "@x": 1.0, "@p": 0.8},
+                       {"theta": 0.45, "n": 0.5, "@x": 2.0, "@p": 0.5}]}
+    cases = [("cdf past the support", "s", "cdf", r"1", r"0.9", {}),
+             ("quantile at a pole", "s", "quantile", r"\theta \left(\frac{p}{\theta}\right)^{1/n}", r"\theta p^{1/n}", {"fixed": {"@p": 0.2}})]
+    res = run(tmp_path, cases, {"s": stsp}, python=py)
+    for r in res.values():
+        want = "failed" if r["id"].endswith("bad") else "passed"
+        assert r["status"] == want, (r["id"], r["status"], r.get("reason"))
