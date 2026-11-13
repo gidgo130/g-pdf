@@ -569,6 +569,23 @@ def test_the_support_comes_from_the_displays_own_condition():
     assert r.status == "failed"
 
 
+def test_a_hypergeometric_pmf_draws_integer_counts():
+    # D is a count like N: a fractional D made binom(D, x) negative and failed "non-negative"
+    r = check(r"p(x) = \frac{\binom{N - D}{n - x} \binom{D}{x}}{\binom{N}{n}}, \quad x = 0, 1, \dots, n")
+    assert r.status == "passed", [(c.identity, c.status, c.details) for c in r.checks]
+
+
+def test_no_derivative_pair_for_a_pmf_on_an_integer_support():
+    # an earlier continuous cdf in the section; the pmf's list may lack the comma before the dots
+    for dots in (r"3, \ldots", r"3 \ldots ."):
+        ctx = I.Context()
+        check(r"F(y) = \frac{27 y^{3}}{8}, \quad 0 \leq y < \frac{2}{3}", ctx=ctx)
+        r = check(r"p(x) = \frac{2}{3} \left(\frac{1}{3}\right)^{x - 1}, \quad x = 1, 2, " + dots, ctx=ctx)
+        assert r.kind == "density" and r.status == "passed", (dots, [(c.identity, c.status) for c in r.checks])
+        assert "F' = f" not in [c.identity for c in r.checks]
+        assert r.checks and any(c.details.get("support", "").endswith("(condition)") for c in r.checks), dots
+
+
 def test_a_failed_check_on_a_guessed_quantity_is_unsure():
     # a pgf letter with a density-like variable, or a quantity guessed from the prose before it
     r = check(r"G(x) = x^2 + 1")

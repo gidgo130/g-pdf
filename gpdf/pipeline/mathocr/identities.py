@@ -102,7 +102,8 @@ DISCRETE = ("pmf", "pmf_point", "recurrence", "pgf")
 MOMENT_KINDS = ("mean", "variance")
 DEF_NAMES = {"q", "Q"} | {"c", "C", "K"}              # names a section may define: C = ...
 INT_PARAMS = {"n": [5, 6, 8, 10], "m": [5, 6, 8, 10], "M": [5, 6, 8, 10], "N": [12, 15, 18, 21],
-              "a": [7, 9, 12, 15], "b": [7, 9, 12, 15]}     # hypergeometric counts (b >= n)
+              "a": [7, 9, 12, 15], "b": [7, 9, 12, 15],     # hypergeometric counts (b >= n)
+              "D": [7, 9, 12, 15]}                          # successes among N (<= N)
 PROB_PARAMS = {"p", "theta", "pi", "omega", "q"}
 PROB_LO, PROB_HI = 0.1, 0.9
 REC_POINTS = [1, 2, 3]
@@ -175,7 +176,7 @@ def _sure(lhs: str, kind: str, variables: list[str], letters: dict | None) -> bo
     return ok is None or all(v.split("_")[0] in ok for v in variables)
 
 
-SUPPORT_LIST_RX = r"(?<![A-Za-z\\]){v}\s*=\s*(-?\d+)\s*,\s*(?:-?\d+\s*,\s*)*\\[lc]?dots(?:\s*,\s*([^,;]+?))?\s*(?:[,;.]|$)"
+SUPPORT_LIST_RX = r"(?<![A-Za-z\\]){v}\s*=\s*(-?\d+)\s*,\s*(?:-?\d+\s*,\s*)*(?:-?\d+\s*)?\\[lc]?dots(?:\s*,\s*([^,;]+?))?\s*(?:[,;.]|$)"
 
 
 def _support_of(latex: str, var: str, cond: str, defs: dict | None):
@@ -1120,8 +1121,8 @@ class _Checker:
         one = len(e.variables) == 1
         if e.kind in ("density", "cdf") and one:
             other = ctx.find("cdf" if e.kind == "density" else "density", e.sub, 1)
-            if other:
-                F, f = (other, e) if e.kind == "density" else (e, other)
+            F, f = (other, e) if e.kind == "density" else (e, other)
+            if other and not (f.support and f.support[0] == "list"):     # no F' = f for a pmf
                 self.pair("F' = f", other, lambda p: [
                     (_real(mpmath.diff(lambda x: F.fn(x, *[p[q] for q in F.params]), x)),
                      self.call(f, p, x)) for x in PAIR_POINTS])
