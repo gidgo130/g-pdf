@@ -522,8 +522,9 @@ def _closed_mv(q):
         box = [[mp.mpmathify(eval(str(s), {"__builtins__": {}}, {**_cenv(), **a})) for s in rg]  # noqa: S307
                for rg in ex.get("support", [[0, "inf"], [0, "inf"]])]
         dens = lambda u, v: mp.diff(S, (u, v), (1, 1))                           # noqa: E731
-        m1 = lambda u: -mp.diff(lambda w: S(w, 0), u)                              # noqa: E731
-        m2 = lambda v: -mp.diff(lambda w: S(0, w), v)                              # noqa: E731
+        L1, L2 = box[0][0], box[1][0]                                              # the marginals: the
+        m1 = lambda u: -mp.diff(lambda w: S(w, L2), u)                             # noqa: E731 other at
+        m2 = lambda v: -mp.diff(lambda w: S(L1, w), v)                             # noqa: E731 its bottom
 
     else:
         P = _cfun(ex["pdf"], ["x_1", "x_2"], a, fast=True)
@@ -536,15 +537,23 @@ def _closed_mv(q):
                               [max(v, box[1][0]), box[1][1]])
 
     def moment(r1, r2):    # E[X1^r1 X2^r2]
-        if "sf" in ex and box[0][0] == 0 and box[1][0] == 0:
-            # nonnegative: through the survival function (singular parts included)
-            if r1 and r2:
-                return r1 * r2 * quad(lambda u, v: u ** (r1 - 1) * v ** (r2 - 1) * Sf(u, v), *box)
-            if r1:
-                return r1 * quad(lambda u: u ** (r1 - 1) * Sf(u, 0), box[0])
-            if r2:
-                return r2 * quad(lambda v: v ** (r2 - 1) * Sf(0, v), box[1])
-            return mp.mpf(1)
+        if "sf" in ex and mp.isfinite(box[0][0]) and mp.isfinite(box[1][0]):
+            # bounded below: Y = X - L on [0, inf)^2 through the survival function (singular parts
+            # included), then the binomial expansion of (Y1 + L1)^r1 (Y2 + L2)^r2
+            l1, l2 = float(box[0][0]), float(box[1][0])
+            Sy = lambda u, v: Sf(l1 + u, l2 + v)                                   # noqa: E731
+            up = [[0, mp.inf], [0, mp.inf]]
+
+            def ym(a1, a2):
+                if a1 and a2:
+                    return a1 * a2 * quad(lambda u, v: u ** (a1 - 1) * v ** (a2 - 1) * Sy(u, v), *up)
+                if a1:
+                    return a1 * quad(lambda u: u ** (a1 - 1) * Sy(u, 0), up[0])
+                if a2:
+                    return a2 * quad(lambda v: v ** (a2 - 1) * Sy(0, v), up[1])
+                return mp.mpf(1)
+            return sum(math.comb(r1, i) * math.comb(r2, j) * mp.mpf(l1) ** (r1 - i) * mp.mpf(l2) ** (r2 - j)
+                       * ym(i, j) for i in range(r1 + 1) for j in range(r2 + 1))
         return quad(lambda u, v: u ** r1 * v ** r2 * dens(u, v), *box)
     X1, X2 = mp.mpmathify(x[0]), mp.mpmathify(x[1])
     if qty == "sf":
@@ -593,7 +602,7 @@ def _closed_mv(q):
                 v = mom(int(r[0] if isinstance(r, list) else r))
     elif qty == "mgf":
         T1, T2 = mp.mpmathify(t[0]), mp.mpmathify(t[1])
-        if "sf" in ex and box[0][0] == 0 and box[1][0] == 0:   # 1 + t1 I1 + t2 I2 + t1 t2 I12
+        if "sf" in ex and box[0][0] == 0 and box[1][0] == 0:   # 1 + t1 I1 + t2 I2 + t1 t2 I12 (support [0, inf)^2)
             t1, t2 = float(T1), float(T2)
             es = lambda e, sv: 0.0 if sv <= 0 else math.exp(e + math.log(sv))   # noqa: E731 - no overflow
             v = (1 + T1 * quad(lambda u: es(t1 * u, Sf(u, 0)), box[0])

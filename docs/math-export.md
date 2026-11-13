@@ -496,8 +496,9 @@ a bivariate gamma) takes `"scipy": "closed_form"` and an `expr` of Python expres
 `args` (mpmath / SciPy special functions by name: `exp`, `gamma`, `besseli`, `e1`, ...). Univariate:
 `pdf` (or `pmf`) in `x` with `support` [lo, hi] (and `breaks`, points where the density has a kink);
 every quantity comes by quadrature or an exact sum of that density. Bivariate (`k` 2): the joint
-`sf` in `x_1, x_2` on [0, inf)^2 (singular parts allowed: moments and the mgf come from the survival
-function, the density by differentiation) or the joint `pdf` with `support` [[lo1, hi1], [lo2, hi2]];
+`sf` in `x_1, x_2` on [0, inf)^2, or on the `support` it gives (singular parts allowed; for a support
+bounded below, moments come from the survival function of X minus its lower bounds, the density and the
+marginals by differentiation) or the joint `pdf` with `support` [[lo1, hi1], [lo2, hi2]];
 quantities pdf, sf, cdf, marginal_pdf, mean, var, cov, corr, mixed_moment (`r`), cond_pdf (divided
 by the marginal), cond_mean, cond_var, cond_moment (`index` [i, other]), mgf. A quantity given as its
 own expression in `expr` is evaluated as it stands. The quadrature's error estimate is the tolerance

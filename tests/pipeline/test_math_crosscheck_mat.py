@@ -262,3 +262,28 @@ def test_real_closed_forms_from_a_pdf_or_survival_function(tmp_path):
         want = "failed" if r["id"].endswith("bad") else "passed"
         assert r["status"] == want, (r["id"], r["status"], r.get("reason"))
     assert "internal consistency" in res["fgm pdf ok"]["points"][0].get("how", "internal consistency")
+
+
+LOGIS = {"scipy": "closed_form", "k": 2, "internal_consistency": True, "args": {},
+         "expr": {"sf": "1 - 1 / (1 + exp(-x_1)) - 1 / (1 + exp(-x_2)) + 1 / (1 + exp(-x_1) + exp(-x_2))",
+                  "support": [["-inf", "inf"], ["-inf", "inf"]]},
+         "points": [{"@x": [1.1, -0.4]}, {"@x": [0.3, 1.9]}, {"@x": [-1.5, 0.2]}]}
+PARETO = {"scipy": "closed_form", "k": 2, "internal_consistency": True, "args": {"a": "a"},
+          "expr": {"sf": "(1 + (x_1 - 1) + (x_2 - 2)) ** (-a)", "support": [[1, "inf"], [2, "inf"]]},
+          "points": [{"a": 4.5, "@x": [1.1, 2.4]}, {"a": 6.0, "@x": [1.3, 2.9]}, {"a": 5.2, "@x": [2.5, 2.2]}]}
+SUPPORT_CASES = [
+    ("logistic cond pdf", "logis", "cond_pdf",
+     r"\frac{2 e^{-x_1} (1 + e^{-x_2})^2}{(1 + e^{-x_1} + e^{-x_2})^3}",
+     r"\frac{2 e^{-x_1} (1 + e^{-x_2})}{(1 + e^{-x_1} + e^{-x_2})^3}", {"index": [1, 2], "given": [2]}),
+    ("pareto mean", "pareto", "mean", r"1 + \frac{1}{a - 1}", r"1 + \frac{1}{a}", {"index": [1]}),
+]
+
+
+def test_real_survival_closed_forms_on_another_support(tmp_path):
+    py = os.environ.get(C.ENV_VAR)
+    if not py:
+        pytest.skip("set GPDF_SCIPY_PYTHON to a Python with SciPy")
+    res = run(tmp_path, SUPPORT_CASES, {"logis": LOGIS, "pareto": PARETO}, python=py)
+    for r in res.values():
+        want = "failed" if r["id"].endswith("bad") else "passed"
+        assert r["status"] == want, (r["id"], r["status"], r.get("reason"))
