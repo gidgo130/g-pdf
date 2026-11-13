@@ -198,6 +198,7 @@ _INDICATOR = [
     re.compile(r"(?<![A-Za-z\\])I\s*[\[(][^\[\]()]*(?:<|>|\\le|\\ge|\\leq|\\geq)[^\[\]()]*[\])]"),
     re.compile(r"(?<![A-Za-z\\])I_\{[^{}]*\}\s*\([^()]*\)"),
 ]
+FOOTNOTE = re.compile(r"([)\]])\s*\^\s*(?:\{\s*\*\s*\}|\*)")
 ERF_NAME = re.compile(r"\\(?:operatorname\*?|mathrm|text|rm)\s*\{\s*(erfc|erf)\s*\}")
 PHI_INV = re.compile(r"\\Phi\s*\^\s*\{\s*-\s*1\s*\}")
 ALIGN_ENV = re.compile(r"\\(begin|end)\s*\{(aligned|align\*?|array|eqnarray\*?|gathered|gather\*?"
@@ -251,6 +252,7 @@ def _pre(body: str) -> str:
     body = E_NAME.sub("E", body)
     body = CHOOSE.sub(r"\\binom{\1}{\2}", body)
     body = TEXT_WORD.sub(" ; ", body)
+    body = FOOTNOTE.sub(r"\1", body)                 # (...)^{*}: a footnote mark, not a power
     return re.sub(r"\\q?quad\b", " ; ", body)       # _clean would make spaces of them
 
 
@@ -1060,10 +1062,28 @@ def check_display(latex: str, before: str = "", ctx: Context | None = None) -> R
         return Result(None, "skipped", reason="timeout")
 
 
+def _first_steps(eqs: list[tuple]) -> list[tuple]:
+    """Steps of a derivation are not definitions: three or more equalities with one left side
+    are a derivation (left out); of a chain of two, or rows that continue with "=", only the
+    first equation is the definition."""
+    n = Counter(_canon(_clean(l)) for l, _ in eqs)
+    out, seen = [], set()
+    for l, r in eqs:
+        k = _canon(_clean(l))
+        if n[k] >= 3 or k in seen:
+            continue
+        seen.add(k)
+        out.append((l, r))
+    return out
+
+
 def _check_display(latex: str, before: str, ctx: Context) -> Result:
     eqs = equations(latex)
     if not eqs:
         return Result(None, "skipped", reason="no identity")
+    eqs = _first_steps(eqs)
+    if not eqs:
+        return Result(None, "skipped", reason="derivation steps")
     kind, exprs, first = None, [], True
     for lhs, rhs in eqs:
         k, e = _expression(lhs, rhs, before if first else "", ctx)

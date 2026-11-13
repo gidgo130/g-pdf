@@ -519,3 +519,13 @@ def test_erfc_and_the_inverse_normal_parse():
         names = {s.name: s for s in e.free_symbols}
         v = complex(e.subs({names["mu"]: 1, names["sigma"]: 2, names["p"]: 0.975}).evalf())
         assert abs(v.real - (1 + 2 * 1.959963984540054)) < 1e-9, (tex, v)
+
+
+def test_derivation_steps_are_not_checked():
+    # three or more equalities: a derivation, skipped; a row that starts with "=" continues the first
+    r = check(r"f(x) = 2 x e^{-x^2} = 3 x^2 = x")
+    assert r.status == "skipped", (r.status, [c.identity for c in r.checks])
+    r = check(r"\begin{aligned} F(x) &= 1 - e^{-x} \\ &= 2 - e^{-x} \end{aligned}")
+    assert r.status == "passed", (r.status, [(c.identity, c.status) for c in r.checks])
+    # a footnote mark after a closing bracket and trailing punctuation are not part of the formula
+    assert I.equations(r"F(x) = (1 - e^{-x})^{*}.") == [("F(x)", "(1 - e^{-x})")]
