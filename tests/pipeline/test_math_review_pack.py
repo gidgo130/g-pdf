@@ -78,7 +78,8 @@ def test_display_kinds_by_default_in_batches_with_a_filled_brief(export, tmp_pat
     assert str((out / "batch01").resolve()) in brief and "render.py" in brief
     assert str((out / "decisions" / "batch01.jsonl").resolve()) in brief
     assert not pack.FIELD_RE.search(brief) and "{{" not in brief and "\\tag{…}" in brief
-    assert len(brief) < 7000                       # a short brief: about a page
+    # a short brief: about a page (its own text, not the temp paths it names, whose length varies)
+    assert len(brief.replace(str(out.resolve()), "OUT")) < 7000
     assert (out / "render.py").is_file() and (out / "decisions").is_dir()
     assert json.loads((out / "pack.json").read_text("utf-8"))["items"] == 3
 

@@ -278,7 +278,7 @@ def test_identity_pass_runs_when_the_extra_is_installed(setup, tmp_path):
                      "--mineru-home", str(home), "--pages", "1-2", "--check-identities"]) == 0
     rec = json.loads((out / "book" / "run.json").read_text("utf-8"))
     assert rec["pages"][0]["identities"] == {"checked": 1, "passed": 1, "failed": 0,
-                                             "inconclusive": 0, "skipped": 0}
+                                             "inconclusive": 0, "unsure": 0, "skipped": 0}
     assert rec["totals"]["identities"]["skipped"] == 3
 
 
