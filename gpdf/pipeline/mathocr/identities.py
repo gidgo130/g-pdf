@@ -198,6 +198,8 @@ _INDICATOR = [
     re.compile(r"(?<![A-Za-z\\])I\s*[\[(][^\[\]()]*(?:<|>|\\le|\\ge|\\leq|\\geq)[^\[\]()]*[\])]"),
     re.compile(r"(?<![A-Za-z\\])I_\{[^{}]*\}\s*\([^()]*\)"),
 ]
+ERF_NAME = re.compile(r"\\(?:operatorname\*?|mathrm|text|rm)\s*\{\s*(erfc|erf)\s*\}")
+PHI_INV = re.compile(r"\\Phi\s*\^\s*\{\s*-\s*1\s*\}")
 ALIGN_ENV = re.compile(r"\\(begin|end)\s*\{(aligned|align\*?|array|eqnarray\*?|gathered|gather\*?"
                        r"|split|multline\*?|equation\*?|alignedat)\}(\{[^{}]*\})?")
 
@@ -385,6 +387,9 @@ def _parse(s: str, defs: dict | None = None, depth: int = 0):
     and phi mapped; None when it will not parse or leaves an unknown function."""
     for rx in _INDICATOR:
         s = rx.sub(" 1 ", s)
+    # erfc / erf and the normal quantile Phi^{-1}: commands the parser reads as function calls
+    s = ERF_NAME.sub(lambda m: "\\" + m.group(1), s)
+    s = PHI_INV.sub(r"\\Phiinv", s)
     # \theta (a + b)^{k}: parse_latex reads theta(...) as a call and raises the call to
     # the power; an explicit product keeps the power on the bracket
     s = GREEK_BRACKET.sub(lambda m: m.group(1) + r" \cdot (", s)
@@ -410,7 +415,10 @@ def _parse(s: str, defs: dict | None = None, depth: int = 0):
         return isinstance(a, AppliedUndef) and (
             (a.func.__name__ == "Gamma" and len(a.args) == 1)
             or (a.func.__name__ == "B" and len(a.args) == 2)
-            or (a.func.__name__ in ("Phi", "phi") and len(a.args) == 1))
+            or (a.func.__name__ in ("Phi", "phi", "erf", "erfc", "Phiinv") and len(a.args) == 1)
+            # N(p): the standard normal quantile (Gilchrist), only of a probability variable
+            or (a.func.__name__ == "N" and len(a.args) == 1 and isinstance(a.args[0], sympy.Symbol)
+                and a.args[0].name in ("p", "u")))
 
     def mapped(a):
         n = a.func.__name__
@@ -420,6 +428,12 @@ def _parse(s: str, defs: dict | None = None, depth: int = 0):
             return sympy.beta(*a.args)
         if n == "phi":                                   # the standard normal density
             return sympy.exp(-a.args[0] ** 2 / 2) / sympy.sqrt(2 * sympy.pi)
+        if n == "erf":
+            return sympy.erf(a.args[0])
+        if n == "erfc":
+            return sympy.erfc(a.args[0])
+        if n in ("Phiinv", "N"):                         # sqrt(2) erfinv(2p - 1)
+            return sympy.sqrt(2) * sympy.erfinv(2 * a.args[0] - 1)
         return (1 + sympy.erf(a.args[0] / sympy.sqrt(2))) / 2
 
     expr = expr.replace(known, mapped)

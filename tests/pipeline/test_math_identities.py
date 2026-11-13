@@ -507,3 +507,15 @@ def test_a_derivative_in_q_is_skipped_not_raised():
     # Ross 11e: q is replaced by 1 - p, which sympy cannot do inside d/dq (ValueError)
     r = I.check_display(r"M(t) = \frac{d}{dq} \left( q^{t} \right)")
     assert r.status in ("skipped", "inconclusive", "passed", "failed")
+
+
+def test_erfc_and_the_inverse_normal_parse():
+    # erfc, and the normal quantile written Phi^{-1}(p) or N(p): sqrt(2) erfinv(2p - 1)
+    r = check(r"F(x) = \frac{1}{2} \operatorname{erfc}\left(-\frac{x - \mu}{\sigma \sqrt{2}}\right)")
+    assert r.status == "passed", (r.status, r.reason)
+    for tex in (r"\mu + \sigma \Phi^{-1}(p)", r"\mu + \sigma N(p)", r"\mu + \sigma \Phi^{-1}\left(p\right)"):
+        e = I._parse(I._clean(tex))
+        assert e is not None, tex
+        names = {s.name: s for s in e.free_symbols}
+        v = complex(e.subs({names["mu"]: 1, names["sigma"]: 2, names["p"]: 0.975}).evalf())
+        assert abs(v.real - (1 + 2 * 1.959963984540054)) < 1e-9, (tex, v)
