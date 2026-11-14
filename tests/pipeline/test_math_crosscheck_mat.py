@@ -386,6 +386,25 @@ def test_real_survival_closed_forms_on_another_support(tmp_path):
         assert r["status"] == want, (r["id"], r["status"], r.get("reason"))
 
 
+def test_real_closed_form_variance_of_a_density_centred_at_zero(tmp_path):
+    # the mean is 0: the variance must not go through the coefficient of variation (sd / mean)
+    py = os.environ.get(C.ENV_VAR)
+    if not py:
+        pytest.skip("set GPDF_SCIPY_PYTHON to a Python with SciPy")
+    parab = {"scipy": "closed_form", "internal_consistency": True, "args": {"a": "a"},
+             "expr": {"pdf": "0.75 * (a ** 2 - x ** 2) / a ** 3", "support": ["-a", "a"]},
+             "points": [{"a": 1.5}, {"a": 0.8}, {"a": 2.0}]}
+    # nor may the quadrature error of a moment that is 0 by symmetry loosen the tolerance (it once did, to 1e287)
+    cases = [("parabolic variance", "p", "var", r"\frac{a^2}{5}", r"\frac{a^2}{3}", {}),
+             ("parabolic mean", "p", "mean", r"0", r"\frac{a}{10}", {}),
+             ("parabolic fourth central moment", "p", "central_moment", r"\frac{3 a^4}{35}", r"\frac{3 a^4}{25}",
+              {"r": 4})]
+    res = run(tmp_path, cases, {"p": parab}, python=py)
+    for r in res.values():
+        want = "failed" if r["id"].endswith("bad") else "passed"
+        assert r["status"] == want, (r["id"], r["status"], r.get("reason"))
+
+
 def test_real_closed_form_outside_its_support_and_at_a_pole(tmp_path):
     # a density with a pole at an end (n < 1): the cdf past the support is 1 and before it 0; the quantile and
     # median are found without evaluating the pole

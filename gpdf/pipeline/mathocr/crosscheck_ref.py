@@ -458,7 +458,9 @@ def _closed_uni(q):
             pts = None
         v, e = integrate.quad(lambda y: g(y) * f(y), u, w, points=pts, epsabs=1e-14, epsrel=1e-12, limit=500)
         err[0] = max(err[0], abs(e) / max(abs(v), 1e-300))
+        aerr[0] = max(aerr[0], abs(e))
         return v
+    aerr = [0.0]
     one = lambda y: 1.0                                                                # noqa: E731
     raw = lambda k: integral(lambda y: y ** k)                                         # noqa: E731
     cdf = lambda v: integral(one, lo, v)                                               # noqa: E731
@@ -499,10 +501,18 @@ def _closed_uni(q):
             for t in range(1, n + 1):
                 kap[t] = m[t] - sum(math.comb(t - 1, u - 1) * kap[u] * m[t - u] for u in range(1, t))
             v = kap[n]
-        else:
-            v = {"mean": mu, "var": var, "sd": math.sqrt(var), "cv": math.sqrt(var) / mu,
-                 "skew": cen(3) / var ** 1.5, "kurt": cen(4) / var ** 2,
-                 "excess_kurt": cen(4) / var ** 2 - 3}[qty]
+        else:                      # only the quantity asked for (cv divides by a mean that may be 0)
+            v = {"mean": lambda: mu, "var": lambda: var, "sd": lambda: math.sqrt(var),
+                 "cv": lambda: math.sqrt(var) / mu, "skew": lambda: cen(3) / var ** 1.5,
+                 "kurt": lambda: cen(4) / var ** 2, "excess_kurt": lambda: cen(4) / var ** 2 - 3}[qty]()
+        # the quadrature error relative to the quantity, not to each moment integral: a moment that is 0 by
+        # symmetry (the mean of a centred density) has no relative error to speak of. A quantity that may itself
+        # be 0 is measured against the scale of its order (m_2^(order/2)); shape ratios against 1.
+        order = {"mean": 1, "var": 2, "sd": 1}.get(qty, n if qty in ("raw_moment", "central_moment", "cumulant")
+                                                    else 0)
+        scale = abs(m[2]) ** (order / 2) if order else 1.0
+        out["tol_floor"] = aerr[0] / max(abs(v), scale, 1e-300)
+        err[0] = 0.0
     elif qty in ("mgf", "cgf", "laplace", "pgf"):
         g = {"mgf": lambda y: math.exp(x * y), "cgf": lambda y: math.exp(x * y),
              "laplace": lambda y: math.exp(-x * y), "pgf": lambda y: x ** y}[qty]
