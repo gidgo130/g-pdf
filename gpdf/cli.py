@@ -47,7 +47,7 @@
     gpdf-cli math-crosscheck --spec FILE --out DIR [--scipy-python PATH] [--formulas FILE]
                                                     # transcribed formulas against SciPy
                                                     # through the book's parametrisation
-    gpdf-cli math-watch --log FILE [--watch PATH ...] [--stall S] -- CMD ...
+    gpdf-cli math-watch --log FILE [--watch PATH ...] [--stall S] [--eta-log FILE --every S] -- CMD ...
                                                     # run a long step, stop it when its log
                                                     # and cache stop growing (exit code 3)
                                                     # score a transcription against a reference
@@ -606,6 +606,14 @@ def build_parser() -> argparse.ArgumentParser:
     mw.add_argument("--step", default="", help="the step's name in the heartbeat")
     mw.add_argument("--poll", type=float, default=15.0, metavar="SECONDS",
                     help=argparse.SUPPRESS)
+    mw.add_argument("--eta-log", type=Path, metavar="FILE",
+                    help="append a stamped line of timing and counts (pages done of total, last "
+                         "heartbeat age, a rate from awake time) every --every seconds, a note "
+                         "'sleep/pause Xm' when the clock jumps, and a last line when the step ends")
+    mw.add_argument("--every", type=float, default=600.0, metavar="SECONDS",
+                    help="seconds between ETA lines (default 600)")
+    mw.add_argument("--stop-file", type=Path, metavar="FILE",
+                    help="when this file exists the ETA lines stop (the step goes on)")
     mw.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- CMD ...")
     return p
 
@@ -636,7 +644,8 @@ def _math_watch_main(args, parser) -> int:
     if not cmd:
         parser.error("math-watch needs the command after --")
     r = watch.run_watched(cmd, args.watch, args.log, args.heartbeat, stall=args.stall,
-                          poll=args.poll, step=args.step)
+                          poll=args.poll, step=args.step, eta_log=args.eta_log,
+                          eta_every=args.every, stop_file=args.stop_file)
     print(f"{args.step or 'step'}: {r.status} after {r.seconds:.0f} s"
           + (f" ({r.reason})" if r.reason else ""))
     if r.status == "stalled":

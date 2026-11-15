@@ -12,7 +12,9 @@ Two tools, both made after Batch B-2's j21b hang (an identity check stuck inside
   the step (with its child processes) when its log, its watched paths (cache folders) and
   any files they hold stop growing for ``stall`` seconds. The result says ``done``,
   ``failed`` or ``stalled`` with the reason, so a driver can mark the step ``retry_later``
-  and move on instead of waiting.
+  and move on instead of waiting. With ``eta_log`` it also appends a line of timing and
+  counts (pages done of total, age of the last heartbeat, a rate from awake time) every
+  ``eta_every`` seconds, and notes a sleep or pause when the clock jumps.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -120,6 +123,85 @@ def _kill_tree(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
+# ---------------------------------------------------------------- the ETA timer
+
+PAGES_RE = re.compile(r"(\d+)/(\d+) pages")
+SLEEP_GAP = 120.0          # seconds a tick may be late before it is a sleep or pause
+ETA_EVERY = 600.0
+
+
+class EtaLog:
+    """Appends one stamped line per ``tick``: pages done of total, the age of the last
+    heartbeat, a rate from awake time and an estimate. Awake time is the elapsed wall time
+    less the sleeps and pauses: a tick later than ``every`` + 2 minutes means the machine
+    slept (the excess is noted as ``sleep/pause Xm`` and left out). Counts and timing only,
+    never page text. ``now`` is the clock (seconds), replaceable for tests."""
+
+    def __init__(self, path: Path, every: float = ETA_EVERY, step: str = "", now=time.time):
+        self.path, self.every, self.step, self.now = Path(path), every, step, now
+        self.t0 = self.last = now()
+        self.paused = 0.0
+        self.first = None              # (done, awake seconds) of the first count seen
+
+    def awake(self) -> float:
+        return self.now() - self.t0 - self.paused
+
+    def tick(self, done: int | None, total: int | None, beat_age: float | None,
+             ended: str = "") -> str:
+        now = self.now()
+        gap = now - self.last - self.every
+        note = ""
+        if not ended and gap > SLEEP_GAP:
+            self.paused += gap
+            note = f"; sleep/pause {round(gap / 60)}m"
+        self.last = now
+        awake = self.awake()
+        parts = [f"step {self.step or '-'}"]
+        if done is not None and total:
+            parts.append(f"pages {done}/{total} ({100 * done / total:.0f}%)")
+            if self.first is None:
+                self.first = (done, awake)
+            d, a = done - self.first[0], awake - self.first[1]
+            if d > 0 and a > 0:
+                rate = d / (a / 60)
+                parts.append(f"rate {rate:.1f} pages/awake-min")
+                parts.append(f"ETA ~{(total - done) / rate:.0f} min awake")
+        else:
+            parts.append("pages ?")
+        parts.append("last heartbeat " + (f"{beat_age:.0f} s ago" if beat_age is not None else "?"))
+        parts.append(f"awake {awake / 60:.0f} min")
+        line = (datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M") + " " + ", ".join(parts)
+                + note + (f"; ended: {ended}" if ended else ""))
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+        return line
+
+
+def _progress(log: Path, watch: list[Path]) -> tuple[int | None, int | None]:
+    """(pages done, total) from a watched JSON file with done/total (or pages_done/pages_total)
+    keys, else from the last "N/M pages" line at the end of the log; None when unknown."""
+    for p in watch:
+        try:
+            if p.is_file() and p.suffix == ".json":
+                d = json.loads(p.read_text("utf-8"))
+                if isinstance(d, dict):
+                    done, total = d.get("done", d.get("pages_done")), d.get("total", d.get("pages_total"))
+                    if isinstance(done, int) and isinstance(total, int):
+                        return done, total
+        except (OSError, ValueError):
+            continue
+    try:
+        with open(log, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 8192))
+            tail = f.read().decode("utf-8", "replace")
+    except OSError:
+        return None, None
+    m = PAGES_RE.findall(tail)
+    return (int(m[-1][0]), int(m[-1][1])) if m else (None, None)
+
+
 @dataclass
 class WatchResult:
     status: str               # done | failed | stalled
@@ -143,11 +225,23 @@ def _beat(path: Path | None, data: dict) -> None:
 
 def run_watched(cmd: list[str], watch: list[Path], log: Path, heartbeat: Path | None = None,
                 stall: float = STALL_STEP, poll: float = 15.0, step: str = "",
-                env: dict | None = None) -> WatchResult:
-    """Run ``cmd`` (stdout and stderr to ``log``) until it ends or stalls."""
+                env: dict | None = None, eta_log: Path | None = None,
+                eta_every: float = ETA_EVERY, stop_file: Path | None = None) -> WatchResult:
+    """Run ``cmd`` (stdout and stderr to ``log``) until it ends or stalls. With ``eta_log``,
+    an ETA line every ``eta_every`` seconds (and one when the step ends), until ``stop_file``
+    exists: then the lines stop (the step and its stall watch go on)."""
     log = Path(log)
     log.parent.mkdir(parents=True, exist_ok=True)
     paths = [log] + [Path(p) for p in watch]
+    eta = EtaLog(eta_log, eta_every, step) if eta_log else None
+
+    def eta_line(ended: str = "") -> None:
+        if eta is None or (stop_file is not None and Path(stop_file).exists()):
+            return
+        done, total = _progress(log, [Path(p) for p in watch])
+        newest = _signature(paths)[2]
+        eta.tick(done, total, max(0.0, time.time() - newest) if newest else None, ended)
+
     t0 = time.monotonic()
     started = datetime.now().isoformat(timespec="seconds")
     kw = {"start_new_session": True} if os.name != "nt" else {}
@@ -167,6 +261,8 @@ def run_watched(cmd: list[str], watch: list[Path], log: Path, heartbeat: Path | 
             if s != sig:
                 sig, grew = s, now
             idle = now - grew
+            if eta is not None and time.time() - eta.last >= eta.every:
+                eta_line()
             _beat(heartbeat, {**info, "beat": datetime.now().isoformat(timespec="seconds"),
                               "idle_seconds": round(idle, 1), "bytes": s[0], "files": s[1]})
             if idle >= stall:
@@ -175,10 +271,12 @@ def run_watched(cmd: list[str], watch: list[Path], log: Path, heartbeat: Path | 
                           f"(stopped after {now - t0:.0f} s)")
                 _beat(heartbeat, {**info, "status": "stalled", "reason": reason,
                                   "ended": datetime.now().isoformat(timespec="seconds")})
+                eta_line("stalled")
                 return WatchResult("stalled", None, reason, round(now - t0, 1))
     rc = proc.returncode
     status = "done" if rc == 0 else "failed"
     reason = "" if rc == 0 else f"exit code {rc}"
+    eta_line(status)
     _beat(heartbeat, {**info, "status": status, "returncode": rc, "reason": reason,
                       "ended": datetime.now().isoformat(timespec="seconds")})
     return WatchResult(status, rc, reason, round(time.monotonic() - t0, 1))

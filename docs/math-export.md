@@ -151,6 +151,14 @@ its own 5 s deadline: the deadline is read only between function evaluations, th
 limit interrupts whatever the check is doing (Batch B-2's j21b check sat inside mpmath for
 7.5 hours).
 
+**ETA timer.** `math-watch --eta-log FILE [--every 600] [--stop-file FILE]` also appends one
+stamped line to FILE every `--every` seconds (and one when the step ends): pages done of total
+(from a watched JSON file with `done`/`total`, else the last `N/M pages` line of the log), the
+age of the last heartbeat, a rate from awake time and the estimate. A tick later than the
+interval by more than 2 minutes is a sleep or pause: the line says `sleep/pause Xm` and the
+excess is left out of the awake time. The lines hold timing and counts only, no page text.
+When `--stop-file` exists the lines stop (the step and its stall watch go on).
+
 Time on the trial machine (RTX 4060 laptop, 8 GB): about 7 s per page for the
 standard tier and 6 s for the basic one, plus about a minute of model loading
 per tier. Raw engine output is cached per page under `OUT/<stem>/cache/`, keyed
