@@ -27,7 +27,9 @@ from gpdf.pipeline.manuals import ManualsError, parse_pages, write_atomic
 from gpdf.pipeline.mathocr import align
 from gpdf.pipeline.mathocr import latex as L
 
-MARKER_RE = re.compile(r'<!-- page printed="([^"]*)" file="(\d+)" -->')
+MARKER_RE = re.compile(r'<!-- page printed="([^"]*)" file="(\d+)" -->'
+                       r'|<!-- page printed="([^"]*)" file="(\d*)" src="([^"]+)" -->')
+FILE_STEM = re.compile(r"p\d+")          # a file page's key (a supplementary page's key holds "#")
 SPLIT_NOTE = re.compile(r"continu|split|reopen", re.I)
 KIND_OF_REASON = [("tiers disagree", "disagree"), ("no second reading", "disagree"),
                   ("style differs", "style"), ("both bold", "style"),
@@ -61,12 +63,26 @@ class ScoreError(Exception):
 
 # ---------------------------------------------------------------- loading
 
+def marker_printed(m: re.Match) -> str:
+    """The printed number of a MARKER_RE match (either form)."""
+    return m.group(1) if m.group(1) is not None else m.group(3)
+
+
+def page_stem(m: re.Match) -> str:
+    """A page's key: pNNN for a file page; for a page from a supplementary source (a `src`
+    attribute naming an image or a sub-PDF) "<src>#" with an empty file, else "<src>#pNNN"
+    with the page number within that source."""
+    if m.group(2) is not None:
+        return f"p{int(m.group(2)):03d}"
+    return f"{m.group(5)}#" + (f"p{int(m.group(4)):03d}" if m.group(4) else "")
+
+
 def _pages_from_text(text: str) -> dict[str, str]:
     out = {}
     marks = list(MARKER_RE.finditer(text))
     for k, m in enumerate(marks):
         end = marks[k + 1].start() if k + 1 < len(marks) else len(text)
-        out[f"p{int(m.group(2)):03d}"] = text[m.start():end].rstrip("\n") + "\n"
+        out[page_stem(m)] = text[m.start():end].rstrip("\n") + "\n"
     return out
 
 
@@ -135,10 +151,10 @@ def load_units(mds: dict[str, str], flags: dict[str, list],
         m = MARKER_RE.search(md)
         units[stem] = {"items": items, "inline": [L.norm_str(L.tokens(x)) for x in inline],
                        "prose": L.prose_norm(prose), "md": md,
-                       "printed": m.group(1) if m else None, "flags": flags.get(stem, [])}
+                       "printed": marker_printed(m) if m else None, "flags": flags.get(stem, [])}
     stems = sorted(units)
     for a, b in zip(stems, stems[1:]):
-        if int(b[1:]) == int(a[1:]) + 1 and b in links:
+        if FILE_STEM.fullmatch(a) and FILE_STEM.fullmatch(b) and int(b[1:]) == int(a[1:]) + 1 and b in links:
             ia, ib = units[a]["items"], units[b]["items"]
             if ia and ib and ia[-1]["tag"] is None and units[b]["md"].split("\n", 1)[1:] \
                     and units[b]["md"].split("\n", 1)[1].lstrip("\n").startswith("$$"):

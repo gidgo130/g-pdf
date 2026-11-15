@@ -142,7 +142,8 @@ def load_pages(src) -> dict[int, str]:
         mds, _, _ = read_pages(src)
     except ScoreError as e:
         raise CrosscheckError(str(e)) from None
-    return {int(k[1:]): v for k, v in mds.items()}
+    # entries address file pages; pages from a supplementary source (a `src` marker) are left out
+    return {int(k[1:]): v for k, v in mds.items() if "#" not in k}
 
 
 def _displays(md: str) -> list[tuple[str, str | None]]:

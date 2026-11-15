@@ -731,6 +731,14 @@ eats its backslash and first letter (`oldsymbol`, `heta`, `rac{`, `arepsilon`, `
 counts by kind and the pages; `--out` lists each problem with its formula. Exit code 2 when
 there are problems. Run it on a reference before scoring against it.
 
+**Pages without a file number.** A page that is not a page of the source file (a supplementary
+page image, or a page of one of several PDFs gathered in one deliverable) carries a `src`
+attribute after `file`: `<!-- page printed="64" file="" src="book-p064.png" -->` for an image,
+`<!-- page printed="" file="2" src="chart.pdf" -->` for page 2 of `chart.pdf`. Such a marker
+starts its own page, keyed by (src, file) as `book-p064.png#` or `chart.pdf#p002` in reports;
+markers without `src` behave as before (a `file=""` marker without `src` is not a page marker).
+math-score reads them the same way; math-crosscheck addresses file pages only and leaves them out.
+
 ## Tests
 
 `tests/pipeline/test_math_*.py` use hand-written fake engine outputs of our own

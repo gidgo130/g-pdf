@@ -107,3 +107,55 @@ def test_control_characters_and_orphaned_escape_fragments(tmp_path):
     assert res["counts"]["escape_fragment"] == 4
     assert check.check_md("x \x0c y")[0][0] == "control_character"
     assert check.check_md(GOOD) == []
+
+
+# ---------------------------------------------------------------- pages without a file number
+# A page marker with a `src` attribute names a supplementary image (file="") or a sub-PDF (file=
+# the page within that PDF); such a marker starts its own page, keyed by (src, file).
+
+SRC_TEXT = (GOOD
+            + '\n<!-- page printed="64" file="" src="book-p064-hi.png" -->\n\n$$\n\\frac{a}{b\n$$\n'
+            + '\n<!-- page printed="65" file="" src="book-p065-hi.png" -->\n\nText \\(y\\).\n'
+            + '\n<!-- page printed="" file="2" src="chart-a.pdf" -->\n\n$$\n\\left( a\n$$\n'
+            + '\n<!-- page printed="" file="2" src="chart-b.pdf" -->\n\nPlain.\n'
+            + '\n<!-- page printed="11" file="11" -->\n\nNo problem here.\n')
+
+
+def test_a_src_marker_starts_its_own_page_keyed_by_src_and_file(tmp_path):
+    text = tmp_path / "text.md"
+    text.write_text(SRC_TEXT, "utf-8")
+    res = check.check_pages(text)
+    assert res["pages"] == 6
+    pages = {p["page"] for p in res["problems"]}
+    # the problem on the image page and on the sub-PDF page are theirs, not file 10's
+    assert kinds(res) == [("book-p064-hi.png#", "braces"), ("chart-a.pdf#p002", "left_right")]
+    assert "p010" not in pages
+
+
+def test_markers_without_src_behave_as_before(tmp_path):
+    from gpdf.pipeline.mathocr.score import _pages_from_text
+
+    # a marker with an empty file and no src is not a page marker (its text stays in the page before)
+    old = GOOD + '\n<!-- page printed="64" file="" image="x.png" -->\n\n$$\n\\frac{a}{b\n$$\n'
+    mds = _pages_from_text(old)
+    assert list(mds) == ["p010"] and "x.png" in mds["p010"]
+    text = tmp_path / "text.md"
+    text.write_text(old, "utf-8")
+    res = check.check_pages(text)
+    assert res["pages"] == 1 and kinds(res) == [("p010", "braces")]
+
+
+def test_src_pages_can_be_scored_and_cross_checked_without_error(tmp_path):
+    from gpdf.pipeline.mathocr import score
+
+    text = tmp_path / "text.md"
+    text.write_text(SRC_TEXT, "utf-8")
+    mds, flags, _ = score.read_pages(text)
+    assert set(mds) == {"p010", "book-p064-hi.png#", "book-p065-hi.png#", "chart-a.pdf#p002",
+                        "chart-b.pdf#p002", "p011"}
+    units = score.load_units(mds, flags)
+    assert units["book-p064-hi.png#"]["printed"] == "64"
+    from gpdf.pipeline.mathocr import crosscheck
+
+    # cross-check entries address file pages: the supplementary pages are left out, the file pages kept
+    assert sorted(crosscheck.load_pages(text)) == [10, 11]
