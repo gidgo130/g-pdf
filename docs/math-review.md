@@ -58,6 +58,10 @@ When a book's inline items are reviewed whole (`--kinds ...,inline,inline_missin
 accepts every span (the decision names them, so provenance counts them reviewed); `math-decide KEY
 replace --span-file work\SPAN.tex [--occurrence N] --latex-file work\NEW.tex --reason ...` replaces
 one span, and further replaces of the same key add their spans to the same decision.
+`math-decide KEY accept --span ... [--occurrence N]` accepts only that span. Decisions are per span: a
+new accept or replace of one span keeps the spans already decided, and `--withdraw --span ...
+[--occurrence N]` removes one span's decision and leaves the others. A decision without `--span` still
+applies to every span of the item.
 `math-decide KEY flag --span ... [--span ...] [--occurrence N ...]` names the flagged spans
 (`"spans": [{"latex_primary", "occurrence"}]`): math-apply-review writes one flag per span
 with its current LaTeX, so provenance ties each to its span; a flag naming no span stays

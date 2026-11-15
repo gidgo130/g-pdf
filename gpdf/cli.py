@@ -1160,8 +1160,14 @@ def _math_decide_main(args) -> int:
                 print("gpdf-cli: error: --withdraw takes no action (accept, replace, flag); "
                       "use --withdraw accept|replace|flag", file=sys.stderr)
                 return EXIT_ERROR
-            gone = decide.withdraw(args.batch, args.key, args.withdraw)
-            print(f"{args.key}: {', '.join(x['action'] for x in gone)} withdrawn")
+            wspan = args.span[0] if args.span else None
+            if args.span_file and wspan is None:
+                sf = args.span_file[0]
+                wspan = (sf if sf.is_absolute() or sf.exists() else args.batch / sf).read_text("utf-8-sig").strip()
+            gone = decide.withdraw(args.batch, args.key, args.withdraw, wspan,
+                                   (args.occurrence or [None])[0])
+            print(f"{args.key}: {', '.join(x['action'] for x in gone)} withdrawn"
+                  + (" (one span)" if wspan is not None else ""))
             return EXIT_OK
         if args.action is None:
             raise decide.DecideError("give the action: accept, replace or flag")

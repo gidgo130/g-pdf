@@ -9,6 +9,8 @@ place) and writes the decision with ``json.dumps`` to the batch's decisions file
 ``<review dir>/decisions/<batch>.jsonl``. Each decision carries the item's ``key``. One
 accept-or-replace and one flag are kept per key: deciding a key again replaces the
 earlier decision of that kind, so running the same call twice changes nothing.
+A page inline item is decided per span: ``accept --span`` / ``replace --span`` add that span
+to the key's decision and keep the spans already decided; ``--withdraw --span`` removes one.
 """
 
 from __future__ import annotations
@@ -65,8 +67,8 @@ def decide(batch, key: str, action: str, *, latex: str | None = None,
         raise DecideError(f"action must be one of {', '.join(ACTIONS)}")
     spans = [span] if isinstance(span, str) else list(span or [])
     occs = [occurrence] if isinstance(occurrence, int) else list(occurrence or [])
-    if spans and not (it["kind"] == "inline" and action in ("replace", "flag")):
-        raise DecideError("--span goes with a replace or flag of a page inline item")
+    if spans and not (it["kind"] == "inline" and action in ("accept", "replace", "flag")):
+        raise DecideError("--span goes with an accept, replace or flag of a page inline item")
     if action == "replace":
         if len(spans) > 1 or len(occs) > 1:
             raise DecideError("a replace names one --span (and one --occurrence)")
@@ -86,7 +88,11 @@ def decide(batch, key: str, action: str, *, latex: str | None = None,
         d.update(flag_type=flag_type, **({"subtype": subtype} if subtype else {}), note=note.strip(),
                  reason=(reason or note).strip())
     elif action == "accept":
-        if it["kind"] == "inline_span":
+        if spans:                             # one page span: its siblings keep their decisions
+            d["spans"] = [{**x, "latex": x["latex_primary"]} for x in _flag_spans(it, spans, occs)["spans"]]
+        elif occs:
+            raise DecideError("--occurrence needs the --span it belongs to")
+        elif it["kind"] == "inline_span":
             d["spans"] = [{"latex_primary": it["latex_primary"], "latex": it["latex_primary"],
                            "occurrence": it.get("occurrence")}]
         elif it["kind"] == "inline":          # a page's grouped spans: all of them accepted
@@ -107,7 +113,7 @@ def decide(batch, key: str, action: str, *, latex: str | None = None,
         d["reason"] = reason.strip()
     if structure_change:
         d["structure_change"] = True
-    return _write(batch, order, d, it)
+    return _write(batch, order, d, it, partial=bool(spans) and action == "accept")
 
 
 def _flag_spans(it: dict, spans: list[str], occs: list[int]) -> dict:
@@ -199,9 +205,25 @@ def _replace(it, latex, page_text, after, run_text, occurrence, structure_change
     return out
 
 
-def _merge(it: dict, d: dict, prev: dict | None) -> dict:
-    """A page inline item's replaces accumulate their spans (with the unchanged spans whose
-    place is known, so the item counts as reviewed), an inline_missing item's its runs."""
+def _action_of(spans: list[dict]) -> str:
+    """A page item's decision: a replace when any span's LaTeX changed, else an accept."""
+    return "replace" if any(x.get("latex") != x.get("latex_primary") for x in spans) else "accept"
+
+
+def _merge(it: dict, d: dict, prev: dict | None, partial: bool = False) -> dict:
+    """A page inline item's decisions accumulate their spans: every span an earlier accept or
+    replace of the key named stays; a replace also takes the item's other spans whose place is
+    known as unchanged, so the item counts as reviewed (a ``partial`` accept of named spans
+    takes none). An inline_missing item's replaces accumulate their runs."""
+    if partial and it["kind"] == "inline":
+        spans = {(x["latex_primary"], x.get("occurrence")): dict(x)
+                 for x in (prev or {}).get("spans") or [] if prev.get("action") != "flag"}
+        for x in d["spans"]:
+            spans.pop((x["latex_primary"], None), None)
+            spans[(x["latex_primary"], x["occurrence"])] = dict(x)
+        out = list(spans.values())
+        return {**(prev if prev and prev.get("action") != "flag" else {}), **d,
+                "action": _action_of(out), "spans": out}
     if d.get("action") != "replace":
         return d
     if it["kind"] == "inline":
@@ -212,7 +234,7 @@ def _merge(it: dict, d: dict, prev: dict | None) -> dict:
                     latex_primary=x["latex_primary"], latex=x["latex_primary"],
                     occurrence=x["occurrence"])
         for x in (prev or {}).get("spans") or []:
-            if prev.get("action") == "replace" or x.get("occurrence") is not None:
+            if prev.get("action") != "flag":
                 spans[(x["latex_primary"], x.get("occurrence"))] = dict(x)
         for x in d["spans"]:
             spans.pop((x["latex_primary"], None), None)
@@ -226,14 +248,14 @@ def _merge(it: dict, d: dict, prev: dict | None) -> dict:
     return d
 
 
-def _write(batch: Path, order: dict, d: dict, it: dict | None = None) -> dict:
+def _write(batch: Path, order: dict, d: dict, it: dict | None = None, partial: bool = False) -> dict:
     path = decisions_path(batch)
     path.parent.mkdir(parents=True, exist_ok=True)
     old = ([json.loads(s) for s in path.read_text("utf-8").splitlines() if s.strip()]
            if path.is_file() else [])
     if it is not None:
         prev = next((x for x in old if (x.get("key"), _slot(x)) == (d["key"], _slot(d))), None)
-        d = _merge(it, d, prev)
+        d = _merge(it, d, prev, partial)
     keep = [x for x in old if (x.get("key"), _slot(x)) != (d["key"], _slot(d))] + [d]
     keep.sort(key=lambda x: (order.get(x.get("key"), len(order)), _slot(x) == "flag"))
     write_atomic(path, "".join(json.dumps(x, ensure_ascii=False) + "\n" for x in keep))
@@ -243,9 +265,12 @@ def _write(batch: Path, order: dict, d: dict, it: dict | None = None) -> dict:
 WITHDRAW = ("all", "accept", "replace", "flag")
 
 
-def withdraw(batch, key: str, what: str = "all") -> list[dict]:
+def withdraw(batch, key: str, what: str = "all", span: str | None = None,
+             occurrence: int | None = None) -> list[dict]:
     """Remove KEY's decisions of one kind (accept, replace, flag) or all of them; returns
-    the decisions removed. Nothing to remove is a refusal, so a typo can't pass silently."""
+    the decisions removed. With ``span`` (and ``occurrence``): only that span of a page
+    inline item's decisions; a decision left with no span is removed, otherwise it is kept
+    with the other spans. Nothing to remove is a refusal, so a typo can't pass silently."""
     batch = Path(batch).resolve()
     items = _items(batch)
     order = {it["key"]: n for n, it in enumerate(items)}
@@ -257,11 +282,37 @@ def withdraw(batch, key: str, what: str = "all") -> list[dict]:
     old = ([json.loads(s) for s in path.read_text("utf-8").splitlines() if s.strip()]
            if path.is_file() else [])
     gone = [x for x in old if x.get("key") == key and what in ("all", x.get("action"))]
-    if not gone:
-        raise DecideError(f"no {'decision' if what == 'all' else what} of {key} to withdraw")
-    write_atomic(path, "".join(json.dumps(x, ensure_ascii=False) + "\n"
-                               for x in old if not any(x is g for g in gone)))
-    return gone
+    if span is None:
+        if occurrence is not None:
+            raise DecideError("--occurrence needs the --span it belongs to")
+        if not gone:
+            raise DecideError(f"no {'decision' if what == 'all' else what} of {key} to withdraw")
+        write_atomic(path, "".join(json.dumps(x, ensure_ascii=False) + "\n"
+                                   for x in old if not any(x is g for g in gone)))
+        return gone
+    if items[order[key]]["kind"] != "inline":
+        raise DecideError("--span goes with a page inline item")
+    removed, new = [], []
+    for x in old:
+        if not any(x is g for g in gone) or not x.get("spans"):
+            new.append(x)
+            continue
+        hit = [s for s in x["spans"] if _norm(s["latex_primary"]) == _norm(span)
+               and (occurrence is None or s.get("occurrence") == occurrence)]
+        if len(hit) > 1:
+            raise DecideError(f"{len(hit)} spans match: pass --occurrence N")
+        if not hit:
+            new.append(x)
+            continue
+        left = [s for s in x["spans"] if s is not hit[0]]
+        removed.append({**x, "spans": hit})
+        if left:
+            new.append({**x, "spans": left,
+                        **({"action": _action_of(left)} if x.get("action") != "flag" else {})})
+    if not removed:
+        raise DecideError(f"no span {span!r} of {key} to withdraw")
+    write_atomic(path, "".join(json.dumps(x, ensure_ascii=False) + "\n" for x in new))
+    return removed
 
 
 def status(batch) -> dict:

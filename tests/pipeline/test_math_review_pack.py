@@ -503,8 +503,12 @@ def test_decide_flags_named_spans_of_a_page_inline_item_and_they_apply_tied(expo
                           {"latex_primary": "b", "occurrence": 2}]
     with pytest.raises(decide.DecideError, match="one --span"):
         decide.decide(b, "p001-inline", "replace", span=["a_1", "b"], latex="x", reason="r")
+    with pytest.raises(decide.DecideError, match="not one of the item"):    # an accept names spans too
+        decide.decide(out / "batch01", "p001-inline", "accept", span=["z"])
+    out2 = tmp_path / "rev2"
+    pack.pack(export, out2, kinds=("disagree", "style", "syntax"), inline_sample=0)
     with pytest.raises(decide.DecideError, match="--span goes with"):
-        decide.decide(out / "batch01", "p001-inline", "accept", span=["a_1"])
+        decide.decide(out2 / "batch01", "p001-d01", "accept", span=["x"])
     rep = review.apply(export, out / "decisions" / "batch01.jsonl")
     assert rep.refused == [] and rep.untied == []
     fl = [f for f in json.loads((export / "pages" / "p001.flags.json").read_text("utf-8"))
@@ -556,3 +560,87 @@ def test_the_brief_tells_reviewers_to_name_the_flagged_spans(export, tmp_path):
     pack.pack(export, out, kinds=("inline",), inline_sample=0)
     brief = (out / "batch01" / "BRIEF.md").read_text("utf-8")
     assert "flag --span-file" in brief and "name the span" in brief
+
+
+# decisions per span (a page inline item): deciding one span keeps the decisions of the others
+
+def _spans_of(d):
+    return {(s["latex_primary"], s.get("occurrence")): s["latex"] for s in d["spans"]}
+
+
+def test_decide_accept_of_one_span_names_only_that_span(export, tmp_path):
+    from gpdf.pipeline.mathocr import decide
+    out = tmp_path / "rev"
+    pack.pack(export, out, kinds=("inline",), inline_sample=0)
+    b = out / "batch01"
+    with pytest.raises(decide.DecideError, match="occurrence"):
+        decide.decide(b, "p001-inline", "accept", span="b")        # b occurs twice: which one?
+    d = decide.decide(b, "p001-inline", "accept", span="b", occurrence=1)
+    assert d["action"] == "accept" and _spans_of(d) == {("b", 1): "b"}
+
+
+def test_a_span_accepted_and_a_sibling_replaced_are_both_kept(export, tmp_path):
+    from gpdf.pipeline.mathocr import decide
+    out = tmp_path / "rev"
+    pack.pack(export, out, kinds=("inline",), inline_sample=0)
+    b = out / "batch01"
+    decide.decide(b, "p001-inline", "accept", span="b", occurrence=1)
+    d = decide.decide(b, "p001-inline", "replace", span="b", occurrence=2, latex="B", reason="bold")
+    assert d["action"] == "replace"
+    assert _spans_of(d)[("b", 1)] == "b" and _spans_of(d)[("b", 2)] == "B"
+    assert len(lines(out / "decisions" / "batch01.jsonl")) == 1
+    # the other way round: a replaced span stays when a sibling is accepted afterwards
+    d = decide.decide(b, "p001-inline", "accept", span="a_1")
+    assert _spans_of(d)[("b", 2)] == "B" and ("a_1", 1) in _spans_of(d) and d["action"] == "replace"
+
+
+def test_withdrawing_one_span_leaves_the_other(export, tmp_path):
+    from gpdf.pipeline.mathocr import decide
+    out = tmp_path / "rev"
+    pack.pack(export, out, kinds=("inline",), inline_sample=0)
+    b = out / "batch01"
+    decide.decide(b, "p001-inline", "accept", span="b", occurrence=1)
+    decide.decide(b, "p001-inline", "replace", span="b", occurrence=2, latex="B", reason="bold")
+    gone = decide.withdraw(b, "p001-inline", "all", span="b", occurrence=2)
+    assert [(s["latex_primary"], s["occurrence"]) for g in gone for s in g["spans"]] == [("b", 2)]
+    (d,) = lines(out / "decisions" / "batch01.jsonl")
+    assert ("b", 2) not in _spans_of(d) and _spans_of(d)[("b", 1)] == "b"
+    with pytest.raises(decide.DecideError, match="no span"):
+        decide.withdraw(b, "p001-inline", "all", span="b", occurrence=2)
+    for s, o in (("b", 1), ("a_1", 1)):
+        try:
+            decide.withdraw(b, "p001-inline", "all", span=s, occurrence=o)
+        except decide.DecideError:
+            pass
+    assert lines(out / "decisions" / "batch01.jsonl") == []            # no span left: no record
+
+
+def test_an_old_single_decision_file_gives_the_same_records_as_before(export, tmp_path):
+    from gpdf.pipeline.mathocr import decide
+    out = tmp_path / "rev"
+    pack.pack(export, out, kinds=("inline",), inline_sample=0)
+    b = out / "batch01"
+    old = {"key": "p001-inline", "id": "p001-inline", "action": "replace", "reason": "printed a_2",
+           "spans": [{"latex_primary": "a_1", "latex": "a_2", "occurrence": 1}]}
+    path = out / "decisions" / "batch01.jsonl"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(old) + "\n", "utf-8")
+    d = decide.decide(b, "p001-inline", "replace", span="b", occurrence=2, latex="B", reason="bold")
+    assert {(s["latex_primary"], s["latex"], s["occurrence"]) for s in d["spans"]} == {
+        ("a_1", "a_2", 1), ("b", "B", 2)}
+    # a decision without a span still applies to every span of the item
+    d = decide.decide(b, "p002-inline", "accept")
+    assert [(s["latex_primary"], s["latex"]) for s in d["spans"]] == [("c", "c"), ("d", "d")]
+
+
+def test_cli_withdraw_takes_a_span(export, tmp_path, capsys):
+    out = tmp_path / "rev"
+    pack.pack(export, out, kinds=("inline",), inline_sample=0)
+    b = out / "batch01"
+    assert cli.main(["math-decide", "--batch", str(b), "p001-inline", "accept", "--span", "b",
+                     "--occurrence", "1"]) == 0
+    assert cli.main(["math-decide", "--batch", str(b), "p001-inline", "accept", "--span", "a_1"]) == 0
+    assert cli.main(["math-decide", "--batch", str(b), "p001-inline", "--withdraw", "--span", "b",
+                     "--occurrence", "1"]) == 0
+    (d,) = lines(out / "decisions" / "batch01.jsonl")
+    assert [s["latex_primary"] for s in d["spans"]] == ["a_1"]
