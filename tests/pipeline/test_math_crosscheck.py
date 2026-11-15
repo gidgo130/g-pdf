@@ -312,6 +312,21 @@ def test_piecewise_branches_and_row_conditions(tmp_path):
     assert len(by_id(plain)["m"]["points"]) == 3
 
 
+def test_condition_keeps_a_parenthesis_that_closes_inside_it():
+    # a condition ending in a parenthesised term (0 < u < a/(a + b)) is read whole; only a pair of
+    # parentheses around the whole condition is dropped (a lost ")" made it unreadable, and an
+    # unreadable condition counts as none, so the first branch took every point)
+    t = C.condition("0 < u < a / (a + b)")
+    assert t not in (None, "unknown", "else")
+    assert C.holds(t, {"a": 3.0, "b": 1.2, "u": 0.5}) is True        # a/(a + b) = 0.714
+    assert C.holds(t, {"a": 3.0, "b": 1.2, "u": 0.9}) is False
+    t = C.condition("(a) < x < (b)")
+    assert C.holds(t, {"a": 0.0, "b": 1.0, "x": 0.5}) is True
+    assert C.holds(t, {"a": 0.0, "b": 1.0, "x": 1.5}) is False
+    t = C.condition("(x > 0)")
+    assert C.holds(t, {"x": 1.0}) is True and C.holds(t, {"x": -1.0}) is False
+
+
 def _val(tex, **vals):
     expr = C.book_expr(tex)
     assert expr is not None, tex

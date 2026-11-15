@@ -433,15 +433,29 @@ def piecewise(latex: str) -> tuple[str, list[tuple[str, str]]] | None:
     return (head[0].strip(), out) if len(out) >= 2 else None
 
 
+def _unwrap(s: str) -> str:
+    """s without parentheses around the whole of it (only a pair that matches: "(a) < x < (b)"
+    and "u < a/(a + b)" keep theirs)."""
+    s = s.strip()
+    while s.startswith("(") and s.endswith(")"):
+        depth = 0
+        for i, ch in enumerate(s):
+            depth += {"(": 1, ")": -1}.get(ch, 0)
+            if depth == 0:
+                break
+        if i != len(s) - 1:
+            break
+        s = s[1:-1].strip()
+    return s
+
+
 def condition(text: str, defs=None):
     """A side condition read for evaluation: None (none), "else" (otherwise), "unknown"
     (cannot be read: kept as no condition), or a list of tests, each ("chain", sides,
     relations) or ("parity", expr, "even" | "odd"), all of which must hold."""
     s = TEXT_CMD.sub(r" \1 ", text or "")
     from gpdf.pipeline.mathocr import identities as I
-    s = COND_WORDS.sub(" , ", I._clean(s)).strip().strip(".,;").strip()
-    if s.startswith("(") and s.endswith(")"):
-        s = s[1:-1].strip()
+    s = _unwrap(COND_WORDS.sub(" , ", I._clean(s)).strip().strip(".,;").strip())
     if not s:
         return None
     if ELSE_WORDS.fullmatch(s):
@@ -455,7 +469,7 @@ def condition(text: str, defs=None):
         return [("support", var, int(m.group(2)), hi)]
     tests = []
     for c in I._split_top(s, [",", ";"]):
-        c = c.strip().strip("()").strip()
+        c = _unwrap(c)
         if not c:
             continue
         m = re.fullmatch(r"(.+?)\s+(?:is\s+)?(even|odd)", c)
