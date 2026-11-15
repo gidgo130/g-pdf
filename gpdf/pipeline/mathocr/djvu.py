@@ -48,6 +48,19 @@ def _exe(folder: Path, name: str) -> Path | None:
 class Tools:
     ddjvu: str
     djvused: str
+    djvutxt: str | None = None      # the hidden text layer (optional)
+
+    def text(self, path, page: int) -> str | None:
+        """The hidden text layer of DjVu page ``page`` (1-based); None without djvutxt or
+        when it fails. An image-only page gives ""."""
+        if not self.djvutxt:
+            return None
+        try:
+            r = subprocess.run([self.djvutxt, f"--page={page}", str(path)], capture_output=True,
+                               timeout=120)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return r.stdout.decode("utf-8", "replace") if r.returncode == 0 else None
 
     def _run(self, *args, timeout=300) -> str:
         try:
@@ -103,7 +116,8 @@ def prepare(explicit=None) -> Tools:
     for folder in folders:
         dd, ds = _exe(folder, "ddjvu"), _exe(folder, "djvused")
         if dd and ds:
-            return Tools(str(dd), str(ds))
+            dt = _exe(folder, "djvutxt")
+            return Tools(str(dd), str(ds), str(dt) if dt else None)
     where = given or "PATH"
     raise DjvuError(f"no ddjvu and djvused in {where}. {INSTALL_HINT}")
 

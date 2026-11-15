@@ -131,3 +131,24 @@ def recognize(t: Tesseract, image, outbase, langs: str, dpi: int,
         if not Path(f"{outbase}{ext}").is_file():
             return f"no {ext} written: {err}" if err else f"no {ext} written"
     return ""
+
+
+def recognize_text(t: Tesseract, image, langs: str, dpi: int, timeout: int = TIMEOUT) -> str:
+    """The plain text Tesseract reads in ``image``; raises TesseractError on a failure."""
+    import tempfile
+
+    env = dict(os.environ, OMP_THREAD_LIMIT="1")
+    with tempfile.TemporaryDirectory(prefix="gpdf-tess-") as tmp:
+        outbase = Path(tmp) / "out"
+        cmd = [t.exe, str(image), str(outbase), "-l", langs, "--dpi", str(dpi)]
+        try:
+            r = subprocess.run(cmd, capture_output=True, env=env, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise TesseractError(f"timed out after {timeout} s") from None
+        except OSError as e:
+            raise TesseractError(f"cannot run {t.exe}: {e}") from None
+        txt = outbase.with_suffix(".txt")
+        if r.returncode or not txt.is_file():
+            err = r.stderr.decode("utf-8", "replace").strip()[-STDERR_TAIL:]
+            raise TesseractError(f"exit code {r.returncode}: {err}")
+        return txt.read_text("utf-8")

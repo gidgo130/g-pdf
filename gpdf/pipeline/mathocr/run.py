@@ -28,8 +28,8 @@ import pymupdf
 from gpdf import __version__
 from gpdf.pipeline import tesseract
 from gpdf.pipeline.manuals import ManualsError, parse_pages, write_atomic
-from gpdf.pipeline.mathocr import (MATHCHECK_HINT, assemble, awake, djvu, engine, flags, labels,
-                                   marker, second)
+from gpdf.pipeline.mathocr import (MATHCHECK_HINT, assemble, awake, djvu, engine, flags, invention,
+                                   labels, marker, second)
 
 SCHEMA = 1
 CROP_DPI = 300
@@ -65,6 +65,8 @@ class Options:
     ocr_mode: str = "ocr"                    # engine.OCR_MODES: the render, or the text layer
     ddjvu: str | None = None                 # DjVuLibre (a .djvu source): folder or executable
     identity_letters: dict | None = None     # the book's letters for the identity pass (S: quantile, ...)
+    invention_check: bool = True             # flag paragraphs the page does not hold
+    ocr_lang: str = "eng"                    # Tesseract language(s) for the invention check
 
 
 @dataclass
@@ -82,6 +84,7 @@ class Summary:
     steps: list
     rejected: list
     notices: list = field(default_factory=list)
+    invention: dict | None = None
 
 
 def _ranges(pages: list[int]) -> list[tuple[int, int]]:
@@ -283,6 +286,12 @@ def _run(opts: Options, progress=None) -> Summary:
             ident_counts = _identities(assembled, items_of, _ranges(pages), say, ident_records,
                                        beat=lambda p: hb.beat("identities", page=p),
                                        letters=opts.identity_letters)
+        # engine inventions: each assembled page against the copy's text layer or Tesseract
+        inv = None
+        if opts.invention_check:
+            _stage[0] = "invention"
+            hb.beat("invention")
+            inv = _inventions(opts, pdf, doc, assembled, tess, notices, say)
         _stage[0] = "outputs"
         hb.beat("outputs")
 
@@ -329,6 +338,8 @@ def _run(opts: Options, progress=None) -> Summary:
         totals = {"pages": len(assembled), "displays": sum(r["displays"] for r in per_page),
                   "inline_spans": sum(r["inline_spans"] for r in per_page), "items": kinds,
                   "identities": _sum_counts(ident_counts)}
+        if inv is not None:
+            totals["invention"] = inv
         meta = {"schema": SCHEMA, "made": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "made_with": f"g-pdf {__version__}",
                 "source": {"path": str(pdf), "sha256": sha, "page_count": doc.page_count,
@@ -344,7 +355,8 @@ def _run(opts: Options, progress=None) -> Summary:
                             "ocr_mode": opts.ocr_mode,
                             "check_identities": want_ident,
                             "identity_letters": opts.identity_letters,
-                            "tesseract": tess.version if tess else None},
+                            "tesseract": tess.version if tess else None,
+                            "invention_check": opts.invention_check, "ocr_lang": opts.ocr_lang},
                 "labels": {"runs": fit.runs, "steps": fit.steps, "rejected": fit.rejected,
                            "sources": {str(p): sources[p] for p in pages}},
                 "notices": notices}
@@ -356,9 +368,37 @@ def _run(opts: Options, progress=None) -> Summary:
         hb.beat("done")
         return Summary(root, len(assembled), totals["displays"], totals["inline_spans"], kinds,
                        totals["identities"], seconds, engine_seconds, cache_bytes, fit.runs,
-                       fit.steps, fit.rejected, notices)
+                       fit.steps, fit.rejected, notices, inv)
     finally:
         doc.close()
+
+
+def _inventions(opts: Options, pdf: Path, doc, assembled, tess, notices, say) -> dict:
+    """The invention check on the assembled pages; its flags go into each page's flags."""
+    t = tess
+    try:
+        if t is None:
+            t = tesseract.prepare(opts.ocr_lang, opts.tesseract)
+        else:
+            tesseract.check(t, opts.ocr_lang)
+    except tesseract.TesseractError as e:
+        t = None
+        notices.append(f"invention check without Tesseract ({opts.ocr_lang}): pages without a "
+                       f"usable text layer stay unchecked ({e})")
+    if djvu.is_djvu(pdf):
+        try:
+            pages = invention.DjvuPages(djvu.prepare(opts.ddjvu), pdf, doc)
+        except djvu.DjvuError as e:
+            raise MathExportError(str(e)) from None
+    else:
+        pages = invention.PdfPages(doc)
+    res = invention.check_pages({pg.file: pg.render() for pg in assembled}, pages, t,
+                                opts.ocr_lang,
+                                progress=lambda d, n: say(f"  invention check: {d}/{n} pages"))
+    for pg in assembled:
+        pg.flags = invention.with_flags(pg.flags, res["flags"][pg.file])
+    say(invention.report(res["summary"]))
+    return res["summary"]
 
 
 def _djvu_proxy(opts: Options, path: Path, sha: str, root: Path, say) -> tuple[Path, dict]:
@@ -485,6 +525,8 @@ def report(s: Summary) -> str:
         lines.append(f"label step at file {st['at']}: offset {st['from']:+d} -> {st['to']:+d}")
     for rj in s.rejected:
         lines.append(f"label rejected on file {rj['page']}: {rj['value']} ({rj['reason']})")
+    if s.invention is not None:
+        lines.append(invention.report(s.invention))
     for n in s.notices:
         lines.append(f"note: {n}")
     lines.append(f"output in {s.root}")

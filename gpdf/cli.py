@@ -42,6 +42,8 @@
                                                     # LaTeX read raw from a file or stdin
     gpdf-cli math-score --ref DIR_or_text.md --cand DIR_or_text.md --out DIR [--pages RANGE]
     gpdf-cli math-check-pages DIR [--out FILE.json]       # delimiters, row breaks, braces, flags
+    gpdf-cli math-invention-check EXPORT [--source FILE] [--ocr-lang L] [--dry-run]
+                                                    # flag paragraphs the page does not hold
     gpdf-cli math-crosscheck --spec FILE --out DIR [--scipy-python PATH] [--formulas FILE]
                                                     # transcribed formulas against SciPy
                                                     # through the book's parametrisation
@@ -367,6 +369,12 @@ def build_parser() -> argparse.ArgumentParser:
     me.add_argument("--style-page-consistency", action="store_true",
                     help="also flag a symbol that is both bold and not on one page (off by "
                          "default: bold X and X_1 is normal multivariate notation)")
+    me.add_argument("--no-invention-check", dest="invention_check", action="store_false",
+                    help="skip the engine-invention check (paragraphs the page does not hold, "
+                         "flagged against the text layer or Tesseract)")
+    me.add_argument("--ocr-lang", default="eng", metavar="L",
+                    help="Tesseract language(s) of the invention check, e.g. eng, spa or eng+spa "
+                         "(default eng)")
     me.add_argument("--allow-sleep", action="store_true",
                     help="let Windows sleep during the run (by default math-export keeps the "
                          "PC awake while it runs; elsewhere it never interferes)")
@@ -529,6 +537,34 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the pages folder, a math-export folder with pages/, or a text.md")
     mk.add_argument("--out", metavar="FILE", type=Path,
                     help="write every problem, with its formula, to this JSON file")
+    mi = sub.add_parser("math-invention-check", help="flag engine-invented paragraphs",
+                        description="Compare every paragraph of an export's pages with the page's "
+                                    "text layer (when usable) or Tesseract on a 300 dpi render, "
+                                    "and flag paragraphs the page does not hold (engine "
+                                    "inventions: CJK text, stock phrases, image descriptions, "
+                                    "made-up prose) as invention_suspect in pNNN.flags.json. "
+                                    "Page text is never changed; a re-run replaces only these "
+                                    "flags. Writes a JSON report (default "
+                                    "EXPORT/invention_check.json).")
+    mi.add_argument("export", metavar="EXPORT", type=Path, help="the math-export folder")
+    mi.add_argument("--source", type=Path, metavar="FILE",
+                    help="the source copy (PDF or DjVu; default: meta.json's source path)")
+    mi.add_argument("--tesseract", metavar="PATH", help="the Tesseract executable")
+    mi.add_argument("--ocr-lang", default="eng", metavar="L",
+                    help="Tesseract language(s), e.g. eng, spa or eng+spa (default eng)")
+    mi.add_argument("--threshold-layer", type=float, default=0.6, metavar="X",
+                    help="flag a scored paragraph whose share in the text layer is below X "
+                         "(default 0.6)")
+    mi.add_argument("--threshold-tess", type=float, default=0.6, metavar="X",
+                    help="the same against Tesseract (default 0.6)")
+    mi.add_argument("--usable", type=float, default=0.75, metavar="X",
+                    help="the text layer is used when the median share of the page's scored "
+                         "paragraphs in it is at least X (default 0.75)")
+    mi.add_argument("--ddjvu", metavar="PATH", help="DjVuLibre folder (a DjVu source)")
+    mi.add_argument("--report", type=Path, metavar="FILE",
+                    help="the JSON report (default EXPORT/invention_check.json)")
+    mi.add_argument("--dry-run", action="store_true",
+                    help="write the report only, no flags")
     mx = sub.add_parser("math-crosscheck", help="transcribed formulas against SciPy",
                         description="Evaluate the formulas a spec names (or harvests by their "
                                     "left-hand sides) at three parameter points through the "
@@ -647,6 +683,8 @@ def main(argv: list[str] | None = None) -> int:
         return _math_score_main(args)
     if args.command == "math-check-pages":
         return _math_check_pages_main(args)
+    if args.command == "math-invention-check":
+        return _math_invention_check_main(args)
     if args.command == "math-watch":
         return _math_watch_main(args, parser)
     if args.command == "math-crosscheck":
@@ -1043,7 +1081,8 @@ def _math_export_main(args, parser) -> int:
                        use_marker=args.use_marker, marker_rule=args.marker_rule,
                        inline_with=args.inline_with, style_page=args.style_page_consistency,
                        keep_awake=not args.allow_sleep, ocr_mode=args.ocr_mode,
-                       ddjvu=args.ddjvu)
+                       ddjvu=args.ddjvu, invention_check=args.invention_check,
+                       ocr_lang=args.ocr_lang)
     if args.identity_letters:
         from gpdf.pipeline.mathocr import identities
         try:
@@ -1176,6 +1215,24 @@ def _math_check_pages_main(args) -> int:
         return EXIT_ERROR
     print(check.report(res))
     return EXIT_UNREVIEWED if res["problems"] else EXIT_OK
+
+
+def _math_invention_check_main(args) -> int:
+    from gpdf.pipeline.mathocr import invention
+
+    try:
+        res = invention.check_export(
+            args.export, args.source, args.tesseract, args.ocr_lang,
+            invention.Thresholds(args.threshold_layer, args.threshold_tess, args.usable),
+            dry_run=args.dry_run, report_path=args.report, ddjvu=args.ddjvu)
+    except (invention.InventionError, OSError, ValueError) as e:
+        print(f"gpdf-cli: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    for n in res["notices"]:
+        print(f"note: {n}")
+    print(invention.report(res["summary"]))
+    print(("dry run: no flags written; " if args.dry_run else "") + f"report in {res['report']}")
+    return EXIT_OK
 
 
 def _math_score_main(args) -> int:

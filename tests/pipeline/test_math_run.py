@@ -341,3 +341,37 @@ def test_the_identity_pass_writes_one_record_per_checked_display(setup, tmp_path
     assert [(r["file"], r["display"], r["kind"], r["status"]) for r in recs] == [
         (1, 1, "density", "passed")]
     assert recs[0]["latex"].startswith("f(x) = ")
+
+
+def test_math_export_runs_the_invention_check_on_the_assembled_pages(setup, tmp_path, monkeypatch,
+                                                                     capsys):
+    exe, home, pdf, log = setup
+    script = page_script()
+    blocks = script["p002"]["standard"]["blocks"]
+    blocks.append(T("这是引擎编造的一段中文文字。", 0.95))
+    script["p002"]["standard"]["markdown"] += "\n这是引擎编造的一段中文文字。\n"
+    (tmp_path / "pages.json").write_text(json.dumps(script), "utf-8")
+    out = tmp_path / "out"
+    assert run(exe, home, pdf, out, "--pages", "1-4") == 0
+    root = out / "book"
+    fl = json.loads((root / "pages" / "p002.flags.json").read_text("utf-8"))
+    inv = [f for f in fl if f["type"] == "invention_suspect"]
+    assert [(f["rule"], f["kind"], f["ref"]) for f in inv] == [(["CJK"], "prose", None)]
+    assert "这是引擎编造" in (root / "pages" / "p002.md").read_text("utf-8")    # never removed
+    rec = json.loads((root / "run.json").read_text("utf-8"))
+    assert rec["totals"]["invention"]["candidates"] == 1
+    assert rec["totals"]["invention"]["rule_confirmed"] == 1
+    assert rec["totals"]["invention"]["pages"] == 4
+    meta = json.loads((root / "meta.json").read_text("utf-8"))
+    assert meta["options"]["invention_check"] is True and meta["options"]["ocr_lang"] == "eng"
+    assert any("invention check without Tesseract" in n for n in meta["notices"])
+    assert "invention check: 4 pages" in capsys.readouterr().out
+    # --no-invention-check: no flags, no totals
+    out2 = tmp_path / "out2"
+    assert run(exe, home, pdf, out2, "--pages", "1-4", "--no-invention-check",
+               "--ocr-lang", "spa") == 0
+    fl2 = json.loads((out2 / "book" / "pages" / "p002.flags.json").read_text("utf-8"))
+    assert not [f for f in fl2 if f["type"] == "invention_suspect"]
+    rec2 = json.loads((out2 / "book" / "run.json").read_text("utf-8"))
+    assert "invention" not in rec2["totals"]
+    assert json.loads((out2 / "book" / "meta.json").read_text("utf-8"))["options"]["ocr_lang"] == "spa"
