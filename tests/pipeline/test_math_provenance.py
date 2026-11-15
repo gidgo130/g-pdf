@@ -281,3 +281,34 @@ def test_an_inline_flag_with_an_occurrence_ties_only_that_span(tmp_path):
     provenance.write(r)
     assert sorted(x["id"] for x in lines(r / "formulas.jsonl") if x["status"] == "flagged") == [
         "p008-i01", "p008-i02", "p008-i03", "p008-i04"]
+
+
+# split_suspect: a flag quoting a display that was split after review (its LaTeX holds two or
+# more of the page's displays) is attached by neither its tag nor containment
+SPLIT = "\\begin{array}{l} P(r) = Q^{-k} \\\\ b_1^{r_1} | r_1! r_j | \\end{array}"
+
+
+def test_a_flag_spanning_two_displays_is_a_split_suspect_and_unattached(tmp_path, capsys):
+    r = tagged_export(tmp_path, [flag("140", SPLIT)])
+    res = provenance.write(r)
+    assert flagged_ids(r) == []
+    assert res["split_suspect"] == [{"file": 9, "eq": "140", "type": "possible_source_typo",
+                                     "subtype": "math_error", "displays": ["p009-d01", "p009-d02"]}]
+    assert res["ambiguous_tag"] == []
+    assert "1 flags may quote a display split after review" in provenance.report(res)
+    assert "file 9 eq '140': p009-d01, p009-d02" in provenance.report(res)
+    assert cli.main(["math-provenance", "--export", str(r)]) == 0
+    assert "split after review" in capsys.readouterr().out
+
+
+def test_a_flag_containing_one_display_still_attaches_by_its_tag(tmp_path):
+    r = tagged_export(tmp_path, [flag("141", "P(r) = Q^{-k} \\quad \\text{and more}")])
+    res = provenance.write(r)
+    assert flagged_ids(r) == ["p009-d02"] and res["split_suspect"] == []
+
+
+def test_an_exact_match_still_attaches_by_its_latex(tmp_path):
+    r = tagged_export(tmp_path, [flag("140", "u = 7"), flag("(140)/(141)", SPLIT)])
+    res = provenance.write(r)
+    assert flagged_ids(r) == ["p009-d03"]
+    assert [s["eq"] for s in res["split_suspect"]] == ["(140)/(141)"] and res["ambiguous_tag"] == []

@@ -97,20 +97,30 @@ def _eq_numbers(eq) -> tuple[list[str], bool]:
     return list(dict.fromkeys(EQ_NUMBER.findall(eq))), False
 
 
-def _attach_flags(page_flags: list, base: list, ambiguous: list | None = None) -> dict[int, list]:
+def _attach_flags(page_flags: list, base: list, ambiguous: list | None = None,
+                  split: list | None = None) -> dict[int, list]:
     """{display index: flags}: a flag goes to the display whose LaTeX (or the LaTeX its review
     item had) equals the flag's; else to the display whose \\tag the flag's eq names (a display
     changed after it was flagged); else to the first display containing the flag's LaTeX (a
     flag quoting part of a display). An inline flag (eq ending in "inline") stays unattached.
     An eq that is a tag string naming several numbers ("(140)/(141)") attaches only to the one
     named display containing the flag's LaTeX; with none or several, the flag stays unattached
-    and goes to ``ambiguous``."""
+    and goes to ``ambiguous``. A flag whose LaTeX (not equal to a display's) contains two or more
+    of the page's displays quotes a display split after review: it stays unattached and goes to
+    ``split`` as (flag, display indexes), for a reviewer to place."""
     out: dict[int, list] = {}
     for f in page_flags:
         if str(f.get("eq", "")).endswith("inline"):
             continue
         fk = _key(f.get("latex"))
         hit = next((i for i, b in enumerate(base) if fk and fk in b[4]), None)
+        fn = _nospace(fk)
+        if hit is None and len(fn) >= 3:
+            parts = [i for i, b in enumerate(base) if len(_nospace(b[0])) >= 3 and _nospace(b[0]) in fn]
+            if len(parts) >= 2:
+                if split is not None:
+                    split.append((f, parts))
+                continue
         if hit is None:
             nums, tag_string = _eq_numbers(f.get("eq"))
             named = [i for i, b in enumerate(base) if b[1] and b[1] in nums]
@@ -141,7 +151,8 @@ def _flag_entry(f: dict, quote: str | None) -> dict:
 
 def _page_records(file: int, md: str, flags: list, items: list[dict], idents: list[dict],
                   reviewer: str | None, extra_accepts: list | None = None,
-                  flag_latex: bool = False, ambiguous: list | None = None) -> list[dict]:
+                  flag_latex: bool = False, ambiguous: list | None = None,
+                  split_suspect: list | None = None) -> list[dict]:
     m = MARKER_RE.search(md)
     printed = m.group(1) if m else None
     displays, inline, _ = L.extract(md)
@@ -169,8 +180,13 @@ def _page_records(file: int, md: str, flags: list, items: list[dict], idents: li
                 review_item = r["id"]
         olds = {k} | {_key(by_id[review_item].get("latex_primary"))} if review_item else {k}
         base.append((k, tag, status, review_item, olds))
-    amb: list = []
-    attached = _attach_flags(page_flags, base, amb)
+    amb, spl = [], []
+    attached = _attach_flags(page_flags, base, amb, spl)
+    if split_suspect is not None:
+        split_suspect += [{"file": file, "eq": f.get("eq"),
+                           **{x: f[x] for x in ("type", "subtype") if f.get(x)},
+                           "displays": [f"p{file:03d}-d{i + 1:02d}" for i in parts]}
+                          for f, parts in spl]
     if ambiguous is not None:
         ambiguous += [{"file": file, "eq": f.get("eq"),
                        **{x: f[x] for x in ("type", "subtype", "latex") if f.get(x)}} for f in amb]
@@ -276,7 +292,7 @@ def write(export, out=None, reviewer: str | None = None, meta=None, review_dirs=
     items = _jsonl(root / "review.jsonl")
     idents = _jsonl(root / "identities.jsonl")
     extra = _sampled_accepts(review_dirs)
-    recs, ambiguous = [], []
+    recs, ambiguous, split = [], [], []
     for p in sorted(pages_dir.glob("p[0-9][0-9][0-9].md")):
         file = int(p.stem[1:])
         fp = p.with_suffix(".flags.json")
@@ -286,7 +302,7 @@ def write(export, out=None, reviewer: str | None = None, meta=None, review_dirs=
         recs += _page_records(file, p.read_text("utf-8"), flags,
                               [it for it in items if int(it["file"]) == file],
                               [r for r in idents if int(r["file"]) == file], reviewer,
-                              extra.get(file), flag_latex, ambiguous)
+                              extra.get(file), flag_latex, ambiguous, split)
     if prose_only:
         recs = _prose_only(recs)
         reviewer = None
@@ -339,7 +355,7 @@ def write(export, out=None, reviewer: str | None = None, meta=None, review_dirs=
     write_atomic(meta_path, json.dumps(m, ensure_ascii=False, indent=1) + "\n")
     return {"formulas": len(recs), "by_status": by_status, "method": method,
             "out": str(out / "formulas.jsonl"), "meta": str(meta_path),
-            "ambiguous_tag": ambiguous}
+            "ambiguous_tag": ambiguous, "split_suspect": split}
 
 
 def report(res: dict) -> str:
@@ -348,6 +364,12 @@ def report(res: dict) -> str:
     head = [f"{len(amb)} flags with an ambiguous tag left unattached (several numbers named, not one "
             "named display holds the flag's LaTeX): "
             + ", ".join(f"file {a['file']} eq {a['eq']!r}" for a in amb)] if amb else []
+    spl = res.get("split_suspect") or []
+    if spl:
+        head.append(f"{len(spl)} flags may quote a display split after review (left unattached, "
+                    "their LaTeX holds several displays): "
+                    + "; ".join(f"file {s['file']} eq {s['eq']!r}: {', '.join(s['displays'])}"
+                                for s in spl))
     return "\n".join(head + [
         f"{res['formulas']} formulas: " + ", ".join(f"{k} {v}" for k, v in res["by_status"].items()),
         f"displays reviewed {c['displays_reviewed']}/{c['displays']}, inline reviewed "

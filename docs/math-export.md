@@ -475,7 +475,11 @@ with a flag quoting part of a display. A dotted number (`44.74`) is read anywher
 integer (`140`, `(140)`, `140a`) only when `eq` is nothing but equation numbers, so an item id
 such as `p073-d02` never names a tag. An `eq` naming several numbers (`(140)/(141)`) attaches
 only to the one named display that contains the flag's LaTeX; when none or several do, the
-flag stays unattached and the report lists it as an ambiguous tag. An inline flag goes to the
+flag stays unattached and the report lists it as an ambiguous tag. Before the tag rule, a flag
+whose LaTeX (space-free, not equal to a display's) contains two or more of the page's displays
+quotes a display split after review: it is attached by neither tag nor containment and listed as
+`split_suspect` (file, `eq`, type, subtype, the candidate display ids) for a reviewer to place.
+An inline flag goes to the
 spans with its LaTeX, or with an `occurrence` only to that occurrence. `reviewer` is set
 only for reviewed formulas. `--review-dir REVIEW_DIR` takes a packed review folder and can be
 given more than once. Where a reviewer's accept on an inline item names no spans, it counts
