@@ -185,3 +185,76 @@ def test_prose_only_marks_every_formula_unreviewed(export, tmp_path):
     (export / "pages" / "p001.flags.json").write_text(json.dumps(F1), "utf-8")
     with pytest.raises(provenance.ProvenanceError):
         provenance.write(export, prose_only=True)
+
+
+# plain-integer equation tags ("(140)"): read from a flag's eq only when the eq is a tag string
+P9 = ('<!-- page printed="9" file="9" -->\n\nText.\n\n$$\nP(r) = Q^{-k}\n\\tag{140}\n$$\n\n'
+      "$$\nb_1^{r_1} | r_1! r_j |\n\\tag{141}\n$$\n\n$$\nu = 7\n\\tag{3.4}\n$$\n\n"
+      "$$\nv = 73\n\\tag{73}\n$$\n\n$$\ns = 2\n\\tag{2}\n$$\n")
+
+
+def tagged_export(tmp_path, flags):
+    r = tmp_path / "tagged"
+    (r / "pages").mkdir(parents=True)
+    (r / "pages" / "p009.md").write_text(P9, "utf-8")
+    (r / "pages" / "p009.flags.json").write_text(json.dumps(flags), "utf-8")
+    return r
+
+
+def flagged_ids(r):
+    return sorted(x["id"] for x in lines(r / "formulas.jsonl") if x["status"] == "flagged")
+
+
+def flag(eq, latex="old text before the split"):
+    return {"type": "possible_source_typo", "subtype": "math_error", "eq": eq, "latex": latex}
+
+
+@pytest.mark.parametrize("eq", ["140", "(140)", " ( 140 ) "])
+def test_a_plain_integer_tag_attaches(tmp_path, eq):
+    r = tagged_export(tmp_path, [flag(eq)])
+    provenance.write(r)
+    assert flagged_ids(r) == ["p009-d01"]
+
+
+def test_an_integer_tag_with_a_suffix_attaches(tmp_path):
+    P = P9.replace("\\tag{141}", "\\tag{141a}")
+    r = tagged_export(tmp_path, [flag("(141a)")])
+    (r / "pages" / "p009.md").write_text(P, "utf-8")
+    provenance.write(r)
+    assert flagged_ids(r) == ["p009-d02"]
+
+
+@pytest.mark.parametrize("eq", ["p073-d02", "p002-d02", "p151-inline", "p002 inline", "p009-m01",
+                                "file 73", "p073-d02 (73)"])
+def test_an_item_id_holding_digits_is_not_read_as_tags(tmp_path, eq):
+    # the page has displays tagged (73) and (2): an id naming file 73 or display 02 must not
+    # attach to them
+    r = tagged_export(tmp_path, [flag(eq)])
+    provenance.write(r)
+    assert flagged_ids(r) == []
+
+
+def test_two_numbers_attach_to_the_named_display_containing_the_flag_latex(tmp_path):
+    r = tagged_export(tmp_path, [flag("(140)/(141)", "r_1! r_j")])
+    res = provenance.write(r)
+    assert flagged_ids(r) == ["p009-d02"]
+    assert res["ambiguous_tag"] == []
+
+
+def test_two_numbers_without_containment_are_ambiguous_not_attached(tmp_path, capsys):
+    r = tagged_export(tmp_path, [flag("(140)/(141)"), flag("140, 141", "r")])   # "r": in both
+    res = provenance.write(r)
+    assert flagged_ids(r) == []
+    assert [(a["file"], a["eq"]) for a in res["ambiguous_tag"]] == [(9, "(140)/(141)"), (9, "140, 141")]
+    assert "2 flags with an ambiguous tag" in provenance.report(res)
+    assert cli.main(["math-provenance", "--export", str(r)]) == 0
+    assert "ambiguous" in capsys.readouterr().out
+
+
+def test_a_dotted_tag_behaves_as_before(tmp_path):
+    r = tagged_export(tmp_path, [flag("(3.4)")])
+    provenance.write(r)
+    assert flagged_ids(r) == ["p009-d03"]
+    r2 = tagged_export(tmp_path / "b", [flag("see eq. 3.4 on p. 9")])     # not a tag string: dotted only
+    provenance.write(r2)
+    assert flagged_ids(r2) == ["p009-d03"]

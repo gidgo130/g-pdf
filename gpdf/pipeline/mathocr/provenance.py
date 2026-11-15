@@ -77,17 +77,33 @@ def _sampled_accepts(review_dirs) -> dict[int, list[tuple[str, str]]]:
 
 
 EQ_NUMBER = re.compile(r"\d+\.\d+[a-z']*")
+# an eq that is nothing but equation numbers: "140", "(140)", "140a", "(140)/(141)", "3.1, 3.2"
+_ONE_TAG = r"\(?\s*\d+(?:\.\d+)*[a-z']*\s*\)?"
+TAG_STRING = re.compile(rf"\s*{_ONE_TAG}(?:\s*(?:/|,|;|&|and)\s*{_ONE_TAG})*\s*")
+TAG_NUMBER = re.compile(r"\d+(?:\.\d+)*[a-z']*")
 
 
 def _nospace(s: str | None) -> str:
     return re.sub(r"\s+", "", s or "")
 
 
-def _attach_flags(page_flags: list, base: list) -> dict[int, list]:
+def _eq_numbers(eq) -> tuple[list[str], bool]:
+    """(the equation numbers a flag's eq names, whether the eq is a tag string). Plain integers
+    count only in a tag string: an item id such as p073-d02 or p151-inline names no tag."""
+    eq = str(eq or "")
+    if TAG_STRING.fullmatch(eq):
+        return list(dict.fromkeys(TAG_NUMBER.findall(eq))), True
+    return list(dict.fromkeys(EQ_NUMBER.findall(eq))), False
+
+
+def _attach_flags(page_flags: list, base: list, ambiguous: list | None = None) -> dict[int, list]:
     """{display index: flags}: a flag goes to the display whose LaTeX (or the LaTeX its review
     item had) equals the flag's; else to the display whose \\tag the flag's eq names (a display
     changed after it was flagged); else to the first display containing the flag's LaTeX (a
-    flag quoting part of a display). An inline flag (eq ending in "inline") stays unattached."""
+    flag quoting part of a display). An inline flag (eq ending in "inline") stays unattached.
+    An eq that is a tag string naming several numbers ("(140)/(141)") attaches only to the one
+    named display containing the flag's LaTeX; with none or several, the flag stays unattached
+    and goes to ``ambiguous``."""
     out: dict[int, list] = {}
     for f in page_flags:
         if str(f.get("eq", "")).endswith("inline"):
@@ -95,8 +111,18 @@ def _attach_flags(page_flags: list, base: list) -> dict[int, list]:
         fk = _key(f.get("latex"))
         hit = next((i for i, b in enumerate(base) if fk and fk in b[4]), None)
         if hit is None:
-            nums = set(EQ_NUMBER.findall(str(f.get("eq") or "")))
-            hit = next((i for i, b in enumerate(base) if b[1] and b[1] in nums), None)
+            nums, tag_string = _eq_numbers(f.get("eq"))
+            named = [i for i, b in enumerate(base) if b[1] and b[1] in nums]
+            if tag_string and len(nums) > 1:
+                fn = _nospace(fk)
+                holding = [i for i in named if fn and fn in _nospace(base[i][0])]
+                if len(holding) != 1:
+                    if ambiguous is not None:
+                        ambiguous.append(f)
+                    continue
+                hit = holding[0]
+            elif named:
+                hit = named[0]
         if hit is None and len(_nospace(fk)) >= 3:
             hit = next((i for i, b in enumerate(base) if _nospace(fk) in _nospace(b[0])), None)
         if hit is not None:
@@ -114,7 +140,7 @@ def _flag_entry(f: dict, quote: str | None) -> dict:
 
 def _page_records(file: int, md: str, flags: list, items: list[dict], idents: list[dict],
                   reviewer: str | None, extra_accepts: list | None = None,
-                  flag_latex: bool = False) -> list[dict]:
+                  flag_latex: bool = False, ambiguous: list | None = None) -> list[dict]:
     m = MARKER_RE.search(md)
     printed = m.group(1) if m else None
     displays, inline, _ = L.extract(md)
@@ -142,7 +168,11 @@ def _page_records(file: int, md: str, flags: list, items: list[dict], idents: li
                 review_item = r["id"]
         olds = {k} | {_key(by_id[review_item].get("latex_primary"))} if review_item else {k}
         base.append((k, tag, status, review_item, olds))
-    attached = _attach_flags(page_flags, base)
+    amb: list = []
+    attached = _attach_flags(page_flags, base, amb)
+    if ambiguous is not None:
+        ambiguous += [{"file": file, "eq": f.get("eq"),
+                       **{x: f[x] for x in ("type", "subtype", "latex") if f.get(x)}} for f in amb]
     for n, (k, tag, status, review_item, olds) in enumerate(base, 1):
         notes, also_replaced = [], False
         fl = [_flag_entry(f, finals[n - 1] if flag_latex else None) for f in attached.get(n - 1, [])]
@@ -241,7 +271,7 @@ def write(export, out=None, reviewer: str | None = None, meta=None, review_dirs=
     items = _jsonl(root / "review.jsonl")
     idents = _jsonl(root / "identities.jsonl")
     extra = _sampled_accepts(review_dirs)
-    recs = []
+    recs, ambiguous = [], []
     for p in sorted(pages_dir.glob("p[0-9][0-9][0-9].md")):
         file = int(p.stem[1:])
         fp = p.with_suffix(".flags.json")
@@ -251,7 +281,7 @@ def write(export, out=None, reviewer: str | None = None, meta=None, review_dirs=
         recs += _page_records(file, p.read_text("utf-8"), flags,
                               [it for it in items if int(it["file"]) == file],
                               [r for r in idents if int(r["file"]) == file], reviewer,
-                              extra.get(file), flag_latex)
+                              extra.get(file), flag_latex, ambiguous)
     if prose_only:
         recs = _prose_only(recs)
         reviewer = None
@@ -303,12 +333,17 @@ def write(export, out=None, reviewer: str | None = None, meta=None, review_dirs=
     m["method"] = method
     write_atomic(meta_path, json.dumps(m, ensure_ascii=False, indent=1) + "\n")
     return {"formulas": len(recs), "by_status": by_status, "method": method,
-            "out": str(out / "formulas.jsonl"), "meta": str(meta_path)}
+            "out": str(out / "formulas.jsonl"), "meta": str(meta_path),
+            "ambiguous_tag": ambiguous}
 
 
 def report(res: dict) -> str:
     c = res["method"]["coverage"]
-    return "\n".join([
+    amb = res.get("ambiguous_tag") or []
+    head = [f"{len(amb)} flags with an ambiguous tag left unattached (several numbers named, not one "
+            "named display holds the flag's LaTeX): "
+            + ", ".join(f"file {a['file']} eq {a['eq']!r}" for a in amb)] if amb else []
+    return "\n".join(head + [
         f"{res['formulas']} formulas: " + ", ".join(f"{k} {v}" for k, v in res["by_status"].items()),
         f"displays reviewed {c['displays_reviewed']}/{c['displays']}, inline reviewed "
         f"{c['inline_reviewed']}/{c['inline']}, numeric checks {c['numeric_checks']}",
