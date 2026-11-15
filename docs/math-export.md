@@ -185,8 +185,9 @@ unchecked, never failed. Candidates: any paragraph (displays and tables included
 letters (fewer than 4: the weaker "CJK (few)") or one of the stock phrases ("the quick brown
 fox", "the image contains no (discernible) text", "the chart is a graphic design"), and a
 scored paragraph whose share is below the threshold of the reference used (0.6 for both by
-default, calibrated on Batch C's known inventions: 64 of 65 found with either reference; the
-miss is a formula-only fragment with no words to score).
+default). Calibrated on the BATCH_C_CLOSE set, it found 64 of 65 known inventions with either
+reference; the miss is a formula-only fragment, since formula-only and short paragraphs are not
+scored.
 
 Each candidate becomes a flag in the page's `pNNN.flags.json`:
 
