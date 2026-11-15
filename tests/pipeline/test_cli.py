@@ -308,3 +308,15 @@ def test_split_progress_labels_detecting_then_splitting(src, tmp_path, monkeypat
     assert lines[0].endswith("detecting 7/7") and "\r  detecting 1/7" in lines[0]
     assert lines[1].endswith("splitting 7/7") and "\r  splitting 1/7" in lines[1]
     assert "pages " not in tty.buf.getvalue()
+
+
+def test_cli_source_compiles_without_warnings():
+    # an invalid escape such as "\l" in a help string is a SyntaxWarning today and an error later
+    import warnings
+    from pathlib import Path
+
+    import gpdf.cli as mod
+    src = Path(mod.__file__).read_text("utf-8")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        compile(src, mod.__file__, "exec")

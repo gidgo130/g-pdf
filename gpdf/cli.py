@@ -438,7 +438,7 @@ def build_parser() -> argparse.ArgumentParser:
                                     "batch to <review dir>/decisions/<batch>.jsonl. The LaTeX of "
                                     "a replace is read raw from --latex-file or stdin (no JSON "
                                     "escaping), and is refused when it loses a row break, an "
-                                    "&, an environment or a \left/\right pair. KEY 'status' "
+                                    "&, an environment or a \\left/\\right pair. KEY 'status' "
                                     "lists the items still without a decision.")
     md.add_argument("--batch", metavar="DIR", type=Path, required=True,
                     help="the batch folder (with items.jsonl)")
