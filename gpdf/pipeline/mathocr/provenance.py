@@ -8,7 +8,8 @@ a reviewed formula), ``flags`` (type and subtype of the flags on it), ``notes`` 
 of an unreviewed queue item) and ``review_item`` (the queue id). No formulas, unless
 ``flag_latex``: then each flag entry also quotes the formula as the final page has it
 (``latex``: the flag's own LaTeX when it is part of the display, else the display; an inline
-flag's span).
+flag's span). An inline flag goes to the spans with its LaTeX, or with an ``occurrence``
+only to that occurrence of them on the page.
 
 status, the first that applies:
     flagged           a reviewer's flag (possible_source_typo, copy_corrupt, ...)
@@ -223,10 +224,14 @@ def _page_records(file: int, md: str, flags: list, items: list[dict], idents: li
                 return rid
         return None
 
+    seen: dict[str, int] = {}
     for n, span in enumerate(inline, 1):
         k = _key(span)
+        seen[k] = seen.get(k, 0) + 1
+        # a flag with an occurrence ties only that occurrence of equal spans on the page
         fl = [_flag_entry(f, span if flag_latex else None) for f in page_flags
-              if _key(f.get("latex")) == k and str(f.get("eq", "")).endswith("inline")]
+              if _key(f.get("latex")) == k and str(f.get("eq", "")).endswith("inline")
+              and f.get("occurrence") in (None, seen[k])]
         rid = take(replaced, k)
         status = "replaced" if rid else None
         if not rid:

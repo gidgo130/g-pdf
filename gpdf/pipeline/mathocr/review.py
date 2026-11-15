@@ -8,8 +8,14 @@ Decisions (review_decisions.jsonl, one JSON object per line):
     {"id": "p073-d02", "action": "flag", "flag_type": "possible_source_typo", "note": "..."}
     {"id": "p073-inline", "action": "replace",
      "spans": [{"latex_primary": "x_1", "latex": "x_i"}]}      (a grouped inline item)
+    {"id": "p073-inline", "action": "flag", "flag_type": "formula_uncertain", "note": "...",
+     "spans": [{"latex_primary": "x_1", "occurrence": 2}]}     (the flagged spans)
 
 flag_type is one of formula_uncertain, possible_source_typo, copy_corrupt, illegible.
+A flag on a grouped inline item writes one flag per named span, with the span's current
+LaTeX (the replacement, when an earlier replace of the item changed it) and its occurrence
+when the span occurs more than once in the page (required then, as for a replace). A flag
+naming no span is applied page-level and listed as untied.
 Every applied decision leaves a ``reviewed`` record in the page's flags, which makes a
 second run a no-op. A decision whose id is unknown, or whose latex_primary is no longer
 in the page (and that was not applied before), is refused and listed; the other
@@ -45,6 +51,7 @@ class Report:
     already: list[str] = field(default_factory=list)       # ids applied by an earlier run
     refused: list[dict] = field(default_factory=list)      # {id, reason}
     pages: list[int] = field(default_factory=list)         # page files written
+    untied: list[str] = field(default_factory=list)        # grouped-item flags naming no span
 
 
 def load_decisions(path: Path) -> list[dict]:
@@ -153,6 +160,12 @@ def _validate(d: dict, items: dict) -> str | None:
         return f"action must be one of {', '.join(ACTIONS)}"
     if d["action"] == "flag" and d.get("flag_type") not in FLAG_TYPES:
         return f"flag_type must be one of {', '.join(FLAG_TYPES)}"
+    if d["action"] == "flag" and d.get("spans") is not None:
+        if items[d["id"]].get("spans") is None:
+            return "spans go with a grouped inline item"
+        if not d["spans"] or not all(isinstance(s, dict) and isinstance(s.get("latex_primary"), str)
+                                     and s["latex_primary"] for s in d["spans"]):
+            return "a flag's spans need latex_primary"
     if d["action"] == "replace":
         if items[d["id"]].get("kind") == "inline_missing":
             runs = d.get("runs")
@@ -198,8 +211,12 @@ def apply(root, decisions_path, dry_run: bool = False) -> Report:
                 rep.already.append(d["id"])
                 continue
             it = cur = items[d["id"]]
+            tied = None
             if it.get("kind") == "inline_missing":
                 new_md, why = _apply_runs(d, md)
+            elif it.get("spans") is not None and d["action"] == "flag" and d.get("spans"):
+                tied, why = _flag_spans(d, it, md, flags)
+                new_md = md
             elif it.get("spans") is not None:
                 new_md, why = _apply_grouped(d, it, md, flags)
             else:
@@ -226,8 +243,16 @@ def apply(root, decisions_path, dry_run: bool = False) -> Report:
                     flag["subtype"] = subtype
                 if it.get("latex_primary") is None:
                     flag.pop("latex")
-                flags.insert(len(flags) - 1 if flags and flags[-1].get("type") == "summary"
-                             else len(flags), flag)
+                if tied is not None:            # one flag per named span, with its LaTeX
+                    new = [{**flag, "latex": lat, **({"occurrence": occ} if occ else {})}
+                           for lat, occ in tied]
+                else:
+                    new = [flag]
+                    if it.get("spans") is not None:
+                        rep.untied.append(d["id"])
+                for g in new:
+                    flags.insert(len(flags) - 1 if flags and flags[-1].get("type") == "summary"
+                                 else len(flags), g)
             flags.insert(len(flags) - 1 if flags and flags[-1].get("type") == "summary"
                          else len(flags), rec)
             rep.applied.append({"id": d["id"], "action": d["action"], "page": file})
@@ -324,6 +349,51 @@ def _apply_grouped(d: dict, it: dict, md: str, flags: list) -> tuple[str, str | 
     return md, None
 
 
+def _span_places(latex: str, md: str) -> list[int]:
+    where, i = [], md.find("\\(" + latex + "\\)")
+    while i >= 0:
+        where.append(i + 2)
+        i = md.find("\\(" + latex + "\\)", i + 1)
+    return where
+
+
+def _flag_spans(d: dict, it: dict, md: str, flags: list) -> tuple[list | None, str | None]:
+    """[(current LaTeX, occurrence or None)] of each span a grouped item's flag names, or the
+    refusal. A span an earlier replace of the item changed is named by its latex_primary (and
+    the occurrence that replace gave) and flagged with the replacement; its replacement, or an
+    unchanged span, must be in the page, with its occurrence (in the page as it now stands)
+    when it occurs more than once there."""
+    primaries = {s.get("latex_primary") for s in it.get("spans", [])}
+    replaced = [s for f in flags if f.get("type") == "reviewed" and f.get("id") == d["id"]
+                and f.get("action") == "replace" for s in f.get("spans") or []
+                if isinstance(s.get("latex"), str) and s["latex"].strip() != s.get("latex_primary")]
+    out, seen = [], set()
+    for s in d["spans"]:
+        p, occ = s["latex_primary"], s.get("occurrence")
+        if p not in primaries:
+            return None, f"span {p!r} is not in the item"
+        cur = p
+        reps = {r["latex"].strip() for r in replaced if r.get("latex_primary") == p
+                and (occ is None or r.get("occurrence") in (None, occ))}
+        if reps and (occ is not None or not _span_places(p, md)):
+            if len(reps) > 1:
+                return None, f"span {p!r} was replaced by several spans: give its occurrence"
+            cur = reps.pop()
+            if occ is not None:               # that occurrence counted the page before the replace
+                occ = None if len(_span_places(cur, md)) == 1 else occ
+        where = _span_places(cur, md)
+        if not where:
+            return None, f"span {p!r} is no longer in the page"
+        if occ is None and len(where) > 1:
+            return None, f"span {p!r} occurs {len(where)} times in the page: give its occurrence"
+        n = 1 if occ is None else occ
+        if not isinstance(n, int) or not 1 <= n <= len(where) or where[n - 1] in seen:
+            return None, f"span {p!r} has no occurrence {n} in the page"
+        seen.add(where[n - 1])
+        out.append((cur, n if len(where) > 1 else None))
+    return out, None
+
+
 def _apply_runs(d: dict, md: str) -> tuple[str, str | None]:
     """An inline_missing replace: each run's page text (in the prose, never inside math)
     becomes inline math; a text that occurs more than once needs its occurrence."""
@@ -360,4 +430,6 @@ def report(rep: Report) -> str:
              + (f"; {len(rep.already)} applied earlier" if rep.already else "")]
     for r in rep.refused:
         lines.append(f"refused {r['id']}: {r['reason']}")
+    for i in rep.untied:
+        lines.append(f"untied (page-level) flag: {i} names no span (provenance can't tie it)")
     return "\n".join(lines)

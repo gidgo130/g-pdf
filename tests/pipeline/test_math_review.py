@@ -317,3 +317,88 @@ def test_a_typo_flag_on_an_identity_item_is_a_math_error(root, tmp_path):
     f1 = {f["eq"]: f for f in flags_of(root, 1) if f["type"] in ("possible_source_typo",
                                                                 "formula_uncertain")}
     assert f1["3.1"]["subtype"] == "math_error" and "subtype" not in f1["p001-d02"]
+
+
+# a flag on a grouped inline item names its spans: one flag per span, with its current LaTeX
+P6 = ('<!-- page printed="58" file="6" -->\n\nLet \\(x_1\\) and \\(y\\) be given, with \\(\\beta\\).\n\n'
+      "Then \\(x_1\\) again.\n")
+I6 = {"id": "p006-inline", "file": 6, "printed": "58", "kind": "inline", "reasons": ["x"],
+      "tag": None, "latex_primary": None, "latex_second": None, "crop": None,
+      "spans": [{"paragraph": 1, "latex_primary": "x_1", "latex_second": "x_2"},
+                {"paragraph": 1, "latex_primary": "y", "latex_second": "z"},
+                {"paragraph": 1, "latex_primary": "\\beta", "latex_second": "\\beta"}]}
+
+
+@pytest.fixture
+def root6(tmp_path):
+    r = tmp_path / "book6"
+    (r / "pages").mkdir(parents=True)
+    (r / "pages" / "p006.md").write_text(P6, "utf-8")
+    (r / "pages" / "p006.flags.json").write_text(json.dumps(
+        [{"type": "summary", "display_formulas": 0}]), "utf-8")
+    (r / "review.jsonl").write_text(json.dumps(I6) + "\n", "utf-8")
+    return r
+
+
+def span_flags(root, n):
+    return [f for f in flags_of(root, n) if f["type"] in review.FLAG_TYPES]
+
+
+def test_a_flag_naming_two_spans_gives_two_flags_each_with_its_latex(root6, tmp_path):
+    dec = decide(tmp_path, {"id": "p006-inline", "action": "flag", "flag_type": "possible_source_typo",
+                            "subtype": "notation", "note": "two slips",
+                            "spans": [{"latex_primary": "y"}, {"latex_primary": "x_1", "occurrence": 2}]})
+    rep = review.apply(root6, dec)
+    assert rep.refused == [] and rep.untied == []
+    assert span_flags(root6, 6) == [
+        {"type": "possible_source_typo", "eq": "p006-inline", "latex": "y", "note": "two slips",
+         "subtype": "notation"},
+        {"type": "possible_source_typo", "eq": "p006-inline", "latex": "x_1", "note": "two slips",
+         "subtype": "notation", "occurrence": 2}]
+    assert flags_of(root6, 6)[-1]["type"] == "summary"
+    assert review.apply(root6, dec).already == ["p006-inline"]          # a re-run adds nothing
+    assert len(span_flags(root6, 6)) == 2
+
+
+def test_a_span_replaced_earlier_is_flagged_with_its_replacement(root6, tmp_path):
+    dec = decide(tmp_path,
+                 {"id": "p006-inline", "action": "replace",
+                  "spans": [{"latex_primary": "\\beta", "latex": "\\beta_0"}]},
+                 {"id": "p006-inline", "action": "flag", "flag_type": "formula_uncertain",
+                  "note": "subscript faint", "spans": [{"latex_primary": "\\beta"}]})
+    rep = review.apply(root6, dec)
+    assert rep.refused == []
+    assert [(f["latex"], f.get("occurrence")) for f in span_flags(root6, 6)] == [("\\beta_0", None)]
+
+
+@pytest.mark.parametrize("spans, reason", [
+    ([{"latex_primary": "q"}], "span 'q' is not in the item"),
+    ([{"latex_primary": "x_1"}], "span 'x_1' occurs 2 times in the page: give its occurrence"),
+    ([{"latex_primary": "x_1", "occurrence": 3}], "span 'x_1' has no occurrence 3 in the page"),
+    ([{"latex_primary": "y"}, {"latex_primary": "y"}], "span 'y' has no occurrence 1 in the page"),
+    ([{"occurrence": 1}], "a flag's spans need latex_primary"),
+])
+def test_a_flag_naming_a_missing_span_or_occurrence_is_refused(root6, tmp_path, spans, reason):
+    dec = decide(tmp_path, {"id": "p006-inline", "action": "flag", "flag_type": "formula_uncertain",
+                            "note": "n", "spans": spans})
+    rep = review.apply(root6, dec)
+    assert rep.refused == [{"id": "p006-inline", "reason": reason}]
+    assert span_flags(root6, 6) == []
+
+
+def test_a_span_gone_from_the_page_is_refused(root6, tmp_path):
+    (root6 / "pages" / "p006.md").write_text(P6.replace("\\(y\\)", "y"), "utf-8")
+    dec = decide(tmp_path, {"id": "p006-inline", "action": "flag", "flag_type": "formula_uncertain",
+                            "note": "n", "spans": [{"latex_primary": "y"}]})
+    assert review.apply(root6, dec).refused == [
+        {"id": "p006-inline", "reason": "span 'y' is no longer in the page"}]
+
+
+def test_an_old_style_flag_on_a_grouped_item_is_applied_and_listed_untied(root6, tmp_path, capsys):
+    dec = decide(tmp_path, {"id": "p006-inline", "action": "flag", "flag_type": "formula_uncertain",
+                            "note": "somewhere on the page"})
+    rep = review.apply(root6, dec)
+    assert rep.refused == [] and rep.untied == ["p006-inline"]
+    assert span_flags(root6, 6) == [{"type": "formula_uncertain", "eq": "p006-inline",
+                                     "note": "somewhere on the page"}]
+    assert "untied (page-level) flag: p006-inline" in review.report(rep)

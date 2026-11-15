@@ -258,3 +258,26 @@ def test_a_dotted_tag_behaves_as_before(tmp_path):
     r2 = tagged_export(tmp_path / "b", [flag("see eq. 3.4 on p. 9")])     # not a tag string: dotted only
     provenance.write(r2)
     assert flagged_ids(r2) == ["p009-d03"]
+
+
+def test_an_inline_flag_with_an_occurrence_ties_only_that_span(tmp_path):
+    md = ('<!-- page printed="8" file="8" -->\n\nTake \\(x_1\\) and \\(y\\), then \\(x_1\\) again '
+          "and \\(x_1\\) once more.\n")
+    r = tmp_path / "occ"
+    (r / "pages").mkdir(parents=True)
+    (r / "pages" / "p008.md").write_text(md, "utf-8")
+    fl = [{"type": "possible_source_typo", "eq": "p008-inline", "latex": "x_1", "note": "n",
+           "occurrence": 2},
+          {"type": "formula_uncertain", "eq": "p008-inline", "latex": "y", "note": "m"}]
+    (r / "pages" / "p008.flags.json").write_text(json.dumps(fl), "utf-8")
+    provenance.write(r, flag_latex=True)
+    recs = {x["id"]: x for x in lines(r / "formulas.jsonl")}
+    assert [i for i, x in recs.items() if x["status"] == "flagged"] == ["p008-i02", "p008-i03"]
+    assert recs["p008-i03"]["flags"] == [{"type": "possible_source_typo", "latex": "x_1"}]
+    assert recs["p008-i02"]["flags"] == [{"type": "formula_uncertain", "latex": "y"}]
+    # without an occurrence every equal span still gets the flag (as before)
+    fl[0].pop("occurrence")
+    (r / "pages" / "p008.flags.json").write_text(json.dumps(fl), "utf-8")
+    provenance.write(r)
+    assert sorted(x["id"] for x in lines(r / "formulas.jsonl") if x["status"] == "flagged") == [
+        "p008-i01", "p008-i02", "p008-i03", "p008-i04"]
