@@ -293,7 +293,8 @@ def test_a_flag_spanning_two_displays_is_a_split_suspect_and_unattached(tmp_path
     res = provenance.write(r)
     assert flagged_ids(r) == []
     assert res["split_suspect"] == [{"file": 9, "eq": "140", "type": "possible_source_typo",
-                                     "subtype": "math_error", "displays": ["p009-d01", "p009-d02"]}]
+                                     "subtype": "math_error", "displays": ["p009-d01", "p009-d02"],
+                                     "runs": [["p009-d01", "p009-d02"]]}]
     assert res["ambiguous_tag"] == []
     assert "1 flags may quote a display split after review" in provenance.report(res)
     assert "file 9 eq '140': p009-d01, p009-d02" in provenance.report(res)
@@ -312,3 +313,73 @@ def test_an_exact_match_still_attaches_by_its_latex(tmp_path):
     res = provenance.write(r)
     assert flagged_ids(r) == ["p009-d03"]
     assert [s["eq"] for s in res["split_suspect"]] == ["(140)/(141)"] and res["ambiguous_tag"] == []
+
+
+# the looser split rule: environment wrappers, &, \\ and whitespace are ignored; a candidate
+# has 10+ characters and belongs to a run of 2+ adjacent displays
+def split_export(tmp_path, displays, flags):
+    """A page of ``displays`` [(latex, tag or None)] with ``flags``."""
+    md = '<!-- page printed="5" file="5" -->\n\nText.\n\n' + "".join(
+        f"$$\n{lat}\n" + (f"\\tag{{{tag}}}\n" if tag else "") + "$$\n\n" for lat, tag in displays)
+    r = tmp_path / "split"
+    (r / "pages").mkdir(parents=True)
+    (r / "pages" / "p005.md").write_text(md, "utf-8")
+    (r / "pages" / "p005.flags.json").write_text(json.dumps(flags), "utf-8")
+    return r
+
+
+ROW1, ROW2 = "P(r) &= Q^{-k} + c_1", "b_1^{r_1} &= r_1! r_j + c_2"
+PRESPLIT = f"\\begin{{array}}{{rl}} {ROW1} \\\\[2pt] {ROW2} \\end{{array}}"
+
+
+def test_normalise_drops_environments_alignment_and_line_breaks():
+    n = provenance._normalise
+    assert n("\\begin{array}[t]{r@{}l} a &= b \\\\[3pt] c \\end{array}") == "a=bc"
+    assert n("\\begin{aligned} x & = 1 \\\\ y \\end{aligned}") == "x=1y"
+
+
+def test_a_split_whose_parts_are_rewrapped_is_a_split_suspect(tmp_path):
+    d = [(f"\\begin{{array}}{{rl}} {ROW1} \\end{{array}}", "140"),
+         (f"\\begin{{array}}{{rl}} {ROW2} \\end{{array}}", None)]
+    r = split_export(tmp_path, d, [flag("140", PRESPLIT)])
+    res = provenance.write(r)
+    assert flagged_ids(r) == []
+    assert [(s["displays"], s["runs"]) for s in res["split_suspect"]] == [
+        (["p005-d01", "p005-d02"], [["p005-d01", "p005-d02"]])]
+    assert res["partial_tag"] == []
+
+
+def test_a_coincidental_identical_row_elsewhere_is_dropped_by_adjacency(tmp_path):
+    d = [(ROW1, "140"), (ROW2, None), ("z = \\frac{1}{2}", None), (ROW2, None)]
+    r = split_export(tmp_path, d, [flag("140", PRESPLIT)])
+    res = provenance.write(r)
+    assert [s["displays"] for s in res["split_suspect"]] == [["p005-d01", "p005-d02"]]
+
+
+def test_one_candidate_left_after_adjacency_goes_to_the_tag_rule(tmp_path):
+    d = [(ROW1, None), ("z = \\frac{1}{2}", None), (ROW2, "140")]
+    r = split_export(tmp_path, d, [flag("140", PRESPLIT)])
+    res = provenance.write(r)
+    assert flagged_ids(r) == ["p005-d03"] and res["split_suspect"] == []
+
+
+def test_a_part_under_ten_characters_goes_to_the_tag_rule_and_partial_tag(tmp_path, capsys):
+    d = [(ROW1, None), ("r = 0", "140")]
+    r = split_export(tmp_path, d, [flag("140", f"\\begin{{array}}{{l}} {ROW1} \\\\ r = 0 \\end{{array}}")])
+    res = provenance.write(r)
+    assert flagged_ids(r) == ["p005-d02"] and res["split_suspect"] == []
+    assert res["partial_tag"] == [{"file": 5, "eq": "140", "display": "p005-d02", "display_len": 3,
+                                   "flag_len": 18}]
+    rep = provenance.report(res)
+    assert "1 flags attached to a display holding under half their LaTeX" in rep
+    assert "file 5 eq '140': p005-d02 (3 of 18)" in rep
+    assert cli.main(["math-provenance", "--export", str(r)]) == 0
+    assert "under half" in capsys.readouterr().out
+
+
+def test_an_exact_match_of_a_rewrapped_display_still_attaches_by_its_latex(tmp_path):
+    d = [(ROW1, "140"), (ROW2, None)]
+    r = split_export(tmp_path, d, [flag("140", ROW2)])
+    res = provenance.write(r)
+    assert flagged_ids(r) == ["p005-d02"]
+    assert res["split_suspect"] == [] and res["partial_tag"] == []

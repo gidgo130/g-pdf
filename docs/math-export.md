@@ -475,10 +475,15 @@ with a flag quoting part of a display. A dotted number (`44.74`) is read anywher
 integer (`140`, `(140)`, `140a`) only when `eq` is nothing but equation numbers, so an item id
 such as `p073-d02` never names a tag. An `eq` naming several numbers (`(140)/(141)`) attaches
 only to the one named display that contains the flag's LaTeX; when none or several do, the
-flag stays unattached and the report lists it as an ambiguous tag. Before the tag rule, a flag
-whose LaTeX (space-free, not equal to a display's) contains two or more of the page's displays
-quotes a display split after review: it is attached by neither tag nor containment and listed as
-`split_suspect` (file, `eq`, type, subtype, the candidate display ids) for a reviewer to place.
+flag stays unattached and the report lists it as an ambiguous tag. Before the tag rule, the
+flag's LaTeX and each display's are compared without environment wrappers (`\begin{..}` with
+its arguments, `\end{..}`), `&`, `\\` and whitespace. When the flag (not equal to a display)
+contains two or more displays of 10+ characters that sit in runs of 2+ adjacent displays, it
+quotes a display split after review: it is attached by neither tag nor containment and listed
+as `split_suspect` (file, `eq`, type, subtype, the display ids and each run) for a reviewer to
+place. A flag attached by tag or containment to a display that holds under half of the flag's
+LaTeX is attached as usual and listed as `partial_tag` (file, `eq`, display, both lengths): the
+rest of a split may be under 10 characters.
 An inline flag goes to the
 spans with its LaTeX, or with an `occurrence` only to that occurrence. `reviewer` is set
 only for reviewed formulas. `--review-dir REVIEW_DIR` takes a packed review folder and can be
