@@ -25,7 +25,7 @@ from gpdf.pipeline.mathocr import latex as L
 
 KINDS = ("display_delimiters", "inline_delimiters", "single_backslash_break", "no_row_breaks",
          "braces", "begin_end", "left_right", "control_character", "escape_fragment", "flags_json",
-         "flags_missing")
+         "flags_missing", "duplicate_page")
 MULTILINE = re.compile(r"aligned|align\*?|alignedat|eqnarray\*?|array|subarray|cases|"
                        r"gathered|gather\*?|split|multline\*?|[pbvBV]?matrix|smallmatrix")
 ENV_RE = re.compile(r"\\(begin|end)\s*\{([A-Za-z*]+)\}")
@@ -143,14 +143,24 @@ def check_pages(folder) -> dict:
     by its page markers; its flags are comment lines, not checked)."""
     folder = Path(folder)
     if folder.is_file():
-        from gpdf.pipeline.mathocr.score import _pages_from_text
+        from gpdf.pipeline.mathocr.score import MARKER_RE, page_stem
 
-        mds = _pages_from_text(folder.read_text("utf-8"))
-        if not mds:
+        text = folder.read_text("utf-8")
+        marks = list(MARKER_RE.finditer(text))
+        if not marks:
             raise CheckError(f"no page markers in {folder}")
-        problems = [{"page": stem, "kind": kind, "detail": detail}
-                    for stem, md in mds.items() for kind, detail in check_md(md)]
-        return _result(folder, len(mds), problems)
+        problems, lines = [], {}
+        for k, m in enumerate(marks):       # every marker is a page: a repeated key is reported, not merged
+            stem = page_stem(m)
+            lines.setdefault(stem, []).append(text.count("\n", 0, m.start()) + 1)
+            end = marks[k + 1].start() if k + 1 < len(marks) else len(text)
+            problems += [{"page": stem, "kind": kind, "detail": detail}
+                         for kind, detail in check_md(text[m.start():end].rstrip("\n") + "\n")]
+        for stem, at in lines.items():
+            if len(at) > 1:
+                problems.append({"page": stem, "kind": "duplicate_page",
+                                 "detail": "markers at lines " + ", ".join(map(str, at[:-1])) + f" and {at[-1]}"})
+        return _result(folder, len(marks), problems)
     if not folder.is_dir():
         raise CheckError(f"{folder} not found")
     if (folder / "pages").is_dir() and not list(folder.glob("p[0-9][0-9][0-9].md")):

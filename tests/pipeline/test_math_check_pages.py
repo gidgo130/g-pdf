@@ -159,3 +159,35 @@ def test_src_pages_can_be_scored_and_cross_checked_without_error(tmp_path):
 
     # cross-check entries address file pages: the supplementary pages are left out, the file pages kept
     assert sorted(crosscheck.load_pages(text)) == [10, 11]
+
+
+def _dup_kinds(res):
+    return [(p["page"], p["detail"]) for p in res["problems"] if p["kind"] == "duplicate_page"]
+
+
+def test_two_markers_with_the_same_src_and_file_are_a_duplicate_page(tmp_path):
+    text = tmp_path / "text.md"
+    text.write_text('<!-- page printed="1" file="" src="x.png" -->\n\nA \(a\).\n'
+                    '\n<!-- page printed="2" file="" src="x.png" -->\n\nB \(b\).\n', "utf-8")
+    res = check.check_pages(text)
+    assert _dup_kinds(res) == [("x.png#", "markers at lines 1 and 5")]
+    assert res["pages"] == 2 and res["counts"]["duplicate_page"] == 1        # nothing merged
+    assert "duplicate_page: 1 (x.png#)" in check.report(res)
+
+
+def test_two_markers_with_the_same_file_and_no_src_are_a_duplicate_page(tmp_path):
+    text = tmp_path / "text.md"
+    text.write_text('<!-- page printed="5" file="5" -->\n\nA.\n\n<!-- page printed="6" file="6" -->\n\nB.\n'
+                    '\n<!-- page printed="5" file="5" -->\n\nC.\n', "utf-8")
+    assert _dup_kinds(check.check_pages(text)) == [("p005", "markers at lines 1 and 9")]
+
+
+def test_different_srcs_or_files_are_not_duplicates(tmp_path):
+    text = tmp_path / "text.md"
+    text.write_text('<!-- page printed="1" file="" src="x.png" -->\n\nA.\n'
+                    '\n<!-- page printed="1" file="" src="y.png" -->\n\nB.\n'
+                    '\n<!-- page printed="" file="1" src="y.pdf" -->\n\nC.\n'
+                    '\n<!-- page printed="" file="2" src="y.pdf" -->\n\nD.\n'
+                    '\n<!-- page printed="3" file="3" -->\n\nE.\n', "utf-8")
+    res = check.check_pages(text)
+    assert _dup_kinds(res) == [] and res["pages"] == 5 and res["problems"] == []

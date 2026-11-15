@@ -740,6 +740,9 @@ attribute after `file`: `<!-- page printed="64" file="" src="book-p064.png" -->`
 starts its own page, keyed by (src, file) as `book-p064.png#` or `chart.pdf#p002` in reports;
 markers without `src` behave as before (a `file=""` marker without `src` is not a page marker).
 math-score reads them the same way; math-crosscheck addresses file pages only and leaves them out.
+A (src, file) key that two markers of one text.md share (also two `file="5"` markers) is a
+`duplicate_page` problem naming the marker lines; math-check-pages checks every marker's page and
+merges nothing (math-score still keeps one page per key).
 
 ## Tests
 
