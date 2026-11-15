@@ -57,7 +57,11 @@ When a book's inline items are reviewed whole (`--kinds ...,inline,inline_missin
 --inline-sample 0`), an `inline` item is one page with several spans. `math-decide KEY accept` then
 accepts every span (the decision names them, so provenance counts them reviewed); `math-decide KEY
 replace --span-file work\SPAN.tex [--occurrence N] --latex-file work\NEW.tex --reason ...` replaces
-one span, and further replaces of the same key add their spans to the same decision. An
+one span, and further replaces of the same key add their spans to the same decision.
+`math-decide KEY flag --span ... [--span ...] [--occurrence N ...]` names the flagged spans
+(`"spans": [{"latex_primary", "occurrence"}]`): math-apply-review writes one flag per span
+with its current LaTeX, so provenance ties each to its span; a flag naming no span stays
+page-level and the apply report lists it as untied. An
 `inline_missing` item's replaces likewise keep every run written (one call per run).
 
 ## Which model
@@ -150,6 +154,7 @@ the JSON. Below, `D` stands for the command `{decide}`, and KEY for the item's `
 D KEY accept
 D KEY replace --latex-file work\KEY.tex --reason "printed sign is minus"
 D KEY flag --flag-type possible_source_typo --subtype math_error --note "..."
+D KEY flag --span-file work\SPAN.tex [--occurrence N] --flag-type ... --note "..."
 D KEY --withdraw flag
 D status
 ```
@@ -160,7 +165,10 @@ command (a shell argument or heredoc can turn `\\` into `\`). Add `--tag 4.27` w
 accept or replace). An inline span's replace takes the span and its occurrence from the
 item; when the item gives `occurrence_candidates` instead, add `--occurrence N`. A
 `missing_display` replace also takes `--page-text "..."` or `--after "..."`; an
-`inline_missing` replace takes `--run-text "..."`, one call per run. Every replace carries
+`inline_missing` replace takes `--run-text "..."`, one call per run. When you flag an
+`inline` item (a page of spans), name the span or spans the flag is about: one `--span-file`
+(or `--span`) per span, with `--occurrence N` for each when the item gives
+`occurrence_candidates`; a flag on an `inline_span` item names its span by itself. Every replace carries
 a `--reason`, every flag a `--note`. Flag types: `possible_source_typo` (subtype
 `math_error` or `notation`), `copy_corrupt` (the printed page itself is damaged: write what
 is shown, the likely reading in the note), `formula_uncertain` (you can't decide; a flag is

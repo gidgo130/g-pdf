@@ -160,9 +160,7 @@ def _validate(d: dict, items: dict) -> str | None:
         return f"action must be one of {', '.join(ACTIONS)}"
     if d["action"] == "flag" and d.get("flag_type") not in FLAG_TYPES:
         return f"flag_type must be one of {', '.join(FLAG_TYPES)}"
-    if d["action"] == "flag" and d.get("spans") is not None:
-        if items[d["id"]].get("spans") is None:
-            return "spans go with a grouped inline item"
+    if d["action"] == "flag" and d.get("spans") is not None and items[d["id"]].get("spans") is not None:
         if not d["spans"] or not all(isinstance(s, dict) and isinstance(s.get("latex_primary"), str)
                                      and s["latex_primary"] for s in d["spans"]):
             return "a flag's spans need latex_primary"

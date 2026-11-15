@@ -50,9 +50,11 @@ def decide(batch, key: str, action: str, *, latex: str | None = None,
            reason: str | None = None, note: str | None = None, flag_type: str | None = None,
            subtype: str | None = None, tag: str | None = None, page_text: str | None = None,
            after: str | None = None, run_text: str | None = None,
-           occurrence: int | None = None, structure_change: bool = False,
-           span: str | None = None) -> dict:
-    """Check one decision against its item and write it; returns the decision written."""
+           occurrence: int | list[int] | None = None, structure_change: bool = False,
+           span: str | list[str] | None = None) -> dict:
+    """Check one decision against its item and write it; returns the decision written.
+    ``span`` and ``occurrence`` may be lists: a flag of a page inline item names each
+    flagged span (``occurrence`` one per span, or one for a single span)."""
     batch = Path(batch).resolve()           # "." would give an empty batch name
     items = _items(batch)
     order = {it["key"]: n for n, it in enumerate(items)}
@@ -61,8 +63,20 @@ def decide(batch, key: str, action: str, *, latex: str | None = None,
     it = items[order[key]]
     if action not in ACTIONS:
         raise DecideError(f"action must be one of {', '.join(ACTIONS)}")
+    spans = [span] if isinstance(span, str) else list(span or [])
+    occs = [occurrence] if isinstance(occurrence, int) else list(occurrence or [])
+    if spans and not (it["kind"] == "inline" and action in ("replace", "flag")):
+        raise DecideError("--span goes with a replace or flag of a page inline item")
+    if action == "replace":
+        if len(spans) > 1 or len(occs) > 1:
+            raise DecideError("a replace names one --span (and one --occurrence)")
+        span, occurrence = (spans or [None])[0], (occs or [None])[0]
     d: dict = {"key": key, "id": it["id"], "action": action}
     if action == "flag":
+        if it["kind"] in ("inline", "inline_span"):
+            d.update(_flag_spans(it, spans, occs))
+        elif occs:
+            raise DecideError("--occurrence goes with an inline item")
         if flag_type not in FLAG_TYPES:
             raise DecideError(f"a flag needs --flag-type, one of {', '.join(FLAG_TYPES)}")
         if not (note or "").strip():
@@ -94,6 +108,37 @@ def decide(batch, key: str, action: str, *, latex: str | None = None,
     if structure_change:
         d["structure_change"] = True
     return _write(batch, order, d, it)
+
+
+def _flag_spans(it: dict, spans: list[str], occs: list[int]) -> dict:
+    """The "spans" of a flag on an inline item: an inline_span item's own span; for a page
+    inline item, the spans named (none: a page-level flag), each with its occurrence."""
+    if it["kind"] == "inline_span":
+        if len(occs) > 1:
+            raise DecideError("an inline span item takes one --occurrence")
+        occ = (occs or [None])[0] or it.get("occurrence")
+        if occ is None:
+            raise DecideError("this span occurs several times in the page: pass --occurrence N "
+                              "from its occurrence_candidates")
+        return {"spans": [{"latex_primary": it["latex_primary"], "occurrence": occ}]}
+    if not spans:
+        if occs:
+            raise DecideError("--occurrence needs the --span it belongs to")
+        return {}
+    if occs and len(occs) != len(spans):
+        raise DecideError(f"{len(spans)} --span and {len(occs)} --occurrence: give one "
+                          "--occurrence per --span, in the same order")
+    out = []
+    for n, s in enumerate(spans):
+        hits = [x for x in it.get("spans", []) if _norm(x["latex_primary"]) == _norm(s)]
+        if not hits:
+            raise DecideError(f"--span {s!r} is not one of the item's spans (copy its latex_primary)")
+        occ = occs[n] if occs else hits[0].get("occurrence")
+        if occ is None:
+            raise DecideError(f"span {hits[0]['latex_primary']!r} occurs several times in the page: "
+                              "pass --occurrence N from its occurrence_candidates")
+        out.append({"latex_primary": hits[0]["latex_primary"], "occurrence": occ})
+    return {"spans": out}
 
 
 def _replace(it, latex, page_text, after, run_text, occurrence, structure_change,

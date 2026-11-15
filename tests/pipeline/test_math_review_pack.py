@@ -482,3 +482,77 @@ def test_cli_decide_reads_the_latex_from_stdin_and_the_brief_names_the_helper(ex
     assert "1 of" in capsys.readouterr().out
     brief = (b / "BRIEF.md").read_text("utf-8")
     assert "math-decide" in brief and str(b.resolve()) in brief and not pack.FIELD_RE.search(brief)
+
+
+def test_decide_flags_named_spans_of_a_page_inline_item_and_they_apply_tied(export, tmp_path):
+    from gpdf.pipeline.mathocr import decide
+    out = tmp_path / "rev"
+    pack.pack(export, out, kinds=("inline",), inline_sample=0)
+    b = out / "batch01"
+    with pytest.raises(decide.DecideError, match="not one of the item"):
+        decide.decide(b, "p001-inline", "flag", flag_type="formula_uncertain", note="n", span=["z"])
+    with pytest.raises(decide.DecideError, match="occurrence"):           # b is printed twice
+        decide.decide(b, "p001-inline", "flag", flag_type="formula_uncertain", note="n",
+                      span=["a_1", "b"])
+    with pytest.raises(decide.DecideError, match="--occurrence"):
+        decide.decide(b, "p001-inline", "flag", flag_type="formula_uncertain", note="n",
+                      span=["a_1", "b"], occurrence=[1, 2, 3])
+    d = decide.decide(b, "p001-inline", "flag", flag_type="possible_source_typo", subtype="notation",
+                      note="two slips", span=["a_1", "b"], occurrence=[1, 2])
+    assert d["spans"] == [{"latex_primary": "a_1", "occurrence": 1},
+                          {"latex_primary": "b", "occurrence": 2}]
+    with pytest.raises(decide.DecideError, match="one --span"):
+        decide.decide(b, "p001-inline", "replace", span=["a_1", "b"], latex="x", reason="r")
+    with pytest.raises(decide.DecideError, match="--span goes with"):
+        decide.decide(out / "batch01", "p001-inline", "accept", span=["a_1"])
+    rep = review.apply(export, out / "decisions" / "batch01.jsonl")
+    assert rep.refused == [] and rep.untied == []
+    fl = [f for f in json.loads((export / "pages" / "p001.flags.json").read_text("utf-8"))
+          if f["type"] == "possible_source_typo"]
+    assert [(f["latex"], f.get("occurrence")) for f in fl] == [("a_1", None), ("b", 2)]
+
+
+def test_cli_decide_round_trips_repeated_spans_and_occurrences(export, tmp_path):
+    out = tmp_path / "rev"
+    pack.pack(export, out, kinds=("inline",), inline_sample=0)
+    b = out / "batch01"
+    (b / "work" / "span.tex").write_text("b\n", "utf-8")
+    assert cli.main(["math-decide", "--batch", str(b), "p001-inline", "flag", "--flag-type",
+                     "formula_uncertain", "--note", "faint", "--span", "a_1", "--span-file",
+                     "work/span.tex", "--occurrence", "1", "--occurrence", "2"]) == 0
+    d = lines(out / "decisions" / "batch01.jsonl")[0]
+    assert d["spans"] == [{"latex_primary": "a_1", "occurrence": 1},
+                          {"latex_primary": "b", "occurrence": 2}]
+    # a single --span and --occurrence still drive a replace
+    (b / "work" / "new.tex").write_text("B\n", "utf-8")
+    assert cli.main(["math-decide", "--batch", str(b), "p001-inline", "replace", "--span", "b",
+                     "--occurrence", "2", "--latex-file", str(b / "work" / "new.tex"),
+                     "--reason", "bold"]) == 0
+    got = {x["action"]: x for x in lines(out / "decisions" / "batch01.jsonl")}
+    assert {"latex_primary": "b", "latex": "B", "occurrence": 2} in got["replace"]["spans"]
+    rep = review.apply(export, out / "decisions" / "batch01.jsonl")
+    assert rep.refused == []
+    fl = [f for f in json.loads((export / "pages" / "p001.flags.json").read_text("utf-8"))
+          if f["type"] == "formula_uncertain"]
+    assert [(f["latex"], f.get("occurrence")) for f in fl] == [("a_1", None), ("B", None)]
+
+
+def test_decide_ties_an_inline_span_flag_to_its_span(export, tmp_path):
+    from gpdf.pipeline.mathocr import decide
+    out, b = _packed(export, tmp_path)
+    d = decide.decide(b, "p001-inline#1", "flag", flag_type="formula_uncertain", note="faint")
+    assert d["spans"] == [{"latex_primary": "a_1", "occurrence": 1}]
+    with pytest.raises(decide.DecideError, match="occurrence"):           # b is printed twice
+        decide.decide(b, "p001-inline#2", "flag", flag_type="formula_uncertain", note="faint")
+    d = decide.decide(b, "p001-inline#2", "flag", flag_type="formula_uncertain", note="faint",
+                      occurrence=2)
+    assert d["spans"] == [{"latex_primary": "b", "occurrence": 2}]
+    rep = review.apply(export, out / "decisions" / "batch01.jsonl")
+    assert rep.refused == [] and rep.untied == []
+
+
+def test_the_brief_tells_reviewers_to_name_the_flagged_spans(export, tmp_path):
+    out = tmp_path / "rev"
+    pack.pack(export, out, kinds=("inline",), inline_sample=0)
+    brief = (out / "batch01" / "BRIEF.md").read_text("utf-8")
+    assert "flag --span-file" in brief and "name the span" in brief
