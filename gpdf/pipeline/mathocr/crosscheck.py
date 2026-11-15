@@ -349,9 +349,15 @@ def cut(latex: str, row=None, eq=None) -> tuple[str, str]:
         return eqs[eq][1], eqs[eq][2]
     if eq in ("rhs", None, "full"):      # a whole display: no alignment left over
         s = I._clean(I._pre(I.ALIGN_ENV.sub(" ", s).replace("&", " ")))
+    support = ""
     if eq == "rhs":
+        m = TRAILING_SUPPORT.search(s)      # ", x = 0, 1, \ldots": its "=" is not the display's
+        if m:
+            s, support = s[:m.start()], m.group(1).strip()
         s = I._split_top(s, ["="])[-1]
     rest = [p.strip() for p in I._split_top(s, I.SEPARATORS)[1:] if p.strip()]
+    if support:
+        rest.append(support)
     return I._strip_conditions(s), " , ".join(rest)
 
 
@@ -367,6 +373,9 @@ COND_WORDS = re.compile(r"(?<![A-Za-z\\])(?:if|for|when|where|and|with)(?![A-Za-
 ELSE_WORDS = re.compile(r"(?:otherwise|elsewhere|else)", re.I)
 SUPPORT_LIST = re.compile(r"(.+?)\s*=\s*(-?\d+)\s*,(?:\s*-?\d+\s*,)*\s*(?:\\[lc]?dots|\\dotsc|\.\.\.)"
                           r"\s*(?:,\s*(.+?))?\s*,?")
+# a support list closing a display: "; x = 0, 1, \ldots" (the separator is a comma, \quad or a word)
+TRAILING_SUPPORT = re.compile(r"[\s,;]+([A-Za-z][^=,;]*?\s*=\s*-?\d+\s*(?:,\s*-?\d+\s*)*,\s*"
+                              r"(?:\\[lc]?dots|\\dotsc|\.\.\.)(?:\s*,[^;]*)?[\s.,;]*)$")
 REL_TOKEN = re.compile(r"(\\(?:leqslant|geqslant|leq|geq|neq|le|ge|ne|lt|gt)(?![A-Za-z])|<|>|=)")
 _EPS = 1e-12
 REL_OK = {"<": lambda a, b: a < b, ">": lambda a, b: a > b,

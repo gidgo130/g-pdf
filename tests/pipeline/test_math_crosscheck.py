@@ -402,3 +402,21 @@ def test_a_markdown_table_with_an_empty_heading_row_keeps_its_first_body_row():
     names, body = C.tables(page)[0]
     assert [r[0] for r in body] == ["pmf", "mgf"]
     assert C.locate({5: page}, {"page": 5, "table": 1, "row": "pmf", "col": 2})[3].startswith("P(X = x)")
+
+
+@pytest.mark.parametrize("sep", [r", \quad", r"\quad", r"\qquad", r", \qquad", r",", r"\quad \text{for}",
+                                 r", \text{for}", r"\text{for}"])
+@pytest.mark.parametrize("dots", [r"\ldots", r"\dots", r"..."])
+def test_rhs_keeps_the_expression_before_a_trailing_support_list(sep, dots):
+    # the "=" of "x = 0, 1, \ldots" is the support list's, not the display's
+    latex = rf"f(x) = p(1-p)^x {sep} x = 0, 1, {dots}"
+    expr, cond = C.cut(latex, None, "rhs")
+    assert expr == "p(1-p)^x"
+    assert "x = 0" in cond and "1" in cond
+    assert C.piece(latex, None, "rhs") == "p(1-p)^x"
+
+
+def test_rhs_without_a_support_list_is_unchanged():
+    assert C.cut(r"f(x) = \lambda e^{-\lambda x}, \quad x > 0", None, "rhs") == (r"\lambda e^{-\lambda x}", "x > 0")
+    assert C.cut(r"f(x) = g(x) = h(x)", None, "rhs") == ("h(x)", "")
+    assert C.cut(r"\mu = np, \sigma^2 = npq", None, "rhs")[0] == "npq"
