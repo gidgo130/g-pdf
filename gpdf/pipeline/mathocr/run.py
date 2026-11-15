@@ -67,6 +67,7 @@ class Options:
     identity_letters: dict | None = None     # the book's letters for the identity pass (S: quantile, ...)
     invention_check: bool = True             # flag paragraphs the page does not hold
     ocr_lang: str = "eng"                    # Tesseract language(s) for the invention check
+    keep_banners: bool = False               # a compilation of similar documents: no banner pass
 
 
 @dataclass
@@ -255,7 +256,8 @@ def _run(opts: Options, progress=None) -> Summary:
         openers = {a for a, _ in _ranges(pages)} | {s["at"] for s in fit.steps} | {
             pg.file for pg in assembled if any(it.kind == "heading" and it.md.startswith("# ")
                                                for it in pg.items)}
-        assemble.drop_banners(assembled, openers)
+        if not opts.keep_banners:
+            assemble.drop_banners(assembled, openers)
         for pg in assembled:
             if pg.file in basic:
                 others = [str(b.get("content") or "") for b in basic[pg.file].blocks
@@ -356,7 +358,8 @@ def _run(opts: Options, progress=None) -> Summary:
                             "check_identities": want_ident,
                             "identity_letters": opts.identity_letters,
                             "tesseract": tess.version if tess else None,
-                            "invention_check": opts.invention_check, "ocr_lang": opts.ocr_lang},
+                            "invention_check": opts.invention_check, "ocr_lang": opts.ocr_lang,
+                            "keep_banners": opts.keep_banners},
                 "labels": {"runs": fit.runs, "steps": fit.steps, "rejected": fit.rejected,
                            "sources": {str(p): sources[p] for p in pages}},
                 "notices": notices}

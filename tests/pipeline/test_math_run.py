@@ -8,7 +8,7 @@ import pymupdf
 import pytest
 
 from gpdf import cli
-from gpdf.pipeline.mathocr import engine
+from gpdf.pipeline.mathocr import assemble, engine
 
 from .fake_mineru import make_fake_mineru, make_home
 
@@ -168,6 +168,20 @@ def test_math_export_writes_the_atlas_layout(setup, tmp_path, capsys):
     assert "4 pages, 6 displays" in out_text
     assert "review items: disagree 1, inline 1, stack 1, tag 1" in out_text
     assert "label run: file 1-4 printed 44-47 (offset +43, 4 read)" in out_text
+
+
+def test_keep_banners_leaves_repeated_opener_paragraphs_in_place(setup, tmp_path, monkeypatch):
+    # a compilation of many short documents repeats real sentences on each opener ("The survivor
+    # function of X is"): --keep-banners skips the banner pass; the default still runs it
+    exe, home, pdf, log = setup
+    calls = []
+    monkeypatch.setattr(assemble, "drop_banners", lambda pages, openers: calls.append(openers))
+    assert run(exe, home, pdf, tmp_path / "a", "--pages", "1-4") == 0
+    assert len(calls) == 1
+    assert run(exe, home, pdf, tmp_path / "b", "--pages", "1-4", "--keep-banners") == 0
+    assert len(calls) == 1
+    meta = json.loads((tmp_path / "b" / "book" / "meta.json").read_text("utf-8"))
+    assert meta["options"]["keep_banners"] is True
 
 
 def test_a_second_run_reuses_the_cache_and_pages_can_be_narrowed(setup, tmp_path):

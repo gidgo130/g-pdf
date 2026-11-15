@@ -245,7 +245,9 @@ was not scanned); runs, steps and rejected readings are printed and kept in
 - Figures: `[Figure 45.2: caption]`; footnotes `[^1]: text` at the page end.
 - Running heads and feet are dropped and recorded as `dropped` flags; page
   numbers are the marker. A paragraph repeated on the first page of two or more
-  runs (a publisher's banner on chapter openers) is dropped there, with a flag.
+  runs (a publisher's banner on chapter openers) is dropped there, with a flag;
+  `--keep-banners` keeps it (a compilation of many short documents, where each
+  opener repeats real sentences).
 - Every page has balanced `$$` and `\( \)`: prose cannot open math. An untagged
   display at the foot of a page followed by a display at the top of the next
   is a possible split display: it is closed, reopened right after the next

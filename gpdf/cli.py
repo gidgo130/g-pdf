@@ -378,6 +378,10 @@ def build_parser() -> argparse.ArgumentParser:
     me.add_argument("--allow-sleep", action="store_true",
                     help="let Windows sleep during the run (by default math-export keeps the "
                          "PC awake while it runs; elsewhere it never interferes)")
+    me.add_argument("--keep-banners", action="store_true",
+                    help="keep paragraphs repeated on run-opener pages (by default dropped as "
+                         "banners); for a compilation of many short documents whose openers "
+                         "repeat real sentences")
     me.add_argument("--cache", metavar="DIR", type=Path,
                     help="engine output cache (default OUTDIR/<stem>/cache)")
     me.add_argument("--ddjvu", metavar="PATH",
@@ -1082,7 +1086,7 @@ def _math_export_main(args, parser) -> int:
                        inline_with=args.inline_with, style_page=args.style_page_consistency,
                        keep_awake=not args.allow_sleep, ocr_mode=args.ocr_mode,
                        ddjvu=args.ddjvu, invention_check=args.invention_check,
-                       ocr_lang=args.ocr_lang)
+                       ocr_lang=args.ocr_lang, keep_banners=args.keep_banners)
     if args.identity_letters:
         from gpdf.pipeline.mathocr import identities
         try:
