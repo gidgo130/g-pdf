@@ -336,12 +336,15 @@ def _pre(body: str) -> str:
     return re.sub(r"\\q?quad\b", " ; ", body)       # _clean would make spaces of them
 
 
-def equations(latex: str, conditions: bool = False) -> list[tuple]:
+def equations(latex: str, conditions: bool = False, keep_unsupported: bool = False) -> list[tuple]:
     """(lhs, rhs) pairs of a display: aligned rows, = chains and equations separated by a
     comma, \\quad or a word split; side conditions dropped; an equation whose side holds a
     sum, an integral or dots is left out. Empty for a display that is no identity. With
     ``conditions``: (lhs, rhs, condition) triples, the condition being what followed the
-    equation on its row (or a row of its own that is only a relation), "" if none."""
+    equation on its row (or a row of its own that is only a relation), "" if none.
+    ``keep_unsupported`` keeps an equation with a sum, an integral or dots in it (a reader that
+    only cuts a piece out of a display; the identity check leaves those out). An "=" inside
+    braces or parentheses (\sum_{i = 1}^{n}) is never a split point."""
     body, _ = L.split_tag(latex)
     if NOT_IDENTITY.search(body) or UNSUPPORTED_ENV.search(body):
         return []
@@ -380,7 +383,7 @@ def equations(latex: str, conditions: bool = False) -> list[tuple]:
         elif eqs and not conds[-1]:
             conds[-1] = row                  # a row that is only a relation: t > 0
     out = [(l, r, c) for (l, r), c in zip(eqs, conds)
-           if not UNSUPPORTED.search(l) and not UNSUPPORTED.search(r)]
+           if keep_unsupported or not (UNSUPPORTED.search(l) or UNSUPPORTED.search(r))]
     return out if conditions else [(l, r) for l, r, _ in out]
 
 

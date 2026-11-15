@@ -343,7 +343,7 @@ def cut(latex: str, row=None, eq=None) -> tuple[str, str]:
     from gpdf.pipeline.mathocr import identities as I
     s = rows(latex)[int(row)] if row is not None else latex
     if isinstance(eq, int):
-        eqs = I.equations(s, conditions=True)
+        eqs = I.equations(s, conditions=True, keep_unsupported=True)
         if not 0 <= eq < len(eqs):
             raise CrosscheckError(f"equation {eq} not found ({len(eqs)} in the piece)")
         return eqs[eq][1], eqs[eq][2]

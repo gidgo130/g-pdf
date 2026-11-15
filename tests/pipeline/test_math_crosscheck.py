@@ -420,3 +420,26 @@ def test_rhs_without_a_support_list_is_unchanged():
     assert C.cut(r"f(x) = \lambda e^{-\lambda x}, \quad x > 0", None, "rhs") == (r"\lambda e^{-\lambda x}", "x > 0")
     assert C.cut(r"f(x) = g(x) = h(x)", None, "rhs") == ("h(x)", "")
     assert C.cut(r"\mu = np, \sigma^2 = npq", None, "rhs")[0] == "npq"
+
+
+@pytest.mark.parametrize("latex, lhs, rhs", [
+    (r"\sum_{i = 1}^{n} x_i = n\bar{x}", r"\sum_{i = 1}^{n}x_i", r"n\bar{x}"),
+    (r"\prod_{j=0}^{n} a_j = b", r"\prod_{j=0}^{n}a_j", "b"),
+    (r"\int_{x=0}^{1} f(x)\,dx = 1", r"\int_{x=0}^{1}f(x) dx", "1"),
+    (r"\frac{x = 1}{2} = y", r"\frac{x = 1}{2}", "y"),
+    (r"\left( x = 1 \right) = z", "( x = 1 )", "z"),
+])
+def test_an_equals_sign_inside_braces_or_parentheses_is_not_a_split_point(latex, lhs, rhs):
+    from gpdf.pipeline.mathocr import identities as I
+    assert I.equations(latex, keep_unsupported=True) == [(lhs, rhs)]
+    assert C.cut(latex, None, 0)[0] == rhs          # an equation entry reaches a sum display
+    # the identity check still leaves a sum, an integral or a product out, as documented
+    if lhs.startswith(("\sum", "\prod", "\int")):
+        assert I.equations(latex) == []
+
+
+def test_a_two_equation_display_still_gives_two_with_a_sum():
+    from gpdf.pipeline.mathocr import identities as I
+    latex = r"\sum_{i = 1}^{n} x_i = n\bar{x}, \quad a_{k=1} = 2"
+    assert I.equations(latex, keep_unsupported=True) == [(r"\sum_{i = 1}^{n}x_i", r"n\bar{x}"), ("a_{k=1}", "2")]
+    assert I.equations(r"a = b, c = d") == [("a", "b"), ("c", "d")]
