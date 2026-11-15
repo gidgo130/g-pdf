@@ -108,7 +108,8 @@ the engine reads), `--crop-dpi 300` (review crops), `--check-identities` /
 `--mineru-home DIR`, `--allow-unpinned`; Marker: `--marker PATH`,
 `--llama-server PATH`, `--marker-gguf DIR`, `--no-marker`, `--marker-rule
 any|value|small`, `--inline-with basic|marker|either|both`; and
-`--style-page-consistency`; `--identity-letters L=KIND,...`; `--allow-sleep`.
+`--style-page-consistency`; `--identity-letters L=KIND,...`; `--allow-sleep`;
+`--no-invention-check`, `--ocr-lang L` (see "Engine inventions" below).
 
 `--ocr-mode ocr|txt` chooses what MinerU reads: `ocr` (default) a grayscale render of
 each page at `--dpi`; `txt` the PDF's own text layer (each page goes to the engine as a
@@ -157,6 +158,51 @@ by the source file's SHA-256, the page, the tier, the engine version and the
 dpi: a stopped run resumes where it left off, and a re-run over the same pages
 never starts the engine. Half-written cache files from a stopped run are
 discarded. Delete the cache folder to force a fresh parse.
+
+## Engine inventions
+
+MinerU sometimes writes text that is not on the page, on figure and blank areas: Chinese
+passages, "The quick brown fox ...", image descriptions, a made-up theorem. math-export
+checks the assembled pages before writing them (`--no-invention-check` skips it), and
+`gpdf-cli math-invention-check` checks an export's final pages after review (or an old
+delivery):
+
+```powershell
+gpdf-cli math-invention-check OUT\book [--source FILE] [--tesseract PATH] [--ocr-lang eng+spa]
+    [--threshold-layer 0.6] [--threshold-tess 0.6] [--usable 0.75] [--report FILE] [--dry-run]
+```
+
+Each paragraph (the page split at blank lines, displays, comments and tables set apart;
+inline math removed) with 8+ words, 4+ of them of 4+ letters, is scored: the share of its
+4+-letter words (accents folded) found in a reference text of the page, an OCR slip
+(difflib ratio 0.8 against a word of similar length) counting as found. The reference is
+the copy's text layer when it is usable (20+ words of 4+ letters and the median share of
+the page's scored paragraphs at least `--usable`), else Tesseract on a 300 dpi grey render
+(`--ocr-lang`, default `eng`; Spanish books `spa` or `eng+spa`; the language must be
+installed). A DjVu uses its hidden text layer (`djvutxt`, when DjVuLibre has it) or the
+proxy's render. A page with no usable layer while Tesseract is missing is reported as
+unchecked, never failed. Candidates: any paragraph (displays and tables included) with CJK
+letters (fewer than 4: the weaker "CJK (few)") or one of the stock phrases ("the quick brown
+fox", "the image contains no (discernible) text", "the chart is a graphic design"), and a
+scored paragraph whose share is below the threshold of the reference used (0.6 for both by
+default, calibrated on Batch C's known inventions: 64 of 65 found with either reference; the
+miss is a formula-only fragment with no words to score).
+
+Each candidate becomes a flag in the page's `pNNN.flags.json`:
+
+```json
+{"type": "invention_suspect", "para_index": 4, "kind": "prose", "words": 31, "share": 0.0,
+ "ref": "layer", "threshold": 0.6, "rule": [], "start": "the first twelve words ..."}
+```
+
+The page text is never changed: the owner decides what goes. A re-run replaces the page's
+earlier `invention_suspect` flags and touches no other flag. The summary (pages checked by
+the layer and by Tesseract, pages without scored prose, unchecked pages, candidates, those
+confirmed by a rule: 4+ CJK letters or a stock phrase) goes into `run.json`'s
+`totals.invention` and the export report; math-invention-check writes it with every flag to
+`OUT\book\invention_check.json` (or `--report FILE`). `--source` defaults to meta.json's
+source path; `--dry-run` writes the report and no flags. math-provenance ignores these
+flags (they are not formula flags).
 
 ## Output
 
@@ -330,7 +376,21 @@ review batch, as `gpdf-cli math-review-pack` lays them out; see docs/math-review
 {"id": "p073-d02", "action": "replace", "latex": "..."}
 {"id": "p073-d02", "action": "flag", "flag_type": "possible_source_typo", "note": "..."}
 {"id": "p073-inline", "action": "replace", "spans": [{"latex_primary": "x_1", "latex": "x_i"}]}
+{"id": "p073-inline", "action": "flag", "flag_type": "formula_uncertain", "note": "...",
+ "spans": [{"latex_primary": "x_1", "occurrence": 2}]}
 ```
+
+A flag on a grouped inline item (a page's spans) names the span or spans it is about in
+`spans` (`latex_primary`, and `occurrence` when the span occurs more than once in the page,
+counted in the page as it stands after any earlier replace of the same item). It writes one
+flag per span, `eq` the item id and `latex` the span's current LaTeX (the replacement when
+an earlier replace of the item changed it), with the `occurrence` when the span repeats;
+math-provenance then ties each flag to that span (and only that occurrence). A span not in
+the item or the page, or a missing or wrong occurrence, is refused. A flag naming no span is
+applied page-level as before and the report lists it as "untied (page-level)".
+`gpdf-cli math-decide KEY flag --span LATEX [--span ...] [--occurrence N ...]` writes such
+a decision (one `--occurrence` per `--span`, in order); a flag on an `inline_span` item
+names its span by itself.
 
 `flag_type` is one of `formula_uncertain`, `possible_source_typo`,
 `copy_corrupt`, `illegible`. A replace keeps the display's `\tag`; a `"tag":
@@ -410,7 +470,12 @@ flags is refused. `math-check-pages` still applies to the result.
 Formulas are matched to queue items, decisions and flags by their LaTeX. A flag whose LaTeX no
 longer equals any display, for example after a split or a corrected field, goes to the display
 whose `\tag` its `eq` names. Failing that, it goes to the first display that contains its LaTeX, as
-with a flag quoting part of a display. `reviewer` is set
+with a flag quoting part of a display. A dotted number (`44.74`) is read anywhere in `eq`; a plain
+integer (`140`, `(140)`, `140a`) only when `eq` is nothing but equation numbers, so an item id
+such as `p073-d02` never names a tag. An `eq` naming several numbers (`(140)/(141)`) attaches
+only to the one named display that contains the flag's LaTeX; when none or several do, the
+flag stays unattached and the report lists it as an ambiguous tag. An inline flag goes to the
+spans with its LaTeX, or with an `occurrence` only to that occurrence. `reviewer` is set
 only for reviewed formulas. `--review-dir REVIEW_DIR` takes a packed review folder and can be
 given more than once. Where a reviewer's accept on an inline item names no spans, it counts
 for the spans sampled on that page that no other decision covers. The identity results come from `identities.jsonl`, which

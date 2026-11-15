@@ -518,8 +518,19 @@ Everything is in [docs/math-export.md](docs/math-export.md).
 ```powershell
 gpdf-cli math-export book.pdf --out out --pages 63-81 --mineru C:\path\venv-mineru
 gpdf-cli math-apply-review --export out\book --decisions review_decisions.jsonl
+gpdf-cli math-invention-check out\book [--source book.pdf] [--ocr-lang eng+spa] [--dry-run]
 gpdf-cli math-score --ref ref_pages --cand out\book --out scores
 ```
+
+math-export also checks the assembled pages for engine inventions (text the page
+does not hold, such as CJK passages or image descriptions) against the PDF's text
+layer or Tesseract, and flags them as `invention_suspect` without changing the page;
+`--no-invention-check` skips this and `--ocr-lang L` (default `eng`) sets
+Tesseract's language. `math-invention-check` runs the same check on final pages after
+review (`--dry-run`: a JSON report, no flags). A flag decision on a page's grouped
+inline item names its spans, `"spans": [{"latex_primary": "...", "occurrence": n}]`
+(`occurrence` when the span repeats on the page), so each flag is tied to its span;
+`math-decide KEY flag --span LATEX [--occurrence N]` writes it.
 
 ## Keyboard shortcuts
 

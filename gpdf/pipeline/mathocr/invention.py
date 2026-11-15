@@ -23,8 +23,10 @@ reference.
 
 Candidates: any paragraph, displays and tables included, with CJK letters (fewer than 4: the
 weaker "CJK (few)") or a generic fixed phrase; and a scored paragraph whose share is below
-the threshold of the reference used. Calibrated on BATCH_C_CLOSE's known inventions (recall
-100 % in both modes; real paragraphs flagged: layer 0.7 %, Tesseract 0.4 % at 0.6).
+the threshold of the reference used. Calibrated on BATCH_C_CLOSE's known inventions: 64 of 65
+found with either reference (the miss, a formula-only fragment, was caught there only by a
+book-specific phrase not used here); real paragraphs flagged: layer 0.7 %, Tesseract 0.4 %
+at 0.6.
 """
 
 from __future__ import annotations
