@@ -377,3 +377,13 @@ def test_table_cells_are_entries_with_their_column_headings(tmp_path):
         C.locate({3: TABLE_PAGE}, {"page": 3, "table": 1, "row": "Gamma", "col": "Entropy"})
     with pytest.raises(C.CrosscheckError):
         C.locate({3: TABLE_PAGE}, {"page": 3, "table": 1, "row": "Normal", "col": "Kurtosis"})
+
+
+def test_a_markdown_table_with_an_empty_heading_row_keeps_its_first_body_row():
+    # a label | formula table has no column headings: its heading row is "| | |"; that row is a heading, not the
+    # |---| separator, so the first body row ("pmf") is a body row the entry can name
+    page = ("<!-- page printed=\"1\" file=\"5\" -->\n\n**Bernoulli(p)**\n\n| | |\n|---|---|\n"
+            "| pmf | \(P(X = x) = p^{x}(1 - p)^{1 - x}\) |\n| mgf | \(M(t) = 1 - p + p e^{t}\) |\n")
+    names, body = C.tables(page)[0]
+    assert [r[0] for r in body] == ["pmf", "mgf"]
+    assert C.locate({5: page}, {"page": 5, "table": 1, "row": "pmf", "col": 2})[3].startswith("P(X = x)")

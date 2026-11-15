@@ -222,8 +222,9 @@ def tables(md: str) -> list[tuple[list[str], list[list[str]]]]:
             heads, body = grid[:nh], grid[nh:]
         else:
             lines = [ln.strip().strip("|") for ln in text.strip().splitlines()]
+            # the separator line has dashes; a heading row of empty cells ("| | |") is a heading row
             grid = [[x.strip() for x in ln.split("|")] for ln in lines
-                    if not re.fullmatch(r"[\s|:\-]*", ln)]
+                    if not re.fullmatch(r"[\s|:]*-[\s|:\-]*", ln)]
             heads, body = grid[:1], grid[1:]
         ncol = max((len(r) for r in grid), default=0)
         names = []
