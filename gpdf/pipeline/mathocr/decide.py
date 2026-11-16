@@ -29,6 +29,33 @@ class DecideError(Exception):
     """The decision cannot be written; the message is for the reviewer."""
 
 
+class AmbiguousSpan(DecideError):
+    """A replace, flag or withdraw names a span whose LaTeX the page holds more than once, with
+    no occurrence: nothing is changed, the reviewer adds --occurrence."""
+
+    def __init__(self, key: str, latex: str, count: int, page_count: int | None = None):
+        self.key, self.latex, self.count, self.page_count = key, latex, count, page_count
+        where = f"{count} times in the item" + (f", {page_count} in the page" if page_count else "")
+        super().__init__(f"ambiguous_span: {key}: span {latex!r} occurs {where}: give its "
+                         "--occurrence N from its occurrence_candidates")
+
+
+def _count(it: dict, lp: str) -> tuple[int, int | None]:
+    """(times the item names the span's LaTeX, times the page holds it as the pack found it)."""
+    same = [x for x in it.get("spans", []) if x["latex_primary"] == lp]
+    if any(x.get("occurrence") is not None for x in same):
+        return len(same), 1
+    cand = next((x.get("occurrence_candidates") for x in same if x.get("occurrence_candidates")), None)
+    return len(same), (len(cand) if cand else None)
+
+
+def _places(it: dict, lp: str) -> list[int] | None:
+    """Every occurrence of a span's LaTeX in the page, when the item names each of them (so the
+    item's spans of that LaTeX are those occurrences); None when the item holds fewer."""
+    k, n = _count(it, lp)
+    return list(range(1, n + 1)) if n is not None and n == k else None
+
+
 def _items(batch: Path) -> list[dict]:
     path = batch / "items.jsonl"
     if not path.is_file():
@@ -89,7 +116,8 @@ def decide(batch, key: str, action: str, *, latex: str | None = None,
                  reason=(reason or note).strip())
     elif action == "accept":
         if spans:                             # one page span: its siblings keep their decisions
-            d["spans"] = [{**x, "latex": x["latex_primary"]} for x in _flag_spans(it, spans, occs)["spans"]]
+            d["spans"] = [{**x, "latex": x["latex_primary"]}
+                          for x in _flag_spans(it, spans, occs, accept=True)["spans"]]
         elif occs:
             raise DecideError("--occurrence needs the --span it belongs to")
         elif it["kind"] == "inline_span":
@@ -116,9 +144,11 @@ def decide(batch, key: str, action: str, *, latex: str | None = None,
     return _write(batch, order, d, it, partial=bool(spans) and action == "accept")
 
 
-def _flag_spans(it: dict, spans: list[str], occs: list[int]) -> dict:
+def _flag_spans(it: dict, spans: list[str], occs: list[int], accept: bool = False) -> dict:
     """The "spans" of a flag on an inline item: an inline_span item's own span; for a page
-    inline item, the spans named (none: a page-level flag), each with its occurrence."""
+    inline item, the spans named (none: a page-level flag), each with its occurrence. An
+    ``accept`` of a span the item names more than once, with no occurrence, names every one
+    of its occurrences (marked ``undecided``: the merge keeps those already decided)."""
     if it["kind"] == "inline_span":
         if len(occs) > 1:
             raise DecideError("an inline span item takes one --occurrence")
@@ -139,11 +169,15 @@ def _flag_spans(it: dict, spans: list[str], occs: list[int]) -> dict:
         hits = [x for x in it.get("spans", []) if _norm(x["latex_primary"]) == _norm(s)]
         if not hits:
             raise DecideError(f"--span {s!r} is not one of the item's spans (copy its latex_primary)")
+        lp = hits[0]["latex_primary"]
         occ = occs[n] if occs else hits[0].get("occurrence")
         if occ is None:
-            raise DecideError(f"span {hits[0]['latex_primary']!r} occurs several times in the page: "
-                              "pass --occurrence N from its occurrence_candidates")
-        out.append({"latex_primary": hits[0]["latex_primary"], "occurrence": occ})
+            places = _places(it, lp) if accept and len(hits) > 1 else None
+            if places is None:
+                raise AmbiguousSpan(it["key"], lp, *_count(it, lp))
+            out += [{"latex_primary": lp, "occurrence": o, "undecided": True} for o in places]
+            continue
+        out.append({"latex_primary": lp, "occurrence": occ})
     return {"spans": out}
 
 
@@ -160,8 +194,7 @@ def _replace(it, latex, page_text, after, run_text, occurrence, structure_change
         primary = hits[0]["latex_primary"]
         occ = occurrence or hits[0].get("occurrence")
         if occ is None:
-            raise DecideError("this span occurs several times in the page: pass --occurrence N "
-                              "from its occurrence_candidates")
+            raise AmbiguousSpan(it["key"], primary, *_count(it, primary))
         if _norm(latex) == _norm(primary):
             raise DecideError("the LaTeX is the same as the span: nothing to replace")
         if not structure_change:
@@ -210,42 +243,68 @@ def _action_of(spans: list[dict]) -> str:
     return "replace" if any(x.get("latex") != x.get("latex_primary") for x in spans) else "accept"
 
 
-def _merge(it: dict, d: dict, prev: dict | None, partial: bool = False) -> dict:
+def _put(out: list[dict], x: dict) -> None:
+    """Span decision ``x`` takes the place of the one for its occurrence, or of one of its
+    LaTeX whose occurrence is not known; else it is added."""
+    same = [i for i, y in enumerate(out) if y["latex_primary"] == x["latex_primary"]]
+    at = ([i for i in same if out[i].get("occurrence") == x["occurrence"]]
+          or [i for i in same if out[i].get("occurrence") is None])
+    if at:
+        out[at[0]] = x
+    else:
+        out.append(x)
+
+
+def _fill(out: list[dict], it: dict, lp: str) -> int:
+    """Add the not-yet-decided occurrences of span ``lp`` as unchanged (equal LaTeX, equal
+    verdict); returns how many were added."""
+    places = _places(it, lp) or []
+    known = {y.get("occurrence") for y in out if y["latex_primary"] == lp}
+    room = len(places) - sum(y["latex_primary"] == lp for y in out)
+    new = [o for o in places if o not in known][:max(room, 0)]
+    out += [{"latex_primary": lp, "latex": lp, "occurrence": o} for o in new]
+    return len(new)
+
+
+def _merge(it: dict, d: dict, prev: dict | None, partial: bool = False) -> tuple[dict, list]:
     """A page inline item's decisions accumulate their spans: every span an earlier accept or
-    replace of the key named stays; a replace also takes the item's other spans whose place is
-    known as unchanged, so the item counts as reviewed (a ``partial`` accept of named spans
-    takes none). An inline_missing item's replaces accumulate their runs."""
+    replace of the key named stays; a replace also takes the item's other spans whose places
+    are known as unchanged, so the item counts as reviewed (a ``partial`` accept of named spans
+    takes none). A repeated span's places are known when the item names every occurrence the
+    page holds; otherwise it is returned as ambiguous, never dropped silently. An accept of a
+    repeated span without occurrence takes its undecided occurrences. An inline_missing item's
+    replaces accumulate their runs. Returns (decision, ambiguous spans)."""
+    main = prev if prev and prev.get("action") != "flag" else None
+    kept = [dict(x) for x in (main or {}).get("spans") or []]
     if partial and it["kind"] == "inline":
-        spans = {(x["latex_primary"], x.get("occurrence")): dict(x)
-                 for x in (prev or {}).get("spans") or [] if prev.get("action") != "flag"}
+        out = kept
         for x in d["spans"]:
-            spans.pop((x["latex_primary"], None), None)
-            spans[(x["latex_primary"], x["occurrence"])] = dict(x)
-        out = list(spans.values())
-        return {**(prev if prev and prev.get("action") != "flag" else {}), **d,
-                "action": _action_of(out), "spans": out}
+            if not x.get("undecided"):
+                _put(out, dict(x))
+        for lp in dict.fromkeys(x["latex_primary"] for x in d["spans"] if x.get("undecided")):
+            if not _fill(out, it, lp):
+                raise DecideError(f"every occurrence of span {lp!r} is already decided: give "
+                                  "--occurrence N to change one")
+        return {**(main or {}), **d, "action": _action_of(out), "spans": out}, []
     if d.get("action") != "replace":
-        return d
+        return d, []
     if it["kind"] == "inline":
-        spans = {}
-        for x in it.get("spans", []):
-            if x.get("occurrence") is not None:
-                spans[(x["latex_primary"], x["occurrence"])] = dict(
-                    latex_primary=x["latex_primary"], latex=x["latex_primary"],
-                    occurrence=x["occurrence"])
-        for x in (prev or {}).get("spans") or []:
-            if prev.get("action") != "flag":
-                spans[(x["latex_primary"], x.get("occurrence"))] = dict(x)
+        out, ambiguous = kept, []
         for x in d["spans"]:
-            spans.pop((x["latex_primary"], None), None)
-            spans[(x["latex_primary"], x["occurrence"])] = dict(x)
-        return {**d, "spans": list(spans.values())}
+            _put(out, dict(x))
+        for lp in dict.fromkeys(x["latex_primary"] for x in it.get("spans", [])):
+            if _places(it, lp) is not None:
+                _fill(out, it, lp)
+            elif not any(y["latex_primary"] == lp for y in out):
+                k, n = _count(it, lp)
+                ambiguous.append({"key": it["key"], "latex": lp, "count": k, "page_count": n})
+        return {**d, "spans": out}, ambiguous
     if it["kind"] == "inline_missing" and prev and prev.get("action") == "replace":
         runs = {(r["text"], r.get("occurrence")): r for r in prev.get("runs") or []}
         for r in d["runs"]:
             runs[(r["text"], r.get("occurrence"))] = r
-        return {**d, "runs": list(runs.values())}
-    return d
+        return {**d, "runs": list(runs.values())}, []
+    return d, []
 
 
 def _write(batch: Path, order: dict, d: dict, it: dict | None = None, partial: bool = False) -> dict:
@@ -253,13 +312,14 @@ def _write(batch: Path, order: dict, d: dict, it: dict | None = None, partial: b
     path.parent.mkdir(parents=True, exist_ok=True)
     old = ([json.loads(s) for s in path.read_text("utf-8").splitlines() if s.strip()]
            if path.is_file() else [])
+    ambiguous = []
     if it is not None:
         prev = next((x for x in old if (x.get("key"), _slot(x)) == (d["key"], _slot(d))), None)
-        d = _merge(it, d, prev, partial)
+        d, ambiguous = _merge(it, d, prev, partial)
     keep = [x for x in old if (x.get("key"), _slot(x)) != (d["key"], _slot(d))] + [d]
     keep.sort(key=lambda x: (order.get(x.get("key"), len(order)), _slot(x) == "flag"))
     write_atomic(path, "".join(json.dumps(x, ensure_ascii=False) + "\n" for x in keep))
-    return d
+    return {**d, "ambiguous_spans": ambiguous} if ambiguous else d
 
 
 WITHDRAW = ("all", "accept", "replace", "flag")
@@ -290,8 +350,12 @@ def withdraw(batch, key: str, what: str = "all", span: str | None = None,
         write_atomic(path, "".join(json.dumps(x, ensure_ascii=False) + "\n"
                                    for x in old if not any(x is g for g in gone)))
         return gone
-    if items[order[key]]["kind"] != "inline":
+    it = items[order[key]]
+    if it["kind"] != "inline":
         raise DecideError("--span goes with a page inline item")
+    lps = [x["latex_primary"] for x in it.get("spans", []) if _norm(x["latex_primary"]) == _norm(span)]
+    if occurrence is None and len(lps) > 1:
+        raise AmbiguousSpan(key, lps[0], *_count(it, lps[0]))
     removed, new = [], []
     for x in old:
         if not any(x is g for g in gone) or not x.get("spans"):

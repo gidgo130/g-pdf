@@ -1204,6 +1204,9 @@ def _math_decide_main(args) -> int:
         print(f"gpdf-cli: error: {e}", file=sys.stderr)
         return EXIT_ERROR
     print(f"{d['key']}: {d['action']} written")
+    for a in d.get("ambiguous_spans", []):
+        print(f"ambiguous_span: {a['key']}: span {a['latex']!r} occurs {a['count']} times in the "
+              f"item, {a['page_count'] or '?'} in the page: not decided; give its --occurrence")
     return EXIT_OK
 
 

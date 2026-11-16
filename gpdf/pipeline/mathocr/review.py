@@ -336,7 +336,7 @@ def _apply_grouped(d: dict, it: dict, md: str, flags: list) -> tuple[str, str | 
             return md, "latex_primary is no longer in the page"
         occ = s.get("occurrence")
         if occ is None and len(where) > 1:
-            return md, f"span {p!r} occurs {len(where)} times in the page: give its occurrence"
+            return md, f"ambiguous_span: span {p!r} occurs {len(where)} times in the page: give its occurrence"
         occ = 1 if occ is None else occ
         if not isinstance(occ, int) or not 1 <= occ <= len(where) or where[occ - 1] in edits:
             return md, f"span {p!r} has no occurrence {occ} in the page"
@@ -383,7 +383,7 @@ def _flag_spans(d: dict, it: dict, md: str, flags: list) -> tuple[list | None, s
         if not where:
             return None, f"span {p!r} is no longer in the page"
         if occ is None and len(where) > 1:
-            return None, f"span {p!r} occurs {len(where)} times in the page: give its occurrence"
+            return None, f"ambiguous_span: span {p!r} occurs {len(where)} times in the page: give its occurrence"
         n = 1 if occ is None else occ
         if not isinstance(n, int) or not 1 <= n <= len(where) or where[n - 1] in seen:
             return None, f"span {p!r} has no occurrence {n} in the page"

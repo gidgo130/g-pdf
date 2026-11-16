@@ -62,6 +62,11 @@ one span, and further replaces of the same key add their spans to the same decis
 new accept or replace of one span keeps the spans already decided, and `--withdraw --span ...
 [--occurrence N]` removes one span's decision and leaves the others. A decision without `--span` still
 applies to every span of the item.
+A span the item names more than once (`X`, `\alpha`) with no `--occurrence`: `accept --span` takes every
+occurrence not yet decided (equal LaTeX, equal verdict); a replace, flag or withdraw is refused as
+`ambiguous_span` (item, LaTeX, count). A replace takes the item's unchanged siblings as accepted, repeated
+ones too when the item names every occurrence the page holds; a sibling it cannot place is printed as
+`ambiguous_span` (not decided), never dropped silently.
 `math-decide KEY flag --span ... [--span ...] [--occurrence N ...]` names the flagged spans
 (`"spans": [{"latex_primary", "occurrence"}]`): math-apply-review writes one flag per span
 with its current LaTeX, so provenance ties each to its span; a flag naming no span stays

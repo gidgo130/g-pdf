@@ -644,3 +644,112 @@ def test_cli_withdraw_takes_a_span(export, tmp_path, capsys):
                      "--occurrence", "1"]) == 0
     (d,) = lines(out / "decisions" / "batch01.jsonl")
     assert [s["latex_primary"] for s in d["spans"]] == ["a_1"]
+
+
+# a span repeated in the item, named or left without an occurrence (GPDF_D3: Leemis X, \alpha;
+# rv2021 F never got a verdict because a replace's unchanged siblings skipped them silently)
+
+PR = ('<!-- page printed="1" file="1" -->\n\nLet \\(X \\sim G(\\alpha)\\): \\(X\\) has \\(\\alpha\\), '
+      "\\(X\\) and \\(\\alpha\\) again, and \\(X\\).\n")
+
+
+@pytest.fixture
+def repeated(tmp_path):
+    r = tmp_path / "book"
+    (r / "pages").mkdir(parents=True)
+    (r / "crops").mkdir()
+    (r / "pages" / "p001.md").write_text(PR, "utf-8")
+    (r / "pages" / "p001.flags.json").write_text("[]", "utf-8")
+    spans = [{"paragraph": 1, "latex_primary": s} for s in
+             ("X \\sim G(\\alpha)", "X", "\\alpha", "X", "\\alpha", "X")]
+    it = item("p001-inline", 1, "inline", None, crops=["crops/p001-inline-1.png"], spans=spans)
+    (r / "review.jsonl").write_text(json.dumps(it) + "\n", "utf-8")
+    pack.pack(r, tmp_path / "rev", kinds=("inline",), inline_sample=0)
+    return r, tmp_path / "rev" / "batch01"
+
+
+def _occs(d, lp):
+    return sorted(s["occurrence"] for s in d["spans"] if s["latex_primary"] == lp)
+
+
+def test_accept_of_a_repeated_span_without_occurrence_takes_every_undecided_one(repeated):
+    from gpdf.pipeline.mathocr import decide
+    r, b = repeated
+    # a decision the old helper wrote: a replace of one X, its repeated siblings left out
+    old = {"key": "p001-inline", "id": "p001-inline", "action": "replace", "reason": "printed Y",
+           "spans": [{"latex_primary": "X", "latex": "Y", "occurrence": 2}]}
+    (b.parent / "decisions").mkdir(exist_ok=True)
+    (b.parent / "decisions" / "batch01.jsonl").write_text(json.dumps(old) + "\n", "utf-8")
+    d = decide.decide(b, "p001-inline", "accept", span="X")
+    got = {(s["latex_primary"], s["occurrence"]): s["latex"] for s in d["spans"]}
+    assert got[("X", 1)] == "X" and got[("X", 3)] == "X" and got[("X", 2)] == "Y"   # decided: kept
+    assert _occs(d, "X") == [1, 2, 3]
+    with pytest.raises(decide.DecideError, match="already decided"):
+        decide.decide(b, "p001-inline", "accept", span="X")
+    assert review.apply(r, b.parent / "decisions" / "batch01.jsonl").refused == []
+
+
+@pytest.mark.parametrize("action", ["replace", "flag", "withdraw"])
+def test_a_repeated_span_without_occurrence_is_ambiguous_for_replace_flag_and_withdraw(
+        repeated, action):
+    from gpdf.pipeline.mathocr import decide
+    r, b = repeated
+    decide.decide(b, "p001-inline", "accept", span="X", occurrence=1)
+    path = b.parent / "decisions" / "batch01.jsonl"
+    before = path.read_text("utf-8")
+    with pytest.raises(decide.AmbiguousSpan, match="ambiguous_span") as e:
+        if action == "replace":
+            decide.decide(b, "p001-inline", "replace", span="X", latex="Y", reason="r")
+        elif action == "flag":
+            decide.decide(b, "p001-inline", "flag", span=["X"], flag_type="formula_uncertain",
+                          note="faint")
+        else:
+            decide.withdraw(b, "p001-inline", "all", span="X")
+    assert (e.value.key, e.value.latex, e.value.count) == ("p001-inline", "X", 3)
+    assert path.read_text("utf-8") == before                          # nothing changed
+    # with its occurrence, as before
+    if action == "replace":
+        d = decide.decide(b, "p001-inline", "replace", span="X", occurrence=3, latex="Y", reason="r")
+        assert ("X", 3) in {(s["latex_primary"], s["occurrence"]) for s in d["spans"]}
+    elif action == "flag":
+        d = decide.decide(b, "p001-inline", "flag", span=["X"], occurrence=[3],
+                          flag_type="formula_uncertain", note="faint")
+        assert d["spans"] == [{"latex_primary": "X", "occurrence": 3}]
+    else:
+        assert decide.withdraw(b, "p001-inline", "all", span="X", occurrence=1)
+
+
+def test_cli_reports_an_ambiguous_span(repeated, capsys):
+    r, b = repeated
+    assert cli.main(["math-decide", "--batch", str(b), "p001-inline", "flag", "--span", "X",
+                     "--flag-type", "formula_uncertain", "--note", "faint"]) == 2
+    err = capsys.readouterr().err
+    assert "ambiguous_span" in err and "p001-inline" in err and "3" in err
+
+
+def test_a_replace_takes_repeated_siblings_as_unchanged_when_the_item_holds_every_one(repeated):
+    from gpdf.pipeline.mathocr import decide
+    r, b = repeated
+    d = decide.decide(b, "p001-inline", "replace", span="X \\sim G(\\alpha)", latex="X \\sim \\Gamma(\\alpha)",
+                      reason="printed Gamma")
+    assert _occs(d, "X") == [1, 2, 3] and _occs(d, "\\alpha") == [1, 2]
+    assert all(s["latex"] == s["latex_primary"] for s in d["spans"] if s["latex_primary"] != "X \\sim G(\\alpha)")
+    assert d.get("ambiguous_spans", []) == []
+    assert review.apply(r, b.parent / "decisions" / "batch01.jsonl").refused == []
+
+
+def test_a_sibling_whose_occurrences_the_item_does_not_hold_is_reported_not_dropped(export, tmp_path,
+                                                                                   capsys):
+    # page 1 prints b twice, the item names it once: which one is unknown
+    from gpdf.pipeline.mathocr import decide
+    out = tmp_path / "rev"
+    pack.pack(export, out, kinds=("inline",), inline_sample=0)
+    b = out / "batch01"
+    d = decide.decide(b, "p001-inline", "replace", span="a_1", latex="a_2", reason="printed a_2")
+    assert [(s["latex_primary"], s["occurrence"]) for s in d["spans"]] == [("a_1", 1)]
+    assert d["ambiguous_spans"] == [{"key": "p001-inline", "latex": "b", "count": 1, "page_count": 2}]
+    assert "ambiguous_spans" not in lines(out / "decisions" / "batch01.jsonl")[0]
+    (b / "work" / "new.tex").write_text("a_3\n", "utf-8")
+    assert cli.main(["math-decide", "--batch", str(b), "p001-inline", "replace", "--span", "a_1",
+                     "--latex-file", str(b / "work" / "new.tex"), "--reason", "r"]) == 0
+    assert "ambiguous_span" in capsys.readouterr().out

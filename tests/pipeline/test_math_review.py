@@ -138,7 +138,7 @@ def test_a_repeated_inline_span_is_replaced_at_its_occurrence(tmp_path):
     # without its occurrence a repeated span is refused, never applied to the first one
     rep = review.apply(r, decide(tmp_path, {"id": "p005-inline", "action": "replace",
                                             "spans": [{"latex_primary": "x_1", "latex": "x_2"}]}))
-    assert rep.refused == [{"id": "p005-inline", "reason": "span 'x_1' occurs 3 times in the "
+    assert rep.refused == [{"id": "p005-inline", "reason": "ambiguous_span: span 'x_1' occurs 3 times in the "
                             "page: give its occurrence"}]
     rep = review.apply(r, decide(tmp_path, {"id": "p005-inline", "action": "replace", "spans": [
         {"latex_primary": "x_1", "latex": "x_2", "occurrence": 3},
@@ -373,7 +373,7 @@ def test_a_span_replaced_earlier_is_flagged_with_its_replacement(root6, tmp_path
 
 @pytest.mark.parametrize("spans, reason", [
     ([{"latex_primary": "q"}], "span 'q' is not in the item"),
-    ([{"latex_primary": "x_1"}], "span 'x_1' occurs 2 times in the page: give its occurrence"),
+    ([{"latex_primary": "x_1"}], "ambiguous_span: span 'x_1' occurs 2 times in the page: give its occurrence"),
     ([{"latex_primary": "x_1", "occurrence": 3}], "span 'x_1' has no occurrence 3 in the page"),
     ([{"latex_primary": "y"}, {"latex_primary": "y"}], "span 'y' has no occurrence 1 in the page"),
     ([{"occurrence": 1}], "a flag's spans need latex_primary"),
